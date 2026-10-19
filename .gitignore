@@ -1,6 +1,13 @@
 # Datos y estado (nunca versionar)
 backend/data/
 
+# Runtime local de IA (binarios llama.cpp y modelos GGUF)
+backend/tools/
+backend/models/
+
+# Obsidian
+cuadra_doc/.obsidian/
+
 # Python
 __pycache__/
 *.py[cod]
