@@ -130,7 +130,7 @@ Buenas socio, tengo un cliente para {producto} de {precio} {moneda}.
 
 ## 7. Pendiente de validación
 
-- [ ] Ajustar few-shots con el tono real que produzca qwen2.5:3b (auditar en panel Conversaciones durante la primera semana).
-- [ ] Decidir si `llama3.2:3b` rinde mejor en cubanismos (probar ambos con el mismo set de 20 preguntas reales).
+- [ ] Ajustar few-shots con el tono real que produzca el modelo por defecto `Bonsai-8B-Q1_0` (auditar en panel Conversaciones durante la primera semana).
+- [ ] Elegir el modelo con mejor cubanismo entre los del bake-off (`06_bakeoff_modelos.md`), con el mismo set de 20 preguntas reales; el modelo es seleccionable sin tocar código.
 - [ ] **STT:** armar el `initial_prompt` de faster-whisper con marcas y productos frecuentes del catálogo ("EcoFlow, panel solar, CUP, USD…") y validar con 10 notas de voz reales (ver `01_arquitectura.md` §6.2).
 - [ ] **Contexto:** el resumen rodante debe conservar: intención, producto en juego, datos ya confirmados (precio/zona/stock) y compromisos abiertos ("cliente espera confirmación del TCP"). Validar con conversaciones largas reales (ver `01_arquitectura.md` §6.1).

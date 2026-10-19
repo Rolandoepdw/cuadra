@@ -1,7 +1,7 @@
 ---
 tipo: arquitectura
 proyecto: Cuadra
-estado: diseño Fase 1
+estado: diseño + implementación (Hitos 1–3)
 actualizado: 2026-10-19
 tags: [arquitectura, backend, colas, dashboard, windows]
 ---
@@ -20,21 +20,21 @@ tags: [arquitectura, backend, colas, dashboard, windows]
 │  │                                                              │
 │  │   Telegram (aiogram, polling) ◄──────────┐                   │
 │  │   API Dashboard (REST + PIN) ◄───────────┤                   │
-│  │   Scheduler difusiones (APScheduler) ◄────┤   entradas        │
+│  │   Scheduler broadcasts (APScheduler) ◄───┤   entradas        │
 │  │                                          ▼                   │
-│  │   ┌──────────── cola persistente (trabajos en SQLite) ─────┐  │
-│  │   │  transcribir_audio → clasificar → responder → enviar  │  │
+│  │   ┌──────────── cola persistente (jobs en SQLite) ──────────┐  │
+│  │   │  transcribe_audio → generate_reply → send             │  │
 │  │   └──────────────────────────┬────────────────────────────┘  │
 │  │                              ▼                               │
-│  │   dominio/  catalogo · conversaciones · escalado · ventas    │
-│  │             difusiones · auditoria                           │
+│  │   domain/  catalog · conversations · escalations · sales     │
+│  │            broadcasts · events                               │
 │  └──────────────────────────┬───────────────────────────────────┘
 │                             │ HTTP local
 │        ┌────────────────────┼────────────────────┐
 │        ▼                    ▼                    ▼
-│   Ollama (GPU, :11434)   faster-whisper      SQLite (WAL)
-│   qwen2.5:3b q4          (en proceso, CPU)   cuadra.db + fotos/
-│   ~2.2 GB VRAM           4 hilos, ~500 MB
+│   llama.cpp (GPU, :8080)  faster-whisper      SQLite (WAL)
+│   server propio de Cuadra (en proceso, CPU)   cuadra.db + fotos/
+│   Bonsai-8B-Q1_0 ~2.4 GB  4 hilos
 │
 │   Dashboard Flutter Web  →  build estático servido por FastAPI
 │   (acceso desde móvil/laptop en la misma red local, con PIN)
@@ -51,29 +51,39 @@ cuadra/
 ├── backend/
 │   ├── cuadra/
 │   │   ├── main.py           # app FastAPI + lifespan (arranca todo)
-│   │   ├── config.py         # settings (rutas, PIN, modelo, etc.)
+│   │   ├── config.py         # settings (rutas, PIN, LLM, etc.)
 │   │   ├── db.py             # conexión SQLite, WAL, migraciones
-│   │   ├── dominio/
-│   │   │   ├── catalogo.py       # TCPs, productos, imágenes
-│   │   │   ├── conversaciones.py # sesiones, mensajes, contexto
-│   │   │   ├── escalado.py       # bucle TCP (espera/resolución/timeout)
-│   │   │   ├── ventas.py         # borradores, aprobación, comisiones
-│   │   │   ├── difusiones.py     # programación con jitter/spintax
-│   │   │   └── auditoria.py      # eventos
-│   │   ├── canales/
-│   │   │   ├── base.py           # interfaz Canal (enviar/recibir/media)
-│   │   │   └── telegram.py       # implementación aiogram
-│   │   ├── ia/
-│   │   │   ├── cola.py           # worker FIFO + prioridades
-│   │   │   ├── llm.py            # cliente Ollama (NLU + generación)
+│   │   ├── domain/
+│   │   │   ├── catalog.py        # suppliers (TCP), products, images, categories
+│   │   │   ├── conversations.py  # customers, sesiones, mensajes, contexto
+│   │   │   ├── events.py         # auditoría (tabla events)
+│   │   │   ├── errors.py         # errores de dominio
+│   │   │   └── (escalations, sales, broadcasts)  # Hitos 5/7/8
+│   │   ├── channels/
+│   │   │   ├── base.py           # interfaz Channel (Protocol)
+│   │   │   └── telegram.py       # implementación aiogram (polling)
+│   │   ├── ai/
+│   │   │   ├── queue.py          # worker persistente + prioridades
+│   │   │   ├── handlers.py       # generate_reply, transcribe_audio
+│   │   │   ├── pipeline.py       # NLU → reglas/plantillas → respuesta
+│   │   │   ├── llm.py            # cliente LLM (OpenAI-compatible | Ollama)
+│   │   │   ├── llm_server.py     # supervisor de llama.cpp propio
+│   │   │   ├── prompts.py        # persona, tareas y plantillas
 │   │   │   └── stt.py            # faster-whisper (thread executor)
 │   │   ├── api/
-│   │   │   ├── auth.py           # PIN (header X-PIN o cookie)
-│   │   │   └── rutas_dashboard.py# REST para el panel
+│   │   │   ├── auth.py           # PIN (header X-PIN)
+│   │   │   ├── models.py         # esquemas de entrada (Pydantic)
+│   │   │   ├── routes_dashboard.py  # salud + resumen
+│   │   │   ├── routes_catalog.py    # CRUD catálogo
+│   │   │   ├── routes_llm.py        # start/stop/restart del LLM
+│   │   │   └── routes_debug.py      # endpoints de desarrollo
 │   │   └── scheduler/
-│   │       └── difusiones.py    # APScheduler + jitter
+│   │       └── broadcasts.py    # APScheduler + jitter (Hito 7)
 │   ├── migrations/             # SQL numerados (001_init.sql, …)
-│   ├── data/                   # cuadra.db, fotos/ (gitignored)
+│   ├── models/                 # GGUF (gitignored)
+│   ├── tools/                  # llama.cpp (gitignored)
+│   ├── scripts/                # install_llm.ps1, start_llm.ps1, lab/
+│   ├── data/                   # cuadra.db, fotos/, logs/ (gitignored)
 │   └── requirements.txt
 └── dashboard/                  # flutter create (plantilla web)
     └── lib/
@@ -82,67 +92,70 @@ cuadra/
         └── pantallas/          # los 7 paneles
 ```
 
-**Regla de dependencia:** `canales/` y `api/` dependen de `dominio/`; `dominio/` no conoce a `canales/` ni a FastAPI. `ia/` es consumido por el worker de cola. Esto es lo que permite añadir el canal WhatsApp (Fase 2) sin tocar dominio.
+**Regla de dependencia:** `channels/` y `api/` dependen de `domain/`; `domain/` no conoce a `channels/` ni a FastAPI. `ai/` es consumido por el worker de cola. Esto es lo que permite añadir el canal WhatsApp (Fase 2) sin tocar dominio.
 
 ## 3. Adaptador de canal (interfaz)
 
 ```python
-class Canal(Protocol):
-    async def enviar_texto(self, destino: str, texto: str) -> None: ...
-    async def enviar_imagen(self, destino: str, ruta: str, pie: str | None) -> None: ...
-    async def enviar_audio(self, destino: str, ruta: str) -> None: ...
-    async def escribiendo(self, destino: str) -> None: ...  # "typing…" si el canal lo soporta
-```
+class Channel(Protocol):
+    async def send_text(self, target: str, text: str) -> None: ...
+    async def send_image(self, target: str, path: str, caption: str | None) -> None: ...
+    async def send_audio(self, target: str, path: str) -> None: ...
+    async def typing(self, target: str) -> None:  # "typing…" si el canal lo soporta
 
-Los mensajes entrantes se normalizan a un evento interno:
-`MensajeEntrante(canal, identificador, tipo, cuerpo_o_ruta, remitente)` — del cual cuelga todo el pipeline de negocio. **Fase 2 = implementar `canales/whatsapp.py` y registrarla; nada más.**
+Los mensajes entrantes se normalizan a un evento interno (`channel`, `identifier`,
+`type`, `body_or_path`, `sender`) — del cual cuelga todo el pipeline de negocio.
+**Fase 2 = implementar `channels/whatsapp.py` y registrarla; nada más.**
 
 ## 4. Pipeline de un mensaje entrante (cliente)
 
 ```
-webhook/polling → MensajeEntrante
+webhook/polling → mensaje entrante (guardado en `messages`)
   │
-  ├─ si es audio → TRABAJO{transcribir_audio}  (whisper, CPU)
-  │       └─ transcripción → TRABAJO{generar_respuesta}
+  ├─ si es audio → JOB{transcribe_audio}  (faster-whisper, CPU)
+  │       └─ transcripción → JOB{generate_reply}
   │
   ├─ si es imagen → se guarda en disco + descripción corta al contexto
   │
-  └─ TRABAJO{generar_respuesta}
+  └─ JOB{generate_reply}
         ├─ historial de la conversación (últimos N mensajes de SQLite)
-        ├─ contexto: producto en discusión, stock, precio, TCP asignado
-        ├─ Ollama → intención + parámetros (JSON) + respuesta comercial
-        └─ si necesita dato externo → TRABAJO{consultar_tcp} (pausa asíncrona)
+        ├─ contexto: producto en discusión, stock, precio, TCP (supplier)
+        ├─ LLM (llama.cpp) → intención + parámetros (JSON)
+        ├─ el pipeline decide: plantilla para los casos comunes, generación
+        │  libre (con JSON real del catálogo) solo para comparar/queja/otro
+        └─ si falta un dato → JOB de escalado al TCP (Hito 5)
               └─ respuesta TCP → enriquece especificaciones_json → retoma cliente
 ```
 
 ## 5. Concurrencia y colas (punto crítico)
 
-- **Una sola cola FIFO persistente** (`trabajos` en SQLite): sobrevive a apagones; al arrancar se reanudan pendientes.
-- **Worker de IA con concurrencia 1 en GPU** (`num_parallel=1` en Ollama): mientras un prompt corre (~0.5–1.5 s con 3B Q4), los demás esperan. Con 2–4 usuarios el sentimiento sigue siendo humano.
+- **Una sola cola FIFO persistente** (`jobs` en SQLite): sobrevive a apagones; al arrancar se reanudan pendientes.
+- **Worker de IA con concurrencia 1 en GPU** (`-np 1` en el server llama.cpp): mientras un prompt corre, los demás esperan en la cola. Con 2–4 usuarios el sentimiento sigue siendo humano.
 - **Whisper corre en `run_in_executor`** (4 hilos CPU, no bloquea el event loop). Máximo 1 transcripción a la vez para no pelear por CPU con el LLM.
 - **Prioridades:** respuestas a clientes (10) > consultas a TCP (50) > difusiones (100).
 - **Timeout de escalado TCP:** si no hay respuesta en N minutos, se reconsulta una vez y luego se resuelve con el cliente honestamente ("el socio está ocupado, te confirmo apenas me responda"). Nunca dejar la conversación colgada.
 - **Delays humanos** aplicados en la salida: typing de 1–4 s + jitter; en difusiones, 3–40 min entre posts.
-- **Idempotencia tras apagón:** al arrancar, los trabajos en `EN_PROCESO` se devuelven a `PENDIENTE` con `intentos + 1`. Cada trabajo lleva una clave en `payload_json.idempotencia` (p. ej. `escalado:{id}:respuesta`); antes de enviar un mensaje saliente, el worker verifica la clave contra `mensajes`/`envios_difusion` — si ya existe, se marca COMPLETADO sin reenviar. Queda una ventana residual mínima de doble envío (crash exacto entre verificación y envío): aceptable para 1:1 y documentada.
-- **Logging:** `logging` con RotatingFileHandler en `data/logs/cuadra.log` (5 MB × 5 archivos). Nivel INFO en producción; DEBUG con variable de entorno. Todo trabajo fallido deja `error_ultimo` + fila en `eventos`.
-- **Errores del worker:** transitorios (red, Ollama caído, Telegram 429) → reintento con backoff exponencial hasta `max_intentos`, luego FALLIDO. Permanentes (payload inválido, producto dado de baja) → FALLIDO directo + evento `trabajo_fallido`. El worker nunca muere sin marcar el trabajo en curso.
+- **Idempotencia tras apagón:** al arrancar, los trabajos en `IN_PROGRESS` se devuelven a `PENDING` con `attempts + 1` (evento `jobs_requeued`). Cada trabajo lleva una clave en `payload_json.idempotency` (p. ej. `escalation:{id}:answer`); antes de enviar un mensaje saliente, el worker verifica la clave contra `messages`/`broadcast_posts` — si ya existe, se marca COMPLETED sin reenviar. Queda una ventana residual mínima de doble envío (crash exacto entre verificación y envío): aceptable para 1:1 y documentada.
+- **Logging:** `logging` con RotatingFileHandler en `data/logs/cuadra.log` (5 MB × 5 archivos). Nivel INFO en producción; DEBUG con variable de entorno. Todo trabajo fallido deja `last_error` + fila en `events`.
+- **Errores del worker:** transitorios (red, modelo caído, Telegram 429) → reintento con backoff exponencial hasta `max_intentos`, luego FALLIDO. Permanentes (payload inválido, producto dado de baja) → FALLIDO directo + evento `job_failed`. El worker nunca muere sin marcar el trabajo en curso.
 - **Rate limits de canal:** Telethon duerme el `FloodWait` que Telegram pida; la Bot API respeta `RetryAfter`. Ambos aplican también a difusiones (no solo 1:1).
 
-## 6. Ollama y Whisper — configuración operativa
+## 6. llama.cpp y Whisper — configuración operativa
 
 | Ajuste | Valor | Por qué |
 |---|---|---|
-| `OLLAMA_KEEP_ALIVE` | permanente | Evita recargar ~2 GB en cada consulta (segundos perdidos) |
-| `num_parallel` | 1 | 4 GB VRAM: una inferencia a la vez; dos provocan swap a CPU |
-| Modelo | `qwen2.5:3b-instruct-q4_K_M` | ~2.0–2.2 GB VRAM, rinde para NLU+respuesta con few-shots |
-| Contexto LLM | 2048–4096 tokens | historial acotado (últimos ~12 mensajes + estado) |
-| Whisper | `small` int8, CPU, 4 hilos (validar con audios reales) | VRAM intacta para Ollama. `large` descartado en CPU. Ver §6.2 |
+| Gestión del server | Cuadra lo arranca/para solo (`ai/llm_server.py`: autostart + stop al cerrar) | Sin apps externas; libera VRAM al salir |
+| Concurrencia | `-np 1` | 4 GB VRAM: una inferencia a la vez; dos provocan swap a CPU |
+| Modelo | `Bonsai-8B-Q1_0.gguf` | ~2.4 GB VRAM @8K; mejor NLU del bake-off (`06_bakeoff_modelos.md`) |
+| GPU / contexto | `-ngl 99`, `-c 8192` | Todo el modelo en GPU; ventana de 8K tokens |
+| Contexto de prompt | presupuesto ~2–2.5K tokens | historial acotado (últimos ~12 mensajes + resumen + producto) |
+| Whisper | `small` int8, CPU, 4 hilos (validar con audios reales) | VRAM intacta para el LLM. `large` descartado en CPU. Ver §6.2 |
 
 **Estrategia de respuesta:** el LLM **no redacta libre** para todo. Intención + slots en JSON; la respuesta comercial se arma desde **plantillas con ranuras** (precio, zona, stock, moneda) + retoque del LLM solo cuando hace falta. Rápido, consistente con la voz de marca y menos alucinaciones.
 
 ### 6.1 Gestión de la ventana de contexto del LLM
 
-El backend **arma el prompt, no lo acumula**. Presupuesto objetivo: **~2–2.5K tokens** por llamada (latencia estable con 3B y 4 GB de VRAM):
+El backend **arma el prompt, no lo acumula**. Presupuesto objetivo: **~2–2.5K tokens** por llamada (latencia estable con el modelo por defecto y 4 GB de VRAM):
 
 | Componente | Contenido | ~Tokens |
 |---|---|---|
@@ -169,12 +182,12 @@ Reglas:
 
 - **`initial_prompt` con nombres del catálogo** (faster-whisper lo soporta): inyectar marcas/productos frecuentes ("EcoFlow, panel solar, CUP, USD…") mejora mucho el reconocimiento de marcas, números y precios — el punto donde small falla.
 - **Criterio de aceptación:** probar con 10 notas de voz reales (cubano, ruido de fondo); si números/marcas fallan >2 de 10, subir a `medium` o reforzar el `initial_prompt`.
-- Camino futuro (no Fase 1): si en algún momento hay VRAM holgada (carga de Ollama baja), `large-v3` int8_float16 en GPU (~1–1.5 GB) vía ctranslate2 — decidir midiendo, no por supuesto.
+- Camino futuro (no Fase 1): si en algún momento hay VRAM holgada (carga del LLM baja), `large-v3` int8_float16 en GPU (~1–1.5 GB) vía ctranslate2 — decidir midiendo, no por supuesto.
 
 ## 7. Despliegue en Windows (sin Docker, sin WSL2)
 
 - `cuadra-core`: proceso Python venv, arrancado con `pythonw` / tarea programada al inicio de sesión (o NSSM como servicio).
-- Ollama para Windows: instalado nativo, con el modelo ya descargado (única descarga grande, vía hotspot, una sola vez ~2 GB).
+- Motor LLM: **llama.cpp propio** (build upstream, MIT) en `backend/tools/llamacpp/`, con el GGUF en `backend/models/` (única descarga grande, vía hotspot, una sola vez). Instalado por `backend/scripts/install_llm.ps1`. **No se usa Ollama.**
 - faster-whisper: corre dentro del proceso Python (weights en disco, sin servidor).
 - **Fase 2 (WhatsApp):** evaluar en este orden:
   1. Gateway `whatsapp-web.js` en Node nativo Windows (playwright/chromium headless) — sin Docker.
@@ -207,11 +220,11 @@ Reglas:
 | Catálogo | CRUD TCPs → productos → imágenes (subida) | ✅ |
 | Grupos | CRUD de grupos de difusión (canal, destino, topes, intervalos) y categorías; asignar categorías aceptadas por grupo y categoría por producto | ✅ |
 | Difusiones | programadas, próximas (jitter visible), enviadas, fallidas, y **log de envíos por grupo** | programar/cancelar |
-| Auditoría | eventos del sistema, trabajos fallidos, reintentos | — |
-| Salud | RAM/VRAM, uptime, estado de Ollama, tamaño de BD | — |
+| Auditoría | eventos del sistema, jobs fallidos, reintentos | — |
+| Salud | RAM/VRAM, uptime, estado del LLM (llama.cpp: corriendo/modelo), tamaño de BD | — |
 
 - **Curaduría de grupos = 100% operador (nunca el bot):** el panel Grupos es donde se registran grupos manualmente (nombre, invite/chat id, categorías permitidas, tope diario, intervalos). El scheduler solo publica en grupos activos cuya categoría coincida con la del producto; producto sin categoría → solo grupos sin restricción. Ver `02_modelo_datos.md` §3 y `00_decisiones.md` §7.1.
-- Endpoints mínimos: `GET /api/resumen`, `GET /api/conversaciones`, `GET /api/catalogo/*`, `POST/PATCH/DELETE /api/catalogo/*`, `GET/POST/PATCH/DELETE /api/grupos`, `GET/POST/PATCH/DELETE /api/categorias`, `GET /api/difusiones`, `POST /api/difusiones`, `GET /api/envios_difusion`, `GET /api/auditoria`, `GET /api/salud`, `GET /api/ventas` (Fase 1 solo lectura; aprobación de ventas llega en Fase 1.5/2 cuando existan las primeras).
+- Endpoints mínimos: `GET /api/health`; CRUD de catálogo `GET/POST/PATCH/DELETE /api/categories`, `/api/suppliers`, `/api/products` (+ `POST /api/products/{id}/images`, `PUT /api/products/{id}/main-image`, `DELETE /api/products/{id}/images/{image_id}`); LLM `GET /api/llm/status`, `GET /api/llm/models`, `POST /api/llm/start|stop|restart`; y (Hitos 5–8) `GET /api/conversations`, `GET/POST/PATCH/DELETE /api/broadcast-groups` y `/api/categories`, `GET/POST /api/broadcasts`, `GET /api/broadcast-posts`, `GET /api/audit`, `GET /api/sales` (Fase 1 solo lectura).
 
 ## 9. Riesgos conocidos
 
@@ -219,7 +232,7 @@ Reglas:
 |---|---|
 | Apagón a mitad de conversación | Cola y estados en SQLite; al arrancar se reanudan; el cliente ve silencio (aceptable) |
 | Baneo de línea WA (Fase 2) | Política anti-ban (`00_decisiones.md` §5); número secundario rotable |
-| VRAM insuficiente (app personal + Ollama) | `num_parallel=1`; doc de operación: cerrar apps pesadas; fallback CPU-only de emergencia |
-| LLM de 3B suena robot | Plantillas + few-shots en `03_persona_prompts.md`; auditar en panel Conversaciones |
+| VRAM insuficiente (app personal + LLM) | `-np 1`; cerrar apps pesadas (p. ej. LM Studio); fallback a `backend/tools/llamacpp-cpu/` de emergencia |
+| El modelo suena robot | Plantillas + few-shots en `03_persona_prompts.md`; auditar en panel Conversaciones |
 | SQLite contention (un solo escritor) | WAL + todo escritura desde cuadra-core; dashboard escribe solo vía API del core |
 | Consumo de datos del hotspot | Whisper y LLM corren 100% locales (cero datos); los datos solo se consumen al descargar modelos (una vez) y en mensajería WA real (Fase 2); imágenes comprimidas ≤500 KB |

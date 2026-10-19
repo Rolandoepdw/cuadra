@@ -18,7 +18,7 @@ Documento fuente de verdad. Todo lo que se decida posteriormente debe alinearse 
 | Internet                       | **Hotspot de celular** (única fuente). Sin IP pública, sin dominio, sin TLS propio |
 | Presupuesto                    | $0 USD — sin SaaS de pago                                                          |
 | Hardware                       | Laptop con RTX 3050 Laptop (4 GB VRAM), 32 GB RAM                                  |
-| RAM disponible para el sistema | **hasta ~20 GB** (tope, no objetivo — el backend apunta a <1 GB; el resto es para Ollama, Whisper y trabajo personal) |
+| RAM disponible para el sistema | **hasta ~20 GB** (tope, no objetivo — el backend apunta a <1 GB; el resto es para el modelo LLM, Whisper y trabajo personal) |
 | SO de ejecución                | **Windows** — evitar Docker y WSL2 si es posible                                   |
 | Usuarios concurrentes reales   | 2–4 (el sistema absorbe cientos, pero no es el objetivo)                           |
 
@@ -29,23 +29,23 @@ Documento fuente de verdad. Todo lo que se decida posteriormente debe alinearse 
 | Orquestador | **Servicio único Python (FastAPI + asyncio)** | **n8n eliminado** — ahorra ~350 MB RAM, Postgres y workflows frágiles para máquina de estados |
 | Canal Fase 1 | **Telegram** (aiogram, **polling**) | Polling evita webhooks/TLS/IP pública — encaja con hotspot |
 | Canal Fase 2 | WhatsApp vía adaptador propio (evaluar Evolution API nativo vs whatsapp-web.js **sin Docker** en Windows) | Decisión pendiente al inicio de Fase 2 |
-| LLM | Ollama + `qwen2.5:3b-instruct-q4_K_M` (GPU) | `keep_alive` permanente, `num_parallel=1` |
-| STT | faster-whisper **`small` int8**, CPU, 4 hilos (default; validar con 10 audios reales) | Preserva VRAM para Ollama. `large` descartado en CPU (minutos por audio). `initial_prompt` con nombres del catálogo para mejorar marcas/números. Ver `01_arquitectura.md` §6 |
+| LLM | **llama.cpp propio** (server gestionado por Cuadra) + `Bonsai-8B-Q1_0.gguf` (GPU) | Cuadra arranca/para su `llama-server` (concurrencia 1, `-ngl 99`, `-c 8192`); el modelo es seleccionable en caliente. Selección en `06_bakeoff_modelos.md` |
+| STT | faster-whisper **`small` int8**, CPU, 4 hilos (default; validar con 10 audios reales) | Preserva VRAM para el LLM. `large` descartado en CPU (minutos por audio). `initial_prompt` con nombres del catálogo para mejorar marcas/números. Ver `01_arquitectura.md` §6 |
 | Base de datos | SQLite (WAL, archivo único) | Un solo escritor (el servicio core) |
 | Dashboard | **Flutter Web** (estáticos servidos por FastAPI) | El usuario desarrolla en Flutter |
 | Frontend extra | Ninguno | Sin React, sin Streamlit, sin Grafana |
 
-**Microservicios: descartados.** Motivo: RAM, complejidad de debugging, SQLite no se comparte entre procesos, volumen real mínimo. Se adopta en su lugar **monolito modular con fronteras de dominio + API-first**; Ollama y el gateway de WhatsApp ya son procesos externos de facto donde de verdad se necesita separación.
+**Microservicios: descartados.** Motivo: RAM, complejidad de debugging, SQLite no se comparte entre procesos, volumen real mínimo. Se adopta en su lugar **monolito modular con fronteras de dominio + API-first**; el server de `llama.cpp` (gestionado por Cuadra) y el gateway de WhatsApp ya son procesos externos de facto donde de verdad se necesita separación.
 
-**Versiones mínimas:** Python 3.12+ (venv). Ollama para Windows: instalador oficial (`OllamaSetup.exe`), modelo ya descargado. Node 20 LTS únicamente para Fase 2 (gateway WhatsApp).
+**Versiones mínimas:** Python 3.12+ (venv). Motor LLM: **llama.cpp propio** (build upstream, licencia MIT) instalado por `backend/scripts/install_llm.ps1` en `backend/tools/llamacpp/`, con el modelo GGUF ya descargado en `backend/models/`. **Ollama no se instala.** LM Studio solo para desarrollo. Node 20 LTS únicamente para Fase 2 (gateway WhatsApp).
 
 ## 3. Decisiones de negocio
 
 - **Modelo:** comisionista multicanal. Cada venta genera comisión por producto/TCP.
 - **Productos:** el producto es una **presentación abstracta del TCP**, no un catálogo canónico. Un mismo objeto comercial en dos TCPs son **dos productos independientes**. No hay tabla base de productos; el agente compara en tiempo real entre productos candidatos del catálogo global. Evolución documentada (no implementada): `productos_base` + `ofertas` si algún día se quiere deduplicar.
-- **Ventas:** el bot **puede crear** la venta a partir de la confirmación del TCP, pero queda en estado `BORRADOR`/`PENDIENTE_APROBACION`. **El cierre del pago lo hace siempre el operador (dueño) desde el dashboard.** Flujo: `BORRADOR → PENDIENTE_APROBACION → CONFIRMADA → PAGADA` (+ `CANCELADA`).
+- **Ventas:** el bot **puede crear** la venta a partir de la confirmación del TCP, pero queda en estado `DRAFT`/`PENDING_APPROVAL`. **El cierre del pago lo hace siempre el operador (dueño) desde el dashboard.** Flujo: `DRAFT → PENDING_APPROVAL → CONFIRMED → PAID` (+ `CANCELLED`).
 - **Moneda:** **USD y CUP** — precio y comisión con moneda explícita por registro.
-- **Identidad de cliente:** multi-canal desde el diseño (`cliente_canales`: canal + identificador).
+- **Identidad de cliente:** multi-canal desde el diseño (`customer_channels`: canal + identificador).
 
 ## 4. Disponibilidad y personalidad
 
@@ -85,7 +85,7 @@ Los **adaptadores de canal** se diseñan desde Fase 1 con la interfaz pensada pa
 - El bot **no busca ni depura grupos** — eso es complejidad y riesgo de baneo injustificados en fases tempranas. La curaduría es 100% manual desde el dashboard.
 - Cada **producto se clasifica en una categoría** (alimentos, tecnología, construcción, hogar…). Cada **grupo declara qué categorías acepta**.
 - **Regla de seguridad anti-baneo:** un producto **sin categoría solo se publica en grupos sin restricción**. Un error de clasificación nunca puede mandar material de construcción a un grupo de alimentos.
-- El scheduler cruza producto × grupos activos × categoría, respeta tope de posts/día e intervalo por grupo, y aplica spintax. Todo queda logueado en `envios_difusion` (auditable desde el panel).
+- El scheduler cruza producto × grupos activos × categoría, respeta tope de posts/día e intervalo por grupo, y aplica spintax. Todo queda logueado en `broadcast_posts` (auditable desde el panel).
 - El registro de grupos es **canal-agnóstico** (telegram/whatsapp): el mismo panel servirá en Fase 2 sin cambios.
 
 ## 8. Restricciones de ingeniería
