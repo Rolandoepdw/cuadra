@@ -1,16 +1,17 @@
 """Persistent job queue (table `jobs`).
 
-Hito 1: worker with per-type dispatch. With no handlers registered, jobs are
-marked FAILED (permanent). Real handlers are registered in Hito 3.
+Survives power cuts: PENDING jobs are resumed at startup and jobs left
+IN_PROGRESS are requeued with attempts+1 (doc 01 §5). Transient failures get
+exponential backoff; permanent failures are marked FAILED with an audit event.
 """
 
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
-from cuadra import db
+from cuadra import config, db
 
 log = logging.getLogger("cuadra.queue")
 
@@ -29,6 +30,50 @@ def register_handler(job_type: str, handler: Handler) -> None:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _retry_at(attempts: int) -> str:
+    delay = min(config.QUEUE_BACKOFF_MAX_S, config.QUEUE_BACKOFF_BASE_S * (2**attempts))
+    return (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat()
+
+
+def enqueue(job_type: str, payload: dict, *, priority: int = 100) -> int:
+    """Append a job. Lower priority number runs first (clients < TCP < broadcasts)."""
+    conn = db.connect()
+    try:
+        cur = conn.execute(
+            "INSERT INTO jobs (type, payload_json, priority) VALUES (?, ?, ?)",
+            (job_type, json.dumps(payload, ensure_ascii=False), priority),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def requeue_in_progress() -> int:
+    """Startup recovery: jobs interrupted mid-run go back to PENDING."""
+    conn = db.connect()
+    try:
+        cur = conn.execute(
+            """UPDATE jobs
+               SET status = 'PENDING', attempts = attempts + 1,
+                   last_error = COALESCE(last_error, 'requeued after restart'),
+                   updated_at = ?
+               WHERE status = 'IN_PROGRESS'""",
+            (_now(),),
+        )
+        recovered = cur.rowcount
+        if recovered:
+            conn.execute(
+                """INSERT INTO events (source, type, entity, details_json)
+                   VALUES ('system', 'jobs_requeued', 'jobs', ?)""",
+                (json.dumps({"count": recovered}),),
+            )
+        conn.commit()
+        return recovered
+    finally:
+        conn.close()
 
 
 def _claim(conn) -> dict | None:
@@ -98,15 +143,17 @@ async def _process(job: dict) -> None:
         try:
             transient = isinstance(exc, (TimeoutError, ConnectionError, OSError))
             if transient and job["attempts"] + 1 < job["max_attempts"]:
-                # Hito 3: real exponential backoff
                 conn.execute(
                     """UPDATE jobs
                        SET status = 'PENDING', attempts = attempts + 1,
                            next_retry_at = ?, last_error = ?, updated_at = ?
                        WHERE id = ?""",
-                    (_now(), str(exc), _now(), job["id"]),
+                    (_retry_at(job["attempts"] + 1), str(exc), _now(), job["id"]),
                 )
                 conn.commit()
+                log.warning(
+                    "job %s transient failure, retry scheduled: %s", job["id"], exc
+                )
             else:
                 _finish(conn, job["id"], "FAILED", str(exc))
         finally:

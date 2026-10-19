@@ -6,3 +6,4 @@ httpx
 apscheduler
 pillow
 faster-whisper
+av<19

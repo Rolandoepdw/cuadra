@@ -9,11 +9,13 @@ from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from cuadra import config, db
-from cuadra.api import routes_catalog, routes_dashboard
+from cuadra.ai import handlers, queue
+from cuadra.api import routes_catalog, routes_dashboard, routes_debug
 from cuadra.channels import telegram as telegram_channel
-from cuadra.ai import queue
+from cuadra.domain.errors import DomainError, NotFound
 from cuadra.scheduler import broadcasts as scheduler_broadcasts
 
 log = logging.getLogger("cuadra")
@@ -48,6 +50,10 @@ async def lifespan(app: FastAPI):
     finally:
         conn.close()
 
+    recovered = queue.requeue_in_progress()
+    if recovered:
+        log.warning("requeued %s job(s) interrupted by the last shutdown", recovered)
+    handlers.register()
     queue.start()
     scheduler_broadcasts.start()
     await telegram_channel.start()
@@ -68,3 +74,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Cuadra Core", lifespan=lifespan)
 app.include_router(routes_dashboard.router)
 app.include_router(routes_catalog.router)
+app.include_router(routes_debug.router)
+
+
+@app.exception_handler(DomainError)
+async def _domain_error_handler(request, exc: DomainError):
+    code = 404 if isinstance(exc, NotFound) else 400
+    return JSONResponse({"detail": str(exc)}, status_code=code)

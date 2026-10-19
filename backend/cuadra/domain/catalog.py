@@ -5,8 +5,10 @@ Images are compressed on upload (max 1280 px edge, JPEG ~82) and stored under
 `data/` so the database stays portable.
 """
 
+import difflib
 import io
 import json
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,6 +16,9 @@ from typing import Any
 from PIL import Image, ImageOps
 
 from cuadra import config
+from cuadra.domain.errors import CatalogError, Invalid, NotFound
+
+__all__ = ["CatalogError", "Invalid", "NotFound"]
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_EDGE = 1280
@@ -23,18 +28,6 @@ CURRENCIES = ("USD", "CUP")
 PRODUCT_STATUSES = ("ACTIVE", "OUT_OF_STOCK", "PAUSED", "REMOVED")
 
 _TABLES = ("categories", "suppliers", "products", "product_images")
-
-
-class CatalogError(Exception):
-    """Domain rule violation; the API maps it to HTTP 4xx."""
-
-
-class NotFound(CatalogError):
-    pass
-
-
-class Invalid(CatalogError):
-    pass
 
 
 def _now() -> str:
@@ -459,3 +452,115 @@ def delete_image(conn, product_id: int, image_id: int) -> dict:
     except OSError:
         pass  # file already gone or locked — DB stays authoritative
     return {"ok": True, "id": image_id, "deleted": True}
+
+
+# ------------------------------------------------------- matching for the bot
+
+_STOPWORDS = {
+    "de", "del", "la", "el", "los", "las", "un", "una", "y", "o", "para", "con",
+    "que", "cuanto", "cuánto", "cuesta", "esta", "está", "tiene", "hay", "por",
+    "me", "mi", "te", "se", "es", "en", "mas", "más", "al", "a", "the", "of",
+}
+
+
+def _fold(text: str) -> str:
+    """Lowercase + strip accents for tolerant matching."""
+    normalized = unicodedata.normalize("NFKD", (text or "").lower())
+    return "".join(c for c in normalized if not unicodedata.combining(c))
+
+
+def _tokens(text: str) -> set[str]:
+    cleaned = "".join(c if c.isalnum() else " " for c in _fold(text))
+    return {t for t in cleaned.split() if len(t) > 2 and t not in _STOPWORDS}
+
+
+def search_products(
+    conn, query: str, *, limit: int = 5, statuses: tuple[str, ...] = ("ACTIVE",)
+) -> list[dict]:
+    """Rank catalog products against a free-text query (used by the NLU pipeline).
+
+    Scoring: exact-substring bonus + token overlap + difflib ratio on the name.
+    Returns products with `match_score` (0..1) sorted desc.
+    """
+    query = (query or "").strip()
+    if not query:
+        return []
+    placeholders = ", ".join("?" for _ in statuses)
+    rows = conn.execute(
+        f"""SELECT p.*, s.delivery_zone AS supplier_zone, s.payment_terms AS supplier_payment_terms,
+                   s.name AS supplier_name
+            FROM products p JOIN suppliers s ON s.id = p.supplier_id
+            WHERE p.status IN ({placeholders})""",
+        statuses,
+    ).fetchall()
+    folded_query = _fold(query)
+    query_tokens = _tokens(query)
+    scored: list[tuple[float, dict]] = []
+    for row in rows:
+        product = dict(row)
+        folded_name = _fold(product["name"])
+        ratio = difflib.SequenceMatcher(None, folded_query, folded_name).ratio()
+        name_tokens = _tokens(product["name"])
+        overlap = (
+            len(query_tokens & name_tokens) / len(query_tokens) if query_tokens else 0.0
+        )
+        bonus = 0.25 if folded_query in folded_name else 0.0
+        score = min(1.0, 0.5 * overlap + 0.4 * ratio + bonus)
+        if score >= 0.35:
+            product["match_score"] = round(score, 3)
+            scored.append((score, product))
+    scored.sort(key=lambda item: (-item[0], item[1]["id"]))
+    return [product for _, product in scored[:limit]]
+
+
+def find_product(conn, query: str, *, min_score: float = 0.45) -> dict | None:
+    """Match by name, including out-of-stock items (so the bot can say so honestly)."""
+    matches = search_products(
+        conn, query, limit=1, statuses=("ACTIVE", "OUT_OF_STOCK")
+    )
+    if matches and matches[0]["match_score"] >= min_score:
+        return matches[0]
+    return None
+
+
+def llm_product_json(conn, product: dict) -> dict:
+    """Compact product payload injected into the LLM context (02 §4, 01 §6.1)."""
+    supplier_zone = product.get("supplier_zone")
+    if supplier_zone is None:
+        supplier = conn.execute(
+            "SELECT delivery_zone, payment_terms FROM suppliers WHERE id = ?",
+            (product["supplier_id"],),
+        ).fetchone()
+        supplier_zone = supplier["delivery_zone"] if supplier else None
+    return {
+        "id": product["id"],
+        "nombre": product["name"],
+        "descripcion": product.get("description"),
+        "precio": product["price"],
+        "moneda": product["currency"],
+        "comision": product["commission"],
+        "moneda_comision": product["commission_currency"],
+        "stock": product.get("stock"),
+        "estado": product["status"],
+        "zona_entrega": supplier_zone,
+        "especificaciones": json.loads(product.get("specifications_json") or "{}"),
+    }
+
+
+def alternatives(conn, product: dict, *, limit: int = 2) -> list[dict]:
+    """Similar active products (same category first) to offer when out of stock."""
+    rows = conn.execute(
+        """SELECT * FROM products
+           WHERE status = 'ACTIVE' AND id != ?
+             AND (category_id IS ? OR category_id = ?)
+           ORDER BY (category_id IS ?) DESC, price
+           LIMIT ?""",
+        (
+            product["id"],
+            product.get("category_id"),
+            product.get("category_id"),
+            product.get("category_id"),
+            limit,
+        ),
+    ).fetchall()
+    return [dict(r) for r in rows]

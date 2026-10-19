@@ -11,6 +11,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent  # backend/
 DATA_DIR = Path(os.environ.get("CUADRA_DATA_DIR", BASE_DIR / "data"))
 DB_PATH = DATA_DIR / "cuadra.db"
 PHOTOS_DIR = DATA_DIR / "fotos"
+AUDIOS_DIR = DATA_DIR / "audios"
 LOGS_DIR = DATA_DIR / "logs"
 LOG_FILE = LOGS_DIR / "cuadra.log"
 MIGRATIONS_DIR = BASE_DIR / "migrations"
@@ -30,10 +31,26 @@ TELEGRAM_TOKEN = os.environ.get("CUADRA_TELEGRAM_TOKEN", "")
 # Ollama
 OLLAMA_URL = os.environ.get("CUADRA_OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("CUADRA_OLLAMA_MODEL", "qwen2.5:3b-instruct-q4_K_M")
+OLLAMA_TIMEOUT_S = float(os.environ.get("CUADRA_OLLAMA_TIMEOUT_S", "120"))
+LLM_TEMPERATURE = float(os.environ.get("CUADRA_LLM_TEMPERATURE", "0.4"))
+LLM_NUM_CTX = int(os.environ.get("CUADRA_LLM_NUM_CTX", "4096"))
 
-# Whisper (speech-to-text)
+# Prompt budget (doc 01 §6.1): ~2-2.5K tokens per call
+LLM_MAX_PROMPT_TOKENS = int(os.environ.get("CUADRA_LLM_MAX_PROMPT_TOKENS", "2500"))
+HISTORY_WINDOW = int(os.environ.get("CUADRA_HISTORY_WINDOW", "12"))
+SUMMARY_EVERY = int(os.environ.get("CUADRA_SUMMARY_EVERY", "10"))
+
+# Whisper (speech-to-text). Empty language = auto-detect ("es" in production).
 WHISPER_MODEL = os.environ.get("CUADRA_WHISPER_MODEL", "small")
 WHISPER_THREADS = int(os.environ.get("CUADRA_WHISPER_THREADS", "4"))
+WHISPER_LANGUAGE = os.environ.get("CUADRA_WHISPER_LANGUAGE", "")
+
+# Job queue backoff / priorities (lower number runs first)
+QUEUE_BACKOFF_BASE_S = float(os.environ.get("CUADRA_QUEUE_BACKOFF_BASE_S", "5"))
+QUEUE_BACKOFF_MAX_S = float(os.environ.get("CUADRA_QUEUE_BACKOFF_MAX_S", "300"))
+PRIORITY_CUSTOMER = 10
+PRIORITY_TCP = 50
+PRIORITY_BROADCAST = 100
 
 # Persona / human-like delays (seconds)
 TYPING_DELAY_MIN = float(os.environ.get("CUADRA_TYPING_DELAY_MIN", "1"))
@@ -45,5 +62,5 @@ ESCALATION_MAX_RETRIES = int(os.environ.get("CUADRA_ESCALATION_MAX_RETRIES", "1"
 
 
 def ensure_dirs() -> None:
-    for d in (DATA_DIR, PHOTOS_DIR, LOGS_DIR):
+    for d in (DATA_DIR, PHOTOS_DIR, AUDIOS_DIR, LOGS_DIR):
         d.mkdir(parents=True, exist_ok=True)
