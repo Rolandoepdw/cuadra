@@ -235,6 +235,10 @@ backend/data/
 | `CUADRA_WHISPER_MODEL`      | `small`                             | STT                                    |
 | `CUADRA_WHISPER_LANGUAGE`   | vacío (auto)                        | `es` para fijar español                |
 | `CUADRA_WHISPER_THREADS`    | `4`                                 | Hilos CPU de Whisper                   |
+| `CUADRA_TELEGRAM_TOKEN`     | vacío (modo dummy)                  | Token del bot de Telegram              |
+| `CUADRA_TYPING_DELAY_MIN` / `_MAX` | `1` / `4`                     | Delay humano al responder (s)          |
+| `CUADRA_BUSINESS_START_HOUR` / `_END_HOUR` | `8` / `21`             | Horario simulado (America/Havana)      |
+| `CUADRA_OUT_OF_HOURS_DELAY_MIN` / `_MAX` | `5` / `15`           | Delay fuera de horario (s)             |
 | `CUADRA_PIN`                | `0000`                              | PIN del dashboard                      |
 | `CUADRA_DEBUG`              | `1`                                 | Habilita `/api/debug/*`                |
 | `CUADRA_PORT`               | `8321`                              | Puerto de la API                       |

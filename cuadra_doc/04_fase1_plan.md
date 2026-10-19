@@ -1,7 +1,7 @@
 ---
 tipo: plan
 proyecto: Cuadra
-estado: listo para ejecutar
+estado: en ejecución (Hitos 1–4 hechos)
 actualizado: 2026-10-19
 tags: [fase1, plan, build, acceptance]
 ---
@@ -35,12 +35,12 @@ tags: [fase1, plan, build, acceptance]
 
 **Criterio:** mediante el endpoint de debug `POST /api/debug/message` (solo activo con `CUADRA_DEBUG=1`) se simula un mensaje entrante y el sistema produce una respuesta coherente usando el catálogo; un audio de prueba se transcribe correctamente.
 
-### Hito 4 — Canal Telegram + conversaciones
-11. `channels/base.py` (Protocol) y `channels/telegram.py` (aiogram, polling).
-12. `domain/conversations.py`: alta de cliente+canal, historial, contexto; persistencia de cada mensaje.
-13. Delays humanos (typing 1–4 s) en la salida.
+### Hito 4 — Canal Telegram + conversaciones ✅
+11. `channels/base.py` (Protocol), `channels/__init__.py` (registro `get_adapter`) y `channels/telegram.py`: aiogram en polling que normaliza texto, voz/audio y foto a un evento interno vía `ai/ingest.py` (`ingest_incoming`).
+12. `domain/conversations.py`: alta de cliente+canal, historial, contexto; persistencia de cada mensaje; `get_channel_identifier` para resolver el destino de salida.
+13. `ai/handlers.py`: nuevo JOB `send_message` (typing + delay humano 1–4 s, 5–15 s fuera de horario, idempotente mediante el evento `message_sent`); `generate_reply` guarda el OUTBOUND y encola el envío.
 
-**Criterio:** con un bot real de Telegram, un humano conversa sobre el catálogo y recibe respuestas con precio/moneda/zona correctos; todo queda en `mensajes`.
+**Criterio:** con un bot real de Telegram, un humano conversa sobre el catálogo y recibe respuestas con precio/moneda/zona correctos; todo queda en `messages`. *Verificado de punta a punta en modo dummy (entrada → respuesta → `send_message` con delay e idempotencia); pendiente la prueba con token real.*
 
 ### Hito 5 — Escalado al TCP (por Telegram, Fase 1)
 14. `domain/escalations.py`: crea registro, escribe al TCP (`telegram_id` del proveedor), espera respuesta, enriquece `specifications_json`, retoma al cliente; timeout con 1 reintento.

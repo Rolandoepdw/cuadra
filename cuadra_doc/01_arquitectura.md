@@ -60,11 +60,13 @@ cuadra/
 │   │   │   ├── errors.py         # errores de dominio
 │   │   │   └── (escalations, sales, broadcasts)  # Hitos 5/7/8
 │   │   ├── channels/
+│   │   │   ├── __init__.py       # registry de adaptadores (get_adapter)
 │   │   │   ├── base.py           # interfaz Channel (Protocol)
-│   │   │   └── telegram.py       # implementación aiogram (polling)
+│   │   │   └── telegram.py       # aiogram: polling (entrada) + send_* (salida)
 │   │   ├── ai/
 │   │   │   ├── queue.py          # worker persistente + prioridades
-│   │   │   ├── handlers.py       # generate_reply, transcribe_audio
+│   │   │   ├── handlers.py       # generate_reply, transcribe_audio, send_message
+│   │   │   ├── ingest.py         # entrada de mensajes: guardar + encolar trabajo
 │   │   │   ├── pipeline.py       # NLU → reglas/plantillas → respuesta
 │   │   │   ├── llm.py            # cliente LLM (OpenAI-compatible | Ollama)
 │   │   │   ├── llm_server.py     # supervisor de llama.cpp propio
@@ -110,12 +112,12 @@ Los mensajes entrantes se normalizan a un evento interno (`channel`, `identifier
 ## 4. Pipeline de un mensaje entrante (cliente)
 
 ```
-webhook/polling → mensaje entrante (guardado en `messages`)
+entrada (polling/webhook) → se guarda en `messages` y se encola
   │
   ├─ si es audio → JOB{transcribe_audio}  (faster-whisper, CPU)
   │       └─ transcripción → JOB{generate_reply}
   │
-  ├─ si es imagen → se guarda en disco + descripción corta al contexto
+  ├─ si es imagen → se guarda en disco + sigue el mismo camino que el texto
   │
   └─ JOB{generate_reply}
         ├─ historial de la conversación (últimos N mensajes de SQLite)
@@ -123,9 +125,16 @@ webhook/polling → mensaje entrante (guardado en `messages`)
         ├─ LLM (llama.cpp) → intención + parámetros (JSON)
         ├─ el pipeline decide: plantilla para los casos comunes, generación
         │  libre (con JSON real del catálogo) solo para comparar/queja/otro
+        ├─ respuesta guardada como mensaje OUTBOUND → JOB{send_message}
         └─ si falta un dato → JOB de escalado al TCP (Hito 5)
               └─ respuesta TCP → enriquece especificaciones_json → retoma cliente
+
+JOB{send_message} → typing + delay humano → adaptador de canal
+  (`channels.get_adapter`) → send_text / send_image / send_audio
 ```
+
+El destino de salida se resuelve desde `customer_channels` (`get_channel_identifier`):
+el mensaje guardado no conoce la dirección, el canal la aporta.
 
 ## 5. Concurrencia y colas (punto crítico)
 
@@ -134,8 +143,8 @@ webhook/polling → mensaje entrante (guardado en `messages`)
 - **Whisper corre en `run_in_executor`** (4 hilos CPU, no bloquea el event loop). Máximo 1 transcripción a la vez para no pelear por CPU con el LLM.
 - **Prioridades:** respuestas a clientes (10) > consultas a TCP (50) > difusiones (100).
 - **Timeout de escalado TCP:** si no hay respuesta en N minutos, se reconsulta una vez y luego se resuelve con el cliente honestamente ("el socio está ocupado, te confirmo apenas me responda"). Nunca dejar la conversación colgada.
-- **Delays humanos** aplicados en la salida: typing de 1–4 s + jitter; en difusiones, 3–40 min entre posts.
-- **Idempotencia tras apagón:** al arrancar, los trabajos en `IN_PROGRESS` se devuelven a `PENDING` con `attempts + 1` (evento `jobs_requeued`). Cada trabajo lleva una clave en `payload_json.idempotency` (p. ej. `escalation:{id}:answer`); antes de enviar un mensaje saliente, el worker verifica la clave contra `messages`/`broadcast_posts` — si ya existe, se marca COMPLETED sin reenviar. Queda una ventana residual mínima de doble envío (crash exacto entre verificación y envío): aceptable para 1:1 y documentada.
+- **Delays humanos** aplicados en la salida (job `send_message`): typing de 1–4 s + jitter; fuera de horario (8–21 h, America/Havana) 5–15 s; en difusiones, 3–40 min entre posts. Nunca <1 s.
+- **Idempotencia tras apagón:** al arrancar, los trabajos en `IN_PROGRESS` se devuelven a `PENDING` con `attempts + 1` (evento `jobs_requeued`). Antes de enviar un mensaje saliente, el worker comprueba si ya existe un evento `message_sent` para ese mensaje; si existe, el trabajo se marca COMPLETED sin reenviar. Queda una ventana residual mínima de doble envío (crash exacto entre el envío y el registro del evento): aceptable para 1:1 y documentada.
 - **Logging:** `logging` con RotatingFileHandler en `data/logs/cuadra.log` (5 MB × 5 archivos). Nivel INFO en producción; DEBUG con variable de entorno. Todo trabajo fallido deja `last_error` + fila en `events`.
 - **Errores del worker:** transitorios (red, modelo caído, Telegram 429) → reintento con backoff exponencial hasta `max_intentos`, luego FALLIDO. Permanentes (payload inválido, producto dado de baja) → FALLIDO directo + evento `job_failed`. El worker nunca muere sin marcar el trabajo en curso.
 - **Rate limits de canal:** Telethon duerme el `FloodWait` que Telegram pida; la Bot API respeta `RetryAfter`. Ambos aplican también a difusiones (no solo 1:1).
