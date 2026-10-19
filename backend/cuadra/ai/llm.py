@@ -1,7 +1,14 @@
-"""Ollama client: structured NLU (JSON) plus free-form reply generation.
+"""LLM client: structured NLU (JSON) plus free-form reply generation.
+
+Two transports, chosen by config.LLM_PROVIDER:
+
+- ``openai``: any OpenAI-compatible ``/chat/completions`` endpoint. This is the
+  default and points at Cuadra's own llama.cpp server (also works with LM Studio,
+  vLLM, ...). Structured output uses ``response_format`` + ``json_schema``.
+- ``ollama``: the native ``/api/chat`` endpoint, using Ollama's ``format`` field.
 
 The LLM never decides by free generation what to answer for the common cases —
-the pipeline does (doc 01 §6). Here we only talk to Ollama and validate output.
+the pipeline does (doc 01 §6). Here we only talk to the model and validate output.
 """
 
 import json
@@ -17,8 +24,19 @@ from cuadra.ai import prompts
 log = logging.getLogger("cuadra.llm")
 
 
+INTENTS = (
+    "consulta_precio",
+    "consulta_stock",
+    "consulta_dato",
+    "comparar",
+    "comprar",
+    "queja",
+    "otro",
+)
+
+
 class LLMUnavailable(ConnectionError):
-    """Ollama is down or unreachable (transient — the queue retries)."""
+    """The model server is down or unreachable (transient — the queue retries)."""
 
 
 class LLMInvalidOutput(Exception):
@@ -40,41 +58,111 @@ class Intent(BaseModel):
     confianza: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
+INTENT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "intencion": {"type": "string", "enum": list(INTENTS)},
+        "producto": {"type": ["string", "null"]},
+        "datos_faltantes": {"type": "array", "items": {"type": "string"}},
+        "confianza": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+    },
+    "required": ["intencion", "producto", "datos_faltantes", "confianza"],
+    "additionalProperties": False,
+}
+
+
+def _headers() -> dict:
+    return {"Authorization": f"Bearer {config.LLM_API_KEY}"} if config.LLM_API_KEY else {}
+
+
+def _chat_url() -> str:
+    if config.LLM_PROVIDER == "ollama":
+        return f"{config.LLM_BASE_URL}/api/chat"
+    return f"{config.LLM_BASE_URL}/chat/completions"
+
+
+def _models_url() -> str:
+    if config.LLM_PROVIDER == "ollama":
+        return f"{config.LLM_BASE_URL}/api/tags"
+    return f"{config.LLM_BASE_URL}/models"
+
+
+def _extract_content(data: dict) -> str:
+    if config.LLM_PROVIDER == "ollama":
+        return (data.get("message") or {}).get("content", "")
+    choices = data.get("choices") or [{}]
+    return (choices[0].get("message") or {}).get("content", "")
+
+
+async def _post_chat(client: httpx.AsyncClient, payload: dict, structured: bool) -> dict:
+    response = await client.post(_chat_url(), json=payload, headers=_headers())
+    if response.status_code == 400 and structured:
+        # Some endpoints reject response_format/format: retry as plain text.
+        payload = {k: v for k, v in payload.items() if k not in ("response_format", "format")}
+        response = await client.post(_chat_url(), json=payload, headers=_headers())
+    response.raise_for_status()
+    return response.json()
+
+
 async def chat(
     messages: list[dict],
     *,
-    json_format: bool = False,
+    schema: dict | None = None,
+    json_object: bool = False,
     temperature: float | None = None,
     timeout: float | None = None,
 ) -> str:
+    """Single completion. ``schema`` (OpenAI-style JSON Schema) or ``json_object``
+    request structured output where the backend supports it."""
+    temp = config.LLM_TEMPERATURE if temperature is None else temperature
     payload: dict = {
-        "model": config.OLLAMA_MODEL,
+        "model": config.LLM_MODEL,
         "messages": messages,
         "stream": False,
-        "options": {
-            "temperature": config.LLM_TEMPERATURE if temperature is None else temperature,
-            "num_ctx": config.LLM_NUM_CTX,
-        },
+        "temperature": temp,
     }
-    if json_format:
-        payload["format"] = "json"
+    structured = False
+    if config.LLM_PROVIDER == "ollama":
+        payload["options"] = {"temperature": temp, "num_ctx": config.LLM_CTX}
+        if schema is not None:
+            payload["format"] = schema
+            structured = True
+        elif json_object:
+            payload["format"] = "json"
+            structured = True
+    else:
+        if schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "intent", "strict": True, "schema": schema},
+            }
+            structured = True
+        elif json_object:
+            payload["response_format"] = {"type": "json_object"}
+            structured = True
+
     try:
-        async with httpx.AsyncClient(timeout=timeout or config.OLLAMA_TIMEOUT_S) as client:
-            response = await client.post(f"{config.OLLAMA_URL}/api/chat", json=payload)
-            response.raise_for_status()
-            data = response.json()
+        async with httpx.AsyncClient(timeout=timeout or config.LLM_TIMEOUT_S) as client:
+            data = await _post_chat(client, payload, structured)
     except Exception as exc:  # noqa: BLE001 — everything here is transient/network
-        raise LLMUnavailable(f"ollama request failed: {exc}") from exc
-    return (data.get("message") or {}).get("content", "").strip()
+        raise LLMUnavailable(f"llm request failed ({config.LLM_PROVIDER}): {exc}") from exc
+    return _extract_content(data).strip()
+
+
+async def health() -> dict:
+    """Probe the endpoint. Returns {'status': 'ok'|'unreachable'|'error_NNN'}."""
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            response = await client.get(_models_url(), headers=_headers())
+        if response.status_code == 200:
+            return {"status": "ok"}
+        return {"status": f"error_{response.status_code}"}
+    except Exception:  # noqa: BLE001
+        return {"status": "unreachable"}
 
 
 async def is_available() -> bool:
-    try:
-        async with httpx.AsyncClient(timeout=3) as client:
-            response = await client.get(f"{config.OLLAMA_URL}/api/tags")
-            return response.status_code == 200
-    except Exception:  # noqa: BLE001
-        return False
+    return (await health())["status"] == "ok"
 
 
 async def classify(base_messages: list[dict], last_message: str) -> Intent:
@@ -84,7 +172,7 @@ async def classify(base_messages: list[dict], last_message: str) -> Intent:
         "content": f"{prompts.NLU_TASK}\n\nMENSAJE DEL CLIENTE:\n{last_message}",
     }
     messages = [*base_messages, task]
-    raw = await chat(messages, json_format=True, temperature=0.0)
+    raw = await chat(messages, schema=INTENT_SCHEMA, temperature=0.0)
     try:
         return Intent.model_validate_json(raw)
     except ValidationError as first_error:
@@ -98,7 +186,7 @@ async def classify(base_messages: list[dict], last_message: str) -> Intent:
             ),
         }
         retry = [*messages, {"role": "assistant", "content": raw}, correction]
-        raw_retry = await chat(retry, json_format=True, temperature=0.0)
+        raw_retry = await chat(retry, schema=INTENT_SCHEMA, temperature=0.0)
         try:
             return Intent.model_validate_json(raw_retry)
         except ValidationError as second_error:

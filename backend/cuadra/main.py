@@ -4,6 +4,7 @@ One process runs: dashboard API, job queue, broadcast scheduler and the
 Telegram channel (polling). See cuadra_doc/01_arquitectura.md.
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
@@ -12,8 +13,8 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from cuadra import config, db
-from cuadra.ai import handlers, queue
-from cuadra.api import routes_catalog, routes_dashboard, routes_debug
+from cuadra.ai import handlers, llm_server, queue
+from cuadra.api import routes_catalog, routes_dashboard, routes_debug, routes_llm
 from cuadra.channels import telegram as telegram_channel
 from cuadra.domain.errors import DomainError, NotFound
 from cuadra.scheduler import broadcasts as scheduler_broadcasts
@@ -57,23 +58,35 @@ async def lifespan(app: FastAPI):
     queue.start()
     scheduler_broadcasts.start()
     await telegram_channel.start()
+
+    # Bring up the local llama.cpp server in the background so the API is
+    # available immediately while the model loads (the queue retries meanwhile).
+    llm_task = None
+    if config.LLM_MANAGE and config.LLM_AUTOSTART:
+        llm_task = asyncio.create_task(asyncio.to_thread(llm_server.ensure_running))
+
     log.info(
-        "cuadra-core ready (debug=%s, pin=%s)",
+        "cuadra-core ready (debug=%s, pin=%s, llm=%s)",
         config.DEBUG,
         "yes" if config.PIN else "no",
+        config.LLM_PROVIDER,
     )
 
     yield
 
+    if llm_task is not None and not llm_task.done():
+        llm_task.cancel()
     await telegram_channel.stop()
     scheduler_broadcasts.stop()
     await queue.stop()
+    await asyncio.to_thread(llm_server.stop)
     log.info("cuadra-core stopped")
 
 
 app = FastAPI(title="Cuadra Core", lifespan=lifespan)
 app.include_router(routes_dashboard.router)
 app.include_router(routes_catalog.router)
+app.include_router(routes_llm.router)
 app.include_router(routes_debug.router)
 
 

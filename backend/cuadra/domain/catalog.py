@@ -524,7 +524,12 @@ def find_product(conn, query: str, *, min_score: float = 0.45) -> dict | None:
 
 
 def llm_product_json(conn, product: dict) -> dict:
-    """Compact product payload injected into the LLM context (02 §4, 01 §6.1)."""
+    """Customer-safe product payload injected into the LLM context (02 §4, 01 §6.1).
+
+    Deliberately EXCLUDES internal economics (commission, supplier terms): whatever
+    goes into the context can be repeated to the customer, so internal fields must
+    never be there (see cuadra_doc/06 §Hallazgos).
+    """
     supplier_zone = product.get("supplier_zone")
     if supplier_zone is None:
         supplier = conn.execute(
@@ -538,8 +543,6 @@ def llm_product_json(conn, product: dict) -> dict:
         "descripcion": product.get("description"),
         "precio": product["price"],
         "moneda": product["currency"],
-        "comision": product["commission"],
-        "moneda_comision": product["commission_currency"],
         "stock": product.get("stock"),
         "estado": product["status"],
         "zona_entrega": supplier_zone,

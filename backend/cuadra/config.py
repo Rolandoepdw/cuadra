@@ -28,12 +28,35 @@ PORT = int(os.environ.get("CUADRA_PORT", "8321"))
 # Telegram. Empty token => dummy mode (development without a real bot).
 TELEGRAM_TOKEN = os.environ.get("CUADRA_TELEGRAM_TOKEN", "")
 
-# Ollama
-OLLAMA_URL = os.environ.get("CUADRA_OLLAMA_URL", "http://127.0.0.1:11434")
-OLLAMA_MODEL = os.environ.get("CUADRA_OLLAMA_MODEL", "qwen2.5:3b-instruct-q4_K_M")
-OLLAMA_TIMEOUT_S = float(os.environ.get("CUADRA_OLLAMA_TIMEOUT_S", "120"))
+# LLM transport. "openai" = any OpenAI-compatible endpoint (Cuadra's own
+# llama.cpp server by default, also LM Studio/vLLM); "ollama" = native /api/chat.
+# For "openai" the base URL ends in /v1; for "ollama" it is the server root.
+LLM_PROVIDER = os.environ.get("CUADRA_LLM_PROVIDER", "openai").strip().lower()
+LLM_BASE_URL = os.environ.get(
+    "CUADRA_LLM_BASE_URL",
+    "http://127.0.0.1:11434" if LLM_PROVIDER == "ollama" else "http://127.0.0.1:8080/v1",
+).rstrip("/")
+LLM_API_KEY = os.environ.get("CUADRA_LLM_API_KEY", "")
+LLM_MODEL = os.environ.get("CUADRA_LLM_MODEL", "Bonsai-8B-Q1_0.gguf")
+LLM_TIMEOUT_S = float(os.environ.get("CUADRA_LLM_TIMEOUT_S", "120"))
 LLM_TEMPERATURE = float(os.environ.get("CUADRA_LLM_TEMPERATURE", "0.4"))
-LLM_NUM_CTX = int(os.environ.get("CUADRA_LLM_NUM_CTX", "4096"))
+
+# Managed local llama.cpp server (see cuadra/ai/llm_server.py). When enabled,
+# Cuadra starts/stops its own server so the bot needs no external LLM app.
+LLM_MANAGE = os.environ.get("CUADRA_LLM_MANAGE", "1") == "1"
+LLM_AUTOSTART = os.environ.get("CUADRA_LLM_AUTOSTART", "1") == "1"
+LLM_BIN = Path(
+    os.environ.get("CUADRA_LLM_BIN", BASE_DIR / "tools" / "llamacpp" / "llama-server.exe")
+)
+LLM_MODELS_DIR = Path(os.environ.get("CUADRA_LLM_MODELS_DIR", BASE_DIR / "models"))
+LLM_MODEL_PATH = os.environ.get("CUADRA_LLM_MODEL_PATH", "")
+LLM_HOST = os.environ.get("CUADRA_LLM_HOST", "127.0.0.1")
+LLM_PORT = int(os.environ.get("CUADRA_LLM_PORT", "8080"))
+LLM_GPU_LAYERS = int(os.environ.get("CUADRA_LLM_GPU_LAYERS", "99"))
+LLM_CTX = int(os.environ.get("CUADRA_LLM_CTX", "8192"))
+LLM_EXTRA_ARGS = os.environ.get("CUADRA_LLM_EXTRA_ARGS", "")
+LLM_PID_FILE = DATA_DIR / "llm_server.pid"
+LLM_LOG_FILE = LOGS_DIR / "llm.log"
 
 # Prompt budget (doc 01 §6.1): ~2-2.5K tokens per call
 LLM_MAX_PROMPT_TOKENS = int(os.environ.get("CUADRA_LLM_MAX_PROMPT_TOKENS", "2500"))
@@ -62,5 +85,5 @@ ESCALATION_MAX_RETRIES = int(os.environ.get("CUADRA_ESCALATION_MAX_RETRIES", "1"
 
 
 def ensure_dirs() -> None:
-    for d in (DATA_DIR, PHOTOS_DIR, AUDIOS_DIR, LOGS_DIR):
+    for d in (DATA_DIR, PHOTOS_DIR, AUDIOS_DIR, LOGS_DIR, LLM_MODELS_DIR):
         d.mkdir(parents=True, exist_ok=True)

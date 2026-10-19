@@ -61,7 +61,7 @@ async def _wait_for_reply(job_id: int, conversation_id: int, wait_s: float) -> d
         if loop.time() >= deadline:
             raise HTTPException(
                 status.HTTP_504_GATEWAY_TIMEOUT,
-                "timed out waiting for the reply — is Ollama running?",
+                "timed out waiting for the reply — is the local model running?",
             )
         await asyncio.sleep(0.25)
 
