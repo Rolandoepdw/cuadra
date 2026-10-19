@@ -11,6 +11,7 @@ from logging.handlers import RotatingFileHandler
 from fastapi import FastAPI
 
 from cuadra import config, db
+from cuadra.api import routes_catalog, routes_dashboard
 from cuadra.channels import telegram as telegram_channel
 from cuadra.ai import queue
 from cuadra.scheduler import broadcasts as scheduler_broadcasts
@@ -66,3 +67,4 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Cuadra Core", lifespan=lifespan)
 app.include_router(routes_dashboard.router)
+app.include_router(routes_catalog.router)
