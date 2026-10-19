@@ -1,0 +1,98 @@
+---
+tipo: plan
+proyecto: Cuadra
+estado: listo para ejecutar
+actualizado: 2026-10-19
+tags: [fase1, plan, build, acceptance]
+---
+
+# 04 — Plan de Build Fase 1
+
+> Entrada: `00_decisiones.md`, `01_arquitectura.md`, `02_modelo_datos.md`, `03_persona_prompts.md`.
+> Objetivo: **piloto funcional por Telegram** con dashboard de observación + CRUD de catálogo.
+
+## Orden de ejecución
+
+### Hito 1 — Esqueleto del backend
+1. `backend/` con `cuadra/` (paquete), `requirements.txt`, `data/` (gitignored).
+2. `config.py` (rutas, PIN, modelo Ollama, horario humano).
+3. `db.py`: SQLite WAL + runner de migraciones (`migrations/001_init.sql` de `02_modelo_datos.md`).
+4. `main.py`: FastAPI + lifespan que arranca (a) servidor uvicorn, (b) worker de cola, (c) scheduler, (d) polling de Telegram (con token opcional — sin token, modo dummy para desarrollo).
+
+**Criterio de aceptación:** el proceso arranca, la BD se crea con todas las tablas, `GET /api/salud` responde.
+
+### Hito 2 — Dominio de catálogo + API de dashboard
+5. `dominio/catalogo.py`: CRUD TCPs, productos, imágenes (mover archivo a `data/fotos/producto_{id}/`).
+6. `api/auth.py` (PIN) + `api/rutas_dashboard.py` con los endpoints de catálogo y salud.
+
+**Criterio:** curl puede crear un TCP con 2 productos e imágenes; los datos quedan en SQLite.
+
+### Hito 3 — Cola e IA
+7. `ia/cola.py`: worker FIFO con prioridades sobre la tabla `trabajos`; reintentos con backoff; supervivencia a reinicio.
+8. `ia/stt.py`: faster-whisper (executor, 4 hilos).
+9. `ia/llm.py`: cliente Ollama (`/api/generate`), NLU por JSON + armado de respuesta por plantillas (`03_persona_prompts.md`).
+10. Pipeline: mensaje entrante → (audio→transcripción) → intención → respuesta/envío/escalado.
+
+**Criterio:** por consola se simula un mensaje entrante y el sistema produce una respuesta coherente usando el catálogo; un audio se transcribe.
+
+### Hito 4 — Canal Telegram + conversaciones
+11. `canales/base.py` (Protocol) y `canales/telegram.py` (aiogram, polling).
+12. `dominio/conversaciones.py`: alta de cliente+canal, historial, contexto; persistencia de cada mensaje.
+13. Delays humanos (typing 1–4 s) en la salida.
+
+**Criterio:** con un bot real de Telegram, un humano conversa sobre el catálogo y recibe respuestas con precio/moneda/zona correctos; todo queda en `mensajes`.
+
+### Hito 5 — Escalado al TCP (por Telegram, Fase 1)
+14. `dominio/escalado.py`: crea registro, escribe al TCP (`telegram_id` del proveedor), espera respuesta, enriquece `especificaciones_json`, retoma al cliente; timeout con 1 reintento.
+15. Flujo inverso: la respuesta del TCP se correlaciona con el escalado pendiente más antiguo de ese TCP (y se marca).
+
+**Criterio:** cliente pregunta dato faltante → TCP (otra cuenta de Telegram) responde → cliente recibe la respuesta y el producto queda enriquecido.
+
+### Hito 6 — Dashboard Flutter Web
+16. `dashboard/`: `flutter create` (web), cliente HTTP con `X-PIN`, navegación lateral con los 7 paneles.
+17. Paneles: General, Conversaciones (lectura), Catálogo (CRUD completo), **Grupos** (CRUD grupos de difusión + categorías + asignación grupo↔categorías y producto↔categoría), Difusiones (con log de envíos por grupo), Auditoría, Salud.
+18. Build web copiado a `backend/cuadra/web_dashboard/` y servido por FastAPI. (El mismo `lib/` servirá para `flutter build windows` si algún día se quiere el `.exe` local.)
+
+**Criterio:** desde el móvil en la red local se ven datos reales en los 7 paneles, se edita el catálogo y se registra un grupo con sus categorías.
+
+### Hito 7 — Grupos, categorías y difusiones Telegram
+19. Migración de tablas `categorias`, `grupos_difusion`, `grupo_categorias`, `difusion_grupos`, `envios_difusion` (ya en `02_modelo_datos.md`) + `productos.categoria_id`.
+20. `dominio/difusiones.py`: plantilla con spintax, selección de destinos (auto-match por categoría, con prioridad a `difusion_grupos` si hay selección manual; producto sin categoría → solo grupos libres), respeto de `max_posts_dia` e intervalos, estados.
+21. `scheduler/difusiones.py`: jitter 3–40 min (o el rango del grupo), tope diario por grupo, log en `envios_difusion`.
+22. `Telethon` opcional (solo si se requieren userbot para grupos que el bot no puede alcanzar); empezar solo con Bot API donde alcance.
+
+**Criterio:** registrando desde el dashboard dos grupos (uno con categoría "alimentos" y uno libre) y 3 productos (con y sin categoría), las difusiones llegan **solo a los grupos que corresponden**, con textos distintos (spintax) y horarios espaciados; el panel muestra el log de envíos por grupo.
+
+### Hito 8 — Ventas (mínimo viable)
+21. `dominio/ventas.py`: el bot crea `BORRADOR → PENDIENTE_APROBACION` al confirmar TCP + cliente; endpoint para que el operador confirme/cancele/pague desde el dashboard (lectura + botón de aprobación).
+
+**Criterio:** una venta nace de una conversación, aparece en el panel, y el operador la cierra manualmente.
+
+## Criterios de aceptación globales de Fase 1
+
+- [ ] Un cliente de Telegram compra un producto real usando solo al bot (consulta, precio con moneda, escalado si falta dato).
+- [ ] Todo el historial es auditable en el panel (conversación completa, quién dijo qué, latencias).
+- [ ] Reiniciar el laptop a mitad de conversación no pierde estado (la cola y conversaciones se reanudan).
+- [ ] El bot nunca responde en <1 s ni suena a contestadora rígida (auditar 20 conversaciones).
+- [ ] Catálogo 100% administrable desde el dashboard sin tocar la BD.
+- [ ] **Grupos 100% administrables desde el dashboard**; un producto sin categoría jamás llega a un grupo con restricciones (probar con caso negativo).
+- [ ] **STT:** 10 notas de voz reales cubanas transcritas con `small` + `initial_prompt`; números y marcas correctos en ≥8/10 (si no, subir a `medium` o reforzar prompt).
+- [ ] **Contexto:** 3 conversaciones largas (>20 mensajes) siguen coherentes gracias al resumen rodante (auditar en el panel).
+- [ ] RAM total del proceso core < 1 GB con Whisper cargado (Ollama aparte).
+
+## Fuera de alcance de Fase 1 (explícito)
+
+- WhatsApp (cualquier forma) — Fase 2.
+- Liquidación/estadísticas avanzadas de comisiones.
+- Operación manual de conversaciones desde el dashboard.
+- Login multiusuario, túnel de acceso remoto, HTTPS.
+- Deduplicación de productos entre TCPs.
+
+## Riesgos a vigilar durante el build
+
+| Riesgo | Acción |
+|---|---|
+| qwen2.5:3b suena muy robótico en cubano | Comparar con llama3.2:3b (doc 03 §7); ajustar few-shots con conversaciones reales del panel |
+| Whisper CPU lento en audios largos | Limitar a 2 min; avisar al cliente "déjame escuchar eso" |
+| Polling de Telegram latencia | Polling corto (1–2 s) es aceptable; webhook solo si algún día hay dominio |
+| Imágenes de catálogo grandes vía hotspot | Comprimir a máx. ~1280 px al subir desde el dashboard |
