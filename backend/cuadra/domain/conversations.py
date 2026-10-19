@@ -45,6 +45,15 @@ def get_customer(conn, customer_id: int) -> dict:
     return dict(row)
 
 
+def get_channel_identifier(conn, customer_id: int, channel: str) -> str | None:
+    """The address to reply to on a channel (e.g. Telegram chat id)."""
+    row = conn.execute(
+        "SELECT identifier FROM customer_channels WHERE customer_id = ? AND channel = ?",
+        (customer_id, channel),
+    ).fetchone()
+    return row["identifier"] if row is not None else None
+
+
 def get_or_create_open_conversation(conn, customer_id: int, channel: str) -> dict:
     placeholders = ", ".join("?" for _ in OPEN_STATUSES)
     row = conn.execute(

@@ -12,6 +12,7 @@ DATA_DIR = Path(os.environ.get("CUADRA_DATA_DIR", BASE_DIR / "data"))
 DB_PATH = DATA_DIR / "cuadra.db"
 PHOTOS_DIR = DATA_DIR / "fotos"
 AUDIOS_DIR = DATA_DIR / "audios"
+IMAGES_DIR = DATA_DIR / "images"
 LOGS_DIR = DATA_DIR / "logs"
 LOG_FILE = LOGS_DIR / "cuadra.log"
 MIGRATIONS_DIR = BASE_DIR / "migrations"
@@ -79,11 +80,18 @@ PRIORITY_BROADCAST = 100
 TYPING_DELAY_MIN = float(os.environ.get("CUADRA_TYPING_DELAY_MIN", "1"))
 TYPING_DELAY_MAX = float(os.environ.get("CUADRA_TYPING_DELAY_MAX", "4"))
 
+# Simulated business hours (America/Havana). Outside them the bot answers slower
+# (as a human would) — never with an "I'm offline" excuse (doc 03 §Persona).
+BUSINESS_START_HOUR = int(os.environ.get("CUADRA_BUSINESS_START_HOUR", "8"))
+BUSINESS_END_HOUR = int(os.environ.get("CUADRA_BUSINESS_END_HOUR", "21"))
+OUT_OF_HOURS_DELAY_MIN = float(os.environ.get("CUADRA_OUT_OF_HOURS_DELAY_MIN", "5"))
+OUT_OF_HOURS_DELAY_MAX = float(os.environ.get("CUADRA_OUT_OF_HOURS_DELAY_MAX", "15"))
+
 # TCP escalation
 ESCALATION_TIMEOUT_MIN = int(os.environ.get("CUADRA_ESCALATION_TIMEOUT_MIN", "30"))
 ESCALATION_MAX_RETRIES = int(os.environ.get("CUADRA_ESCALATION_MAX_RETRIES", "1"))
 
 
 def ensure_dirs() -> None:
-    for d in (DATA_DIR, PHOTOS_DIR, AUDIOS_DIR, LOGS_DIR, LLM_MODELS_DIR):
+    for d in (DATA_DIR, PHOTOS_DIR, AUDIOS_DIR, IMAGES_DIR, LOGS_DIR, LLM_MODELS_DIR):
         d.mkdir(parents=True, exist_ok=True)

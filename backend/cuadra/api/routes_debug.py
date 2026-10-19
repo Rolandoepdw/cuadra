@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from cuadra import config, db
-from cuadra.ai import queue, stt
+from cuadra.ai import ingest, queue, stt
 from cuadra.api.auth import require_pin
 from cuadra.domain import conversations
 
@@ -69,31 +69,18 @@ async def _wait_for_reply(job_id: int, conversation_id: int, wait_s: float) -> d
 @router.post("/message")
 async def debug_message(payload: DebugMessageIn) -> dict:
     _ensure_debug()
-    conn = db.connect()
-    try:
-        customer = conversations.get_or_create_customer(
-            conn, payload.channel, payload.identifier, payload.customer_name
-        )
-        conversation = conversations.get_or_create_open_conversation(
-            conn, customer["id"], payload.channel
-        )
-        inbound = conversations.add_message(
-            conn, conversation["id"], "INBOUND", "customer", body=payload.text
-        )
-        job_id = queue.enqueue(
-            "generate_reply",
-            {"conversation_id": conversation["id"], "message_id": inbound["id"]},
-            priority=config.PRIORITY_CUSTOMER,
-        )
-        conversation_id, customer_id = conversation["id"], customer["id"]
-    finally:
-        conn.close()
-
-    reply = await _wait_for_reply(job_id, conversation_id, payload.wait_s)
+    info = ingest.ingest_incoming(
+        channel=payload.channel,
+        identifier=payload.identifier,
+        type="text",
+        body=payload.text,
+        customer_name=payload.customer_name,
+    )
+    reply = await _wait_for_reply(info["job_id"], info["conversation_id"], payload.wait_s)
     return {
-        "conversation_id": conversation_id,
-        "customer_id": customer_id,
-        "job_id": job_id,
+        "conversation_id": info["conversation_id"],
+        "customer_id": info["customer_id"],
+        "job_id": info["job_id"],
         "inbound": payload.text,
         "reply": reply.get("body"),
         "reply_message_id": reply.get("id"),
