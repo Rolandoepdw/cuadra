@@ -1,7 +1,7 @@
 ---
 tipo: modelo_datos
 proyecto: Cuadra
-estado: diseño Fase 1
+estado: implementado (migración 001_init.sql)
 actualizado: 2026-10-19
 tags: [sqlite, schema, ventas, comisiones]
 ---
@@ -42,7 +42,7 @@ Verbatim en `backend/migrations/001_init.sql`. Resumen de referencia:
 | `product_images` | Galería por producto (ruta relativa bajo `data/fotos/product_{id}/`) | `is_main`, `sort_order` |
 | `customers` | Cliente con identidad multi-canal | — |
 | `customer_channels` | `(channel, identifier)` único por cliente | `channel`: `telegram`, `whatsapp` |
-| `conversaciones` → `conversations` | Sesión de atención | `status`: `ACTIVE`, `WAITING_TCP`, `CLOSED` |
+| `conversations` | Sesión de atención | `status`: `ACTIVE`, `WAITING_TCP`, `CLOSED` |
 | `messages` | Historial completo (contexto del LLM y auditoría) | `direction`: `INBOUND`/`OUTBOUND`; `author`: `customer`/`bot`/`tcp`/`operator`; `type`: `text`/`audio`/`image`/`document` |
 | `escalations` | Bucle crítico de consulta al TCP | `status`: `PENDING`, `ANSWERED`, `RESOLVED`, `CANCELLED`, `TIMEOUT` |
 | `sales` | Ventas y comisiones | `status`: `DRAFT` → `PENDING_APPROVAL` → `CONFIRMED` → `PAID` \| `CANCELLED`; `source`: `bot`/`operator`; `commission_type`: `FIXED`/`PERCENT` |
@@ -52,22 +52,23 @@ Verbatim en `backend/migrations/001_init.sql`. Resumen de referencia:
 | `broadcast_group_links` | Selección manual opcional de grupos | — |
 | `broadcast_posts` | Log auditable de cada publicación real | `status`: `SENT`/`FAILED` |
 | `jobs` | Cola persistente (sobrevive apagones) | `status`: `PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED` |
-| `events` | Auditoría del sistema | `source`: `system`/`bot`/`dashboard`/`scheduler` |
+| `events` | Auditoría del sistema | `source`: `system`/`bot`/`dashboard`/`scheduler`/`llm`/`stt` |
 | `schema_migrations` | Runner de migraciones (creada por `db.py`) | — |
 
-> El bloque SQL completo no se duplica aquí para evitar desfases: **el archivo ejecutable manda**. Si este resumen y la migración divergen, corregir este documento.
+> **El esquema ejecutable manda:** la fuente de verdad es `backend/migrations/001_init.sql`. Este documento es el resumen de referencia; si divergen, se corrige el documento.
 
 ## 3. Notas de implementación
 
 - **WAL + un solo escritor:** todo `INSERT/UPDATE` sale de cuadra-core. El dashboard escribe únicamente vía la API REST del core (nunca abre la BD directamente).
 - **`products.specifications_json`:** extensiones JSON1 de SQLite disponibles por defecto. Ejemplo:
-  `{"cable_carro": "Sí, incluido", "garantía": "6 meses", "entrega_playa": "24h"}` — se enriquece con cada respuesta del TCP y se inyecta en el contexto del LLM para no volver a preguntar.
+  `{"car_cable": "Sí, incluido", "warranty": "6 meses", "beach_delivery": "24h"}` — se enriquece con cada respuesta del TCP y se inyecta en el contexto del LLM para no volver a preguntar.
 - **Fotografía histórica en `sales.context_json`:** al crear la venta se congela precio, moneda, comisión y zona del TCP del momento — una auditoría no puede depender de datos editables del catálogo.
 - **Moneda explícita en todo:** ni precios ni comisiones sin `currency`/`commission_currency`. **`commission_currency` es intencional:** lo habitual es cobrar la comisión en USD aunque el precio esté en CUP. Conversiones (si algún día se necesitan) se hacen al registrar la venta, no al consultar.
 - **Identidad de cliente:** la llave natural es `(channel, identifier)`. El mismo cliente en Telegram y WhatsApp futuro son dos filas de `customer_channels` apuntando al mismo `customers.id` (el merge es manual/operativo).
 - **Rutas de imágenes:** relativas bajo `data/` (p. ej. `fotos/product_12/img_001.jpg`), nunca rutas absolutas — la BD es portable entre máquinas. Las imágenes se comprimen al subir (máx. 1280 px, ~500 KB).
 - **Borrado lógico preferido:** `suppliers.active = 0` y `products.status = 'REMOVED'` en lugar de `DELETE` físico (las ventas y el historial referencian estas filas). `DELETE` físico reservado para datos sin referencias (imágenes sueltas, categorías sin usar).
 - **Regla de seguridad de categorías (anti-baneo):** el scheduler solo publica un producto en grupos `ACTIVE` cuyas categorías (`group_categories`) incluyan su `category_id`. **Producto con `category_id = NULL` solo va a grupos sin categorías asignadas** (grupos libres). La selección manual (`broadcast_group_links`) tiene prioridad sobre el auto-match, pero la regla de NULL se aplica igual.
+- **Vista segura al LLM:** el JSON de producto que se inyecta en el contexto (`catalog.llm_product_json`) **excluye campos internos** (`commission`, `commission_currency`): lo que entra al prompt puede repetirse al cliente. Ver `01_arquitectura.md` §6.1.
 - **Límite diario por grupo:** el scheduler consulta `broadcast_posts` del día por grupo y respeta `max_posts_per_day` + rango `[min_interval_min, max_interval_min]` de jitter. `status = 'BLOCKED'` es la lista negra explícita.
 
 ## 4. Caminos de evolución (documentados, NO implementados — ordenados por fase)

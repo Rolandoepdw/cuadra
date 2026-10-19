@@ -167,7 +167,7 @@ El backend **arma el prompt, no lo acumula**. Presupuesto objetivo: **~2–2.5K 
 
 Reglas:
 - **NLU no usa historial completo**: clasificar intención = último mensaje + producto activo.
-- **El resumen rodante se persiste** en `conversaciones.contexto_json.resumen` — sobrevive a reinicios.
+- **El resumen rodante se persiste** en `conversations.context_json.summary` — sobrevive a reinicios.
 - Si el historial supera el presupuesto, se recorta por la cola (más viejo afuera, resumen cubre lo esencial).
 - Escalar el modelo (más parámetros) no está en el radar; gestionar contexto bien resuelve el 90% de los casos.
 

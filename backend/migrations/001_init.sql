@@ -1,4 +1,5 @@
--- 001_init.sql — Cuadra initial schema (docs source: cuadra_doc/02_modelo_datos.md — doc to be updated by the operator)
+-- 001_init.sql — Cuadra initial schema.
+-- SOURCE OF TRUTH for the schema; cuadra_doc/02_modelo_datos.md summarizes it.
 
 -- =========================================================
 -- CATEGORIES (operator-curated taxonomy)

@@ -42,7 +42,7 @@ Documento fuente de verdad. Todo lo que se decida posteriormente debe alinearse 
 ## 3. Decisiones de negocio
 
 - **Modelo:** comisionista multicanal. Cada venta genera comisión por producto/TCP.
-- **Productos:** el producto es una **presentación abstracta del TCP**, no un catálogo canónico. Un mismo objeto comercial en dos TCPs son **dos productos independientes**. No hay tabla base de productos; el agente compara en tiempo real entre productos candidatos del catálogo global. Evolución documentada (no implementada): `productos_base` + `ofertas` si algún día se quiere deduplicar.
+- **Productos:** el producto es una **presentación abstracta del TCP**, no un catálogo canónico. Un mismo objeto comercial en dos TCPs son **dos productos independientes**. No hay tabla base de productos; el agente compara en tiempo real entre productos candidatos del catálogo global. Evolución documentada (no implementada): `base_products` + `offers` si algún día se quiere deduplicar.
 - **Ventas:** el bot **puede crear** la venta a partir de la confirmación del TCP, pero queda en estado `DRAFT`/`PENDING_APPROVAL`. **El cierre del pago lo hace siempre el operador (dueño) desde el dashboard.** Flujo: `DRAFT → PENDING_APPROVAL → CONFIRMED → PAID` (+ `CANCELLED`).
 - **Moneda:** **USD y CUP** — precio y comisión con moneda explícita por registro.
 - **Identidad de cliente:** multi-canal desde el diseño (`customer_channels`: canal + identificador).
