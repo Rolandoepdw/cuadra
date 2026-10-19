@@ -33,7 +33,7 @@ tags: [fase1, plan, build, acceptance]
 9. `ia/llm.py`: cliente Ollama (`/api/generate`), NLU por JSON + armado de respuesta por plantillas (`03_persona_prompts.md`).
 10. Pipeline: mensaje entrante → (audio→transcripción) → intención → respuesta/envío/escalado.
 
-**Criterio:** por consola se simula un mensaje entrante y el sistema produce una respuesta coherente usando el catálogo; un audio se transcribe.
+**Criterio:** mediante el endpoint de debug `POST /api/debug/mensaje` (solo activo en modo desarrollo; deshabilitado cuando hay PIN de producción) se simula un mensaje entrante y el sistema produce una respuesta coherente usando el catálogo; un audio de prueba se transcribe correctamente.
 
 ### Hito 4 — Canal Telegram + conversaciones
 11. `canales/base.py` (Protocol) y `canales/telegram.py` (aiogram, polling).
@@ -64,7 +64,7 @@ tags: [fase1, plan, build, acceptance]
 **Criterio:** registrando desde el dashboard dos grupos (uno con categoría "alimentos" y uno libre) y 3 productos (con y sin categoría), las difusiones llegan **solo a los grupos que corresponden**, con textos distintos (spintax) y horarios espaciados; el panel muestra el log de envíos por grupo.
 
 ### Hito 8 — Ventas (mínimo viable)
-21. `dominio/ventas.py`: el bot crea `BORRADOR → PENDIENTE_APROBACION` al confirmar TCP + cliente; endpoint para que el operador confirme/cancele/pague desde el dashboard (lectura + botón de aprobación).
+23. `dominio/ventas.py`: el bot crea `BORRADOR → PENDIENTE_APROBACION` al confirmar TCP + cliente; endpoint para que el operador confirme/cancele/pague desde el dashboard (lectura + botón de aprobación).
 
 **Criterio:** una venta nace de una conversación, aparece en el panel, y el operador la cierra manualmente.
 
@@ -72,7 +72,7 @@ tags: [fase1, plan, build, acceptance]
 
 - [ ] Un cliente de Telegram compra un producto real usando solo al bot (consulta, precio con moneda, escalado si falta dato).
 - [ ] Todo el historial es auditable en el panel (conversación completa, quién dijo qué, latencias).
-- [ ] Reiniciar el laptop a mitad de conversación no pierde estado (la cola y conversaciones se reanudan).
+- [ ] Reiniciar el laptop a mitad de conversación no pierde estado (la cola y conversaciones se reanudan); un trabajo `EN_PROCESO` a media ejecución se reanuda **sin duplicar envíos** (verificar en panel Auditoría).
 - [ ] El bot nunca responde en <1 s ni suena a contestadora rígida (auditar 20 conversaciones).
 - [ ] Catálogo 100% administrable desde el dashboard sin tocar la BD.
 - [ ] **Grupos 100% administrables desde el dashboard**; un producto sin categoría jamás llega a un grupo con restricciones (probar con caso negativo).
@@ -95,4 +95,4 @@ tags: [fase1, plan, build, acceptance]
 | qwen2.5:3b suena muy robótico en cubano | Comparar con llama3.2:3b (doc 03 §7); ajustar few-shots con conversaciones reales del panel |
 | Whisper CPU lento en audios largos | Limitar a 2 min; avisar al cliente "déjame escuchar eso" |
 | Polling de Telegram latencia | Polling corto (1–2 s) es aceptable; webhook solo si algún día hay dominio |
-| Imágenes de catálogo grandes vía hotspot | Comprimir a máx. ~1280 px al subir desde el dashboard |
+| Imágenes de catálogo grandes | Comprimir a máx. 1280 px / ~500 KB al subir (el upload es por WiFi local — no consume datos del hotspot; el límite protege disco y los reenvíos por WA de Fase 2) |

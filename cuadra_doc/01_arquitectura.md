@@ -47,7 +47,7 @@ tags: [arquitectura, backend, colas, dashboard, windows]
 
 ```
 cuadra/
-├── doc/                      # esta documentación
+├── cuadra_doc/                # esta documentación
 ├── backend/
 │   ├── cuadra/
 │   │   ├── main.py           # app FastAPI + lifespan (arranca todo)
@@ -71,7 +71,7 @@ cuadra/
 │   │   │   ├── auth.py           # PIN (header X-PIN o cookie)
 │   │   │   └── rutas_dashboard.py# REST para el panel
 │   │   └── scheduler/
-│  │       └── difusiones.py    # APScheduler + jitter
+│   │       └── difusiones.py    # APScheduler + jitter
 │   ├── migrations/             # SQL numerados (001_init.sql, …)
 │   ├── data/                   # cuadra.db, fotos/ (gitignored)
 │   └── requirements.txt
@@ -79,7 +79,7 @@ cuadra/
     └── lib/
         ├── main.dart
         ├── api/                # cliente HTTP + modelos
-        └── pantallas/          # los 6 paneles
+        └── pantallas/          # los 7 paneles
 ```
 
 **Regla de dependencia:** `canales/` y `api/` dependen de `dominio/`; `dominio/` no conoce a `canales/` ni a FastAPI. `ia/` es consumido por el worker de cola. Esto es lo que permite añadir el canal WhatsApp (Fase 2) sin tocar dominio.
@@ -123,6 +123,10 @@ webhook/polling → MensajeEntrante
 - **Prioridades:** respuestas a clientes (10) > consultas a TCP (50) > difusiones (100).
 - **Timeout de escalado TCP:** si no hay respuesta en N minutos, se reconsulta una vez y luego se resuelve con el cliente honestamente ("el socio está ocupado, te confirmo apenas me responda"). Nunca dejar la conversación colgada.
 - **Delays humanos** aplicados en la salida: typing de 1–4 s + jitter; en difusiones, 3–40 min entre posts.
+- **Idempotencia tras apagón:** al arrancar, los trabajos en `EN_PROCESO` se devuelven a `PENDIENTE` con `intentos + 1`. Cada trabajo lleva una clave en `payload_json.idempotencia` (p. ej. `escalado:{id}:respuesta`); antes de enviar un mensaje saliente, el worker verifica la clave contra `mensajes`/`envios_difusion` — si ya existe, se marca COMPLETADO sin reenviar. Queda una ventana residual mínima de doble envío (crash exacto entre verificación y envío): aceptable para 1:1 y documentada.
+- **Logging:** `logging` con RotatingFileHandler en `data/logs/cuadra.log` (5 MB × 5 archivos). Nivel INFO en producción; DEBUG con variable de entorno. Todo trabajo fallido deja `error_ultimo` + fila en `eventos`.
+- **Errores del worker:** transitorios (red, Ollama caído, Telegram 429) → reintento con backoff exponencial hasta `max_intentos`, luego FALLIDO. Permanentes (payload inválido, producto dado de baja) → FALLIDO directo + evento `trabajo_fallido`. El worker nunca muere sin marcar el trabajo en curso.
+- **Rate limits de canal:** Telethon duerme el `FloodWait` que Telegram pida; la Bot API respeta `RetryAfter`. Ambos aplican también a difusiones (no solo 1:1).
 
 ## 6. Ollama y Whisper — configuración operativa
 
@@ -179,6 +183,16 @@ Reglas:
   La decisión se toma al arrancar Fase 2 con una prueba de baneo controlada en la línea secundaria.
 - **Red:** sin puertos abiertos al exterior. Telegram por polling. Dashboard solo escucha en `0.0.0.0` local protegido por PIN (LAN).
 
+### 7.1 Mantenimiento y backups
+
+- **Backup diario** (tarea programada de Windows):
+  1. `sqlite3 cuadra.db ".backup backups\cuadra_YYYYMMDD.db"` — copia consistente compatible con WAL (nunca copiar el archivo a pelo mientras corre).
+  2. `robocopy data\fotos backups\fotos /MIR`
+  - Retener los últimos 7 días. `backups/` puede vivir en un disco externo.
+- **Integridad:** al arrancar, `PRAGMA quick_check`; si falla, restaurar desde el último backup bueno y dejar evento `corrupcion_bd` en `eventos`.
+- **Mantenimiento SQLite:** `VACUUM` manual mensual (BD pequeña, <1 min). Monitorear el tamaño de `cuadra.db-wal` en el panel Salud (si crece descontrolado, falta un checkpoint).
+- **Límites de tamaño:** imágenes de catálogo comprimidas a máx. 1280 px / ~500 KB al subir. Audios de clientes limitados a 2 min.
+
 ## 8. Dashboard Flutter Web
 
 - `flutter build web` → copiado a `backend/cuadra/web_dashboard/` y servido por FastAPI como `StaticFiles`.
@@ -208,3 +222,4 @@ Reglas:
 | VRAM insuficiente (app personal + Ollama) | `num_parallel=1`; doc de operación: cerrar apps pesadas; fallback CPU-only de emergencia |
 | LLM de 3B suena robot | Plantillas + few-shots en `03_persona_prompts.md`; auditar en panel Conversaciones |
 | SQLite contention (un solo escritor) | WAL + todo escritura desde cuadra-core; dashboard escribe solo vía API del core |
+| Consumo de datos del hotspot | Whisper y LLM corren 100% locales (cero datos); los datos solo se consumen al descargar modelos (una vez) y en mensajería WA real (Fase 2); imágenes comprimidas ≤500 KB |

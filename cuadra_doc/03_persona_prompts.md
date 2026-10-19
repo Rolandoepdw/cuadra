@@ -49,7 +49,7 @@ FORMATO DE SALIDA
 
 ## 2. Tareas estructuradas (NLU) — salida JSON
 
-Para clasificar intención, el LLM recibe además del system prompt una instrucción de tarea. Ejemplos:
+Para clasificar intención, el LLM recibe además del system prompt una instrucción de tarea. Salida:
 
 ```
 Clasifica el último mensaje del cliente. Responde SOLO con JSON:
@@ -57,6 +57,23 @@ Clasifica el último mensaje del cliente. Responde SOLO con JSON:
  "producto": "<nombre detectado o null>",
  "datos_faltantes": ["<dato que no está en el contexto>"],
  "confianza": 0.0-1.0}
+```
+
+**Esquema JSON (validación en backend con pydantic):** si la respuesta del LLM no valida contra el esquema, se reintenta una vez con la corrección del error; si vuelve a fallar, se degrada a `intencion: "otro"` con `confianza` baja (y se audita el evento).
+
+```json
+{
+  "type": "object",
+  "required": ["intencion", "producto", "datos_faltantes", "confianza"],
+  "properties": {
+    "intencion": { "enum": ["consulta_precio", "consulta_stock", "consulta_dato",
+                             "comparar", "comprar", "queja", "otro"] },
+    "producto": { "type": ["string", "null"] },
+    "datos_faltantes": { "type": "array", "items": { "type": "string" } },
+    "confianza": { "type": "number", "minimum": 0, "maximum": 1 }
+  },
+  "additionalProperties": false
+}
 ```
 
 > **Nota de arquitectura:** el LLM produce el JSON de arriba y el motor decide por reglas
@@ -100,7 +117,7 @@ Buenas socio, tengo un cliente para {producto} de {precio} {moneda}.
 **Asistente:** "Déjame verificar con el almacén eso mismo ahora, te confirmo en un rato así te llega completo. 👍"
 
 **Cliente:** "está muy caro, no hay más barato"
-**Asistente:** "Entiendo. Tengo una opción parecida en {precio} {moneda} que igual te sirve. ¿Te cuento o prefieres esperar a que baje el original?"
+**Asistente:** "Entiendo. Tengo una opción parecida en 180 USD que igual te sirve. ¿Te cuento o prefieres esperar a que baje el original?"
 
 ## 6. Supuestos operativos de la persona
 

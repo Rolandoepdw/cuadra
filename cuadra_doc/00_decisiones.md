@@ -18,7 +18,7 @@ Documento fuente de verdad. Todo lo que se decida posteriormente debe alinearse 
 | Internet                       | **Hotspot de celular** (única fuente). Sin IP pública, sin dominio, sin TLS propio |
 | Presupuesto                    | $0 USD — sin SaaS de pago                                                          |
 | Hardware                       | Laptop con RTX 3050 Laptop (4 GB VRAM), 32 GB RAM                                  |
-| RAM disponible para el sistema | **hasta ~16 GB**                                                                   |
+| RAM disponible para el sistema | **hasta ~20 GB** (tope, no objetivo — el backend apunta a <1 GB; el resto es para Ollama, Whisper y trabajo personal) |
 | SO de ejecución                | **Windows** — evitar Docker y WSL2 si es posible                                   |
 | Usuarios concurrentes reales   | 2–4 (el sistema absorbe cientos, pero no es el objetivo)                           |
 
@@ -36,6 +36,8 @@ Documento fuente de verdad. Todo lo que se decida posteriormente debe alinearse 
 | Frontend extra | Ninguno | Sin React, sin Streamlit, sin Grafana |
 
 **Microservicios: descartados.** Motivo: RAM, complejidad de debugging, SQLite no se comparte entre procesos, volumen real mínimo. Se adopta en su lugar **monolito modular con fronteras de dominio + API-first**; Ollama y el gateway de WhatsApp ya son procesos externos de facto donde de verdad se necesita separación.
+
+**Versiones mínimas:** Python 3.12+ (venv). Ollama para Windows: instalador oficial (`OllamaSetup.exe`), modelo ya descargado. Node 20 LTS únicamente para Fase 2 (gateway WhatsApp).
 
 ## 3. Decisiones de negocio
 
@@ -57,7 +59,7 @@ Documento fuente de verdad. Todo lo que se decida posteriormente debe alinearse 
 3. **Calentamiento** de línea nueva: primera semana solo conversaciones reales, pocas salientes.
 4. **Sesión estable:** una sola IP/dispositivo; no reescanear el QR seguido.
 5. **Spintax** obligatorio en difusiones (no en 1:1). Jitter de 3–40 min según canal.
-6. **Telegram/Telethon:** manejar `FloodWait` durmiendo lo que se pida; tope 5–8 posts/día por grupo; respetar reglas de cada grupo.
+6. **Telegram (Telethon y Bot API):** manejar `FloodWait` durmiendo lo que se pida (Telethon) y `RetryAfter` (Bot API); tope 5–8 posts/día por grupo; respetar reglas de cada grupo. Aplica también a difusiones, no solo a 1:1.
 7. Nada de links acortados; tono de marca (precio claro, sin spam) también es anti-ban.
 
 ## 6. Fases
@@ -78,7 +80,7 @@ Los **adaptadores de canal** se diseñan desde Fase 1 con la interfaz pensada pa
 - **Futuro:** interacción (aprobar ventas, contestar manualmente) — ya previsto en el modelo de datos, no en Fase 1.
 - **¿Web y no Desktop?** El proyecto Flutter es el mismo para ambos targets. Web primero: acceso desde móvil en la misma red sin instalar nada, y los estáticos los sirve el propio FastAPI (cero despliegue extra). `flutter build windows` queda disponible sin reescritura si algún día se quiere el `.exe` local.
 
-## 7.1 Gestión de grupos de difusión (curaduría del operador)
+### 7.1 Gestión de grupos de difusión (curaduría del operador)
 
 - El bot **no busca ni depura grupos** — eso es complejidad y riesgo de baneo injustificados en fases tempranas. La curaduría es 100% manual desde el dashboard.
 - Cada **producto se clasifica en una categoría** (alimentos, tecnología, construcción, hogar…). Cada **grupo declara qué categorías acepta**.

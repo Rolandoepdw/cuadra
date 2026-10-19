@@ -1,0 +1,21 @@
+# Datos y estado (nunca versionar)
+backend/data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Flutter
+dashboard/.dart_tool/
+dashboard/build/
+dashboard/.flutter-plugins*
+dashboard/.packages
+
+# IDE / SO
+.idea/
+.vscode/
+*.iml
+Thumbs.db
+.DS_Store
