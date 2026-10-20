@@ -51,8 +51,9 @@ cuadra/
 ├── backend/
 │   ├── cuadra/
 │   │   ├── main.py           # app FastAPI + lifespan (arranca todo)
-│   │   ├── config.py         # settings (rutas, PIN, LLM, etc.)
+│   │   ├── config.py         # settings (rutas, PIN, LLM) + carga de .env
 │   │   ├── db.py             # conexión SQLite, WAL, migraciones
+│   │   ├── instance.py       # guard de instancia única (evita pollings duplicados)
 │   │   ├── domain/
 │   │   │   ├── catalog.py        # suppliers (TCP), products, images, categories
 │   │   │   ├── conversations.py  # customers, sesiones, mensajes, contexto
@@ -139,6 +140,7 @@ el mensaje guardado no conoce la dirección, el canal la aporta.
 ## 5. Concurrencia y colas (punto crítico)
 
 - **Una sola cola FIFO persistente** (`jobs` en SQLite): sobrevive a apagones; al arrancar se reanudan pendientes.
+- **Instancia única obligatoria:** dos cores harían `getUpdates` del mismo bot y Telegram entrega cada update a una sola conexión (mensajes perdidos al azar). `cuadra/instance.py` toma un lock (`data/cuadra.lock`) al arrancar y aborta el segundo core; los locks obsoletos se reclaman solos. El polling de aiogram **debe** programarse con `asyncio.create_task` o no hace long-poll real.
 - **Worker de IA con concurrencia 1 en GPU** (`-np 1` en el server llama.cpp): mientras un prompt corre, los demás esperan en la cola. Con 2–4 usuarios el sentimiento sigue siendo humano.
 - **Whisper corre en `run_in_executor`** (4 hilos CPU, no bloquea el event loop). Máximo 1 transcripción a la vez para no pelear por CPU con el LLM.
 - **Prioridades:** respuestas a clientes (10) > consultas a TCP (50) > difusiones (100).

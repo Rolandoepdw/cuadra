@@ -40,7 +40,7 @@ tags: [fase1, plan, build, acceptance]
 12. `domain/conversations.py`: alta de cliente+canal, historial, contexto; persistencia de cada mensaje; `get_channel_identifier` para resolver el destino de salida.
 13. `ai/handlers.py`: nuevo JOB `send_message` (typing + delay humano 1–4 s, 5–15 s fuera de horario, idempotente mediante el evento `message_sent`); `generate_reply` guarda el OUTBOUND y encola el envío.
 
-**Criterio:** con un bot real de Telegram, un humano conversa sobre el catálogo y recibe respuestas con precio/moneda/zona correctos; todo queda en `messages`. *Verificado de punta a punta en modo dummy (entrada → respuesta → `send_message` con delay e idempotencia); pendiente la prueba con token real.*
+**Criterio:** con un bot real de Telegram, un humano conversa sobre el catálogo y recibe respuestas con precio/moneda/zona correctos; todo queda en `messages`. *Verificado de punta a punta con el bot real `@CuadraHabanaBot`: un cliente (`@Rolandoepd`) y el TCP (`@PeanutEmperor`) escribieron y recibieron respuesta con delay humano. Bug corregido: `start_polling` debía programarse con `asyncio.create_task` (antes el bot decía "started" pero no hacía long-poll). Añadido guard de instancia única (`cuadra/instance.py`) para que dos cores no se roben los updates.*
 
 ### Hito 5 — Escalado al TCP (por Telegram, Fase 1)
 14. `domain/escalations.py`: crea registro, escribe al TCP (`telegram_id` del proveedor), espera respuesta, enriquece `specifications_json`, retoma al cliente; timeout con 1 reintento.
@@ -96,3 +96,5 @@ tags: [fase1, plan, build, acceptance]
 | Whisper CPU lento en audios largos | Limitar a 2 min; avisar al cliente "déjame escuchar eso" |
 | Polling de Telegram latencia | Polling corto (1–2 s) es aceptable; webhook solo si algún día hay dominio |
 | Imágenes de catálogo grandes | Comprimir a máx. 1280 px / ~500 KB al subir (el upload es por WiFi local — no consume datos del hotspot; el límite protege disco y los reenvíos por WA de Fase 2) |
+| **Eco de comisiones internas** (visto en prueba real: el TCP escribió "la comisión es de 0.5 USD" y el bot la repitió) | Reforzar `ai/prompts.py`: el bot **nunca** menciona comisión/margen ni aunque el interlocutor la traiga; si alguien la menciona, redirigir a precio final. Pendiente de ajustar antes del piloto |
+| Guard de instancia única | Hecho en Hito 4 (`cuadra/instance.py`, `data/cuadra.lock`). Ver `07_telegram_setup.md` §6.1 |
