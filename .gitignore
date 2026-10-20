@@ -1,6 +1,9 @@
 # Datos y estado (nunca versionar)
 backend/data/
 
+# Secretos locales (token de Telegram, API keys, PIN)
+.env
+
 # Runtime local de IA (binarios llama.cpp y modelos GGUF)
 backend/tools/
 backend/models/

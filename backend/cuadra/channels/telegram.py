@@ -6,6 +6,7 @@ pipeline via ai/ingest.py. Outbound replies are delivered by the queue's
 `send_*` methods below.
 """
 
+import asyncio
 import logging
 import uuid
 from pathlib import Path
@@ -17,7 +18,7 @@ log = logging.getLogger("cuadra.telegram")
 
 _bot = None
 _dp = None
-_polling = None
+_polling: "asyncio.Task | None" = None
 
 
 def available() -> bool:
@@ -71,12 +72,24 @@ async def start() -> None:
             file_path=f"images/{path.name}",
         )
 
-    _polling = _dp.start_polling(_bot, handle_signals=False)
+    # start_polling is a long-running coroutine: it MUST be scheduled as a task,
+    # otherwise the loop never actually long-polls and updates pile up in Telegram.
+    _polling = asyncio.create_task(_dp.start_polling(_bot, handle_signals=False))
+    _polling.add_done_callback(_on_polling_done)
     log.info("telegram polling started")
+
+
+def _on_polling_done(task) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.error("telegram polling stopped unexpectedly: %r", exc)
 
 
 async def _handle(bot, *, identifier, from_user, type, body=None, file_path=None) -> None:
     name = from_user.full_name if from_user is not None else None
+    log.info("inbound telegram %s from %s (%s): %s", type, identifier, name, (body or file_path))
     try:
         ingest.ingest_incoming(
             channel="telegram",
@@ -94,6 +107,12 @@ async def stop() -> None:
     global _bot, _dp, _polling
     if _polling is not None:
         _polling.cancel()
+        try:
+            await _polling
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001 — surface why polling died
+            log.exception("telegram polling task ended with an error")
         _polling = None
     if _bot is not None:
         await _bot.session.close()

@@ -12,7 +12,7 @@ from logging.handlers import RotatingFileHandler
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-from cuadra import config, db
+from cuadra import config, db, instance
 from cuadra.ai import handlers, llm_server, queue
 from cuadra.api import routes_catalog, routes_dashboard, routes_debug, routes_llm
 from cuadra.channels import telegram as telegram_channel
@@ -40,6 +40,10 @@ def _setup_logging() -> None:
 async def lifespan(app: FastAPI):
     config.ensure_dirs()
     _setup_logging()
+
+    # One core per machine: two would both poll Telegram and steal updates.
+    lock = instance.acquire()
+    log.info("core lock acquired (pid %s, %s)", lock["pid"], lock["file"])
 
     conn = db.connect()
     try:
@@ -80,6 +84,7 @@ async def lifespan(app: FastAPI):
     scheduler_broadcasts.stop()
     await queue.stop()
     await asyncio.to_thread(llm_server.stop)
+    instance.release()
     log.info("cuadra-core stopped")
 
 

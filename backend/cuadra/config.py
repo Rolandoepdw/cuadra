@@ -8,6 +8,28 @@ import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # backend/
+
+
+def _load_env_file() -> None:
+    """Load backend/.env (if present) into os.environ without overwriting.
+
+    Keeps secrets (Telegram token, API keys) out of the shell history and out
+    of git. Real environment variables always win.
+    """
+    env_path = BASE_DIR / ".env"
+    if not env_path.exists():
+        return
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
+_load_env_file()
+
 DATA_DIR = Path(os.environ.get("CUADRA_DATA_DIR", BASE_DIR / "data"))
 DB_PATH = DATA_DIR / "cuadra.db"
 PHOTOS_DIR = DATA_DIR / "fotos"
@@ -15,6 +37,7 @@ AUDIOS_DIR = DATA_DIR / "audios"
 IMAGES_DIR = DATA_DIR / "images"
 LOGS_DIR = DATA_DIR / "logs"
 LOG_FILE = LOGS_DIR / "cuadra.log"
+LOCK_FILE = DATA_DIR / "cuadra.lock"
 MIGRATIONS_DIR = BASE_DIR / "migrations"
 
 # Dashboard: shared PIN on the LAN. Empty = disabled (development only).
