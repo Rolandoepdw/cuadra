@@ -42,11 +42,11 @@ tags: [fase1, plan, build, acceptance]
 
 **Criterio:** con un bot real de Telegram, un humano conversa sobre el catálogo y recibe respuestas con precio/moneda/zona correctos; todo queda en `messages`. *Verificado de punta a punta con el bot real `@CuadraHabanaBot`: un cliente (`@Rolandoepd`) y el TCP (`@PeanutEmperor`) escribieron y recibieron respuesta con delay humano. Bug corregido: `start_polling` debía programarse con `asyncio.create_task` (antes el bot decía "started" pero no hacía long-poll). Añadido guard de instancia única (`cuadra/instance.py`) para que dos cores no se roben los updates.*
 
-### Hito 5 — Escalado al TCP (por Telegram, Fase 1)
+### Hito 5 — Escalado al TCP (por Telegram, Fase 1) ✅
 14. `domain/escalations.py`: crea registro, escribe al TCP (`telegram_id` del proveedor), espera respuesta, enriquece `specifications_json`, retoma al cliente; timeout con 1 reintento.
 15. Flujo inverso: la respuesta del TCP se correlaciona con el escalado pendiente más antiguo de ese TCP (y se marca).
 
-**Criterio:** cliente pregunta dato faltante → TCP (otra cuenta de Telegram) responde → cliente recibe la respuesta y el producto queda enriquecido.
+**Criterio:** cliente pregunta dato faltante → TCP (otra cuenta de Telegram) responde → cliente recibe la respuesta y el producto queda enriquecido. *Verificado de punta a punta: cliente pide `garantía` del `Cargador 20W USB-C` → `pipeline` clasifica `consulta_dato` → se crea el escalado `PENDING` y el JOB `send_escalation` escribe al TCP real (`@PeanutEmperor`, `suppliers.id=1`) con delay humano → el TCP responde → JOB `tcp_reply` correlaciona, enriquece el producto (`specifications_json.dato_proveedor`) y marca el escalado `RESOLVED` → el cliente recibe "Ya me confirmó el almacén…". Timeout: `scheduler/maintenance.check_escalation_timeouts` (cada 2 min) reintenta una vez a los `ESCALATION_TIMEOUT_MIN` y luego marca `TIMEOUT`.*
 
 ### Hito 6 — Dashboard Flutter Web
 16. `dashboard/`: `flutter create` (web), cliente HTTP con `X-PIN`, navegación lateral con los 7 paneles.
@@ -96,5 +96,5 @@ tags: [fase1, plan, build, acceptance]
 | Whisper CPU lento en audios largos | Limitar a 2 min; avisar al cliente "déjame escuchar eso" |
 | Polling de Telegram latencia | Polling corto (1–2 s) es aceptable; webhook solo si algún día hay dominio |
 | Imágenes de catálogo grandes | Comprimir a máx. 1280 px / ~500 KB al subir (el upload es por WiFi local — no consume datos del hotspot; el límite protege disco y los reenvíos por WA de Fase 2) |
-| **Eco de comisiones internas** (visto en prueba real: el TCP escribió "la comisión es de 0.5 USD" y el bot la repitió) | Reforzar `ai/prompts.py`: el bot **nunca** menciona comisión/margen ni aunque el interlocutor la traiga; si alguien la menciona, redirigir a precio final. Pendiente de ajustar antes del piloto |
+| **Eco de comisiones internas** (visto en prueba real: el TCP escribió "la comisión es de 0.5 USD" y el bot la repitió) | Reforzado `ai/prompts.py`: regla explícita de **ignorar** comisiones/márgenes aunque el interlocutor las mencione, redirigiendo al precio final. Pendiente: validar en conversación real durante el piloto |
 | Guard de instancia única | Hecho en Hito 4 (`cuadra/instance.py`, `data/cuadra.lock`). Ver `07_telegram_setup.md` §6.1 |
