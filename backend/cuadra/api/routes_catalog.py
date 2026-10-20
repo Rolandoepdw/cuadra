@@ -20,10 +20,21 @@ router = APIRouter(prefix="/api", dependencies=[Depends(require_pin)])
 _BOOL_FIELDS = ("active", "is_main")
 
 
+def _media_url(local_path: str | None) -> str | None:
+    """Relative image path -> public /media URL (mounted in main.py)."""
+    if not local_path:
+        return None
+    return "/media/" + local_path.replace("\\", "/").lstrip("/")
+
+
 def _out(entity: dict) -> dict:
     for key in _BOOL_FIELDS:
         if key in entity and entity[key] is not None:
             entity[key] = bool(entity[key])
+    if isinstance(entity.get("local_path"), str):
+        entity["url"] = _media_url(entity["local_path"])
+    if isinstance(entity.get("main_image"), str):
+        entity["main_image_url"] = _media_url(entity["main_image"])
     return entity
 
 

@@ -10,7 +10,8 @@ from contextlib import asynccontextmanager
 from logging.handlers import RotatingFileHandler
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from cuadra import config, db, instance
 from cuadra.ai import handlers, llm_server, queue
@@ -93,6 +94,30 @@ app.include_router(routes_dashboard.router)
 app.include_router(routes_catalog.router)
 app.include_router(routes_llm.router)
 app.include_router(routes_debug.router)
+
+# Product images: /media/<local_path> (e.g. /media/fotos/product_1/img_1.jpg).
+config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=config.DATA_DIR), name="media")
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/{path:path}", include_in_schema=False)
+async def spa(path: str = ""):
+    """Serve the built dashboard (SPA). Unknown paths fall back to index.html.
+
+    /api and /media are matched by their own routes/mounts first, so only
+    client-side routes reach here.
+    """
+    index = config.WEB_DIR / "index.html"
+    if not index.exists():
+        return JSONResponse(
+            {"detail": "dashboard not built (run build_dashboard.ps1)"},
+            status_code=503,
+        )
+    candidate = (config.WEB_DIR / path).resolve()
+    if path and candidate.is_file() and config.WEB_DIR.resolve() in candidate.parents:
+        return FileResponse(candidate)
+    return FileResponse(index)
 
 
 @app.exception_handler(DomainError)

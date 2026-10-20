@@ -1,5 +1,6 @@
-"""Dashboard endpoints (Phase 1: health + stub summary)."""
+"""Dashboard endpoints (Phase 1: health + summary)."""
 
+import json
 import time
 from datetime import datetime, timezone
 
@@ -51,4 +52,81 @@ async def health() -> dict:
         },
         "telegram_channel": telegram_channel.mode(),
         "debug": config.DEBUG,
+    }
+
+
+def _scalar(conn, sql: str, args: tuple = ()) -> float | int | None:
+    row = conn.execute(sql, args).fetchone()
+    return row[0] if row and row[0] is not None else None
+
+
+def _avg_stt_ms(conn) -> float | None:
+    """Average whisper latency from today's audio_transcribed events.
+
+    STT latency lives in the event details (elapsed_s), not on the message.
+    """
+    rows = conn.execute(
+        "SELECT details_json FROM events "
+        "WHERE source = 'stt' AND type = 'audio_transcribed' "
+        "AND date(created_at) = date('now')"
+    ).fetchall()
+    samples = []
+    for row in rows:
+        try:
+            elapsed = json.loads(row["details_json"]).get("elapsed_s")
+        except (ValueError, TypeError):
+            continue
+        if elapsed is not None:
+            samples.append(float(elapsed) * 1000)
+    return round(sum(samples) / len(samples), 1) if samples else None
+
+
+@router.get("/summary")
+async def summary() -> dict:
+    """Headline metrics for the General panel (today, UTC)."""
+    conn = db.connect()
+    try:
+        messages_today = _scalar(
+            conn,
+            "SELECT COUNT(*) FROM messages WHERE date(created_at) = date('now')",
+        )
+        messages_in = _scalar(
+            conn,
+            "SELECT COUNT(*) FROM messages "
+            "WHERE date(created_at) = date('now') AND direction = 'INBOUND'",
+        )
+        active_conversations = _scalar(
+            conn,
+            "SELECT COUNT(*) FROM conversations WHERE status IN ('ACTIVE', 'WAITING_TCP')",
+        )
+        escalations_open = _scalar(
+            conn,
+            "SELECT COUNT(*) FROM escalations WHERE status IN ('PENDING', 'ANSWERED')",
+        )
+        avg_llm_ms = _scalar(
+            conn,
+            "SELECT AVG(latency_ms) FROM messages "
+            "WHERE author = 'bot' AND direction = 'OUTBOUND' "
+            "AND date(created_at) = date('now') AND latency_ms IS NOT NULL",
+        )
+        customers_total = _scalar(conn, "SELECT COUNT(*) FROM customers")
+        products_active = _scalar(
+            conn, "SELECT COUNT(*) FROM products WHERE status = 'ACTIVE'"
+        )
+        stt_ms = _avg_stt_ms(conn)
+        queue_size = queue.queue_size(conn)
+    finally:
+        conn.close()
+
+    return {
+        "utc": datetime.now(timezone.utc).isoformat(),
+        "messages_today": messages_today or 0,
+        "messages_inbound_today": messages_in or 0,
+        "active_conversations": active_conversations or 0,
+        "escalations_open": escalations_open or 0,
+        "customers_total": customers_total or 0,
+        "products_active": products_active or 0,
+        "avg_llm_ms": round(avg_llm_ms, 1) if avg_llm_ms is not None else None,
+        "avg_stt_ms": stt_ms,
+        "queue_size": queue_size,
     }

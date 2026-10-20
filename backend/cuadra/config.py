@@ -40,6 +40,11 @@ LOG_FILE = LOGS_DIR / "cuadra.log"
 LOCK_FILE = DATA_DIR / "cuadra.lock"
 MIGRATIONS_DIR = BASE_DIR / "migrations"
 
+# Built dashboard (Vite output). Served as a static SPA at "/" when present.
+WEB_DIR = Path(
+    os.environ.get("CUADRA_WEB_DIR", BASE_DIR / "cuadra" / "web_dashboard")
+)
+
 # Dashboard: shared PIN on the LAN. Empty = disabled (development only).
 PIN = os.environ.get("CUADRA_PIN", "0000")
 
