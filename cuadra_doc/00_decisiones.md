@@ -32,12 +32,12 @@ Documento fuente de verdad. Todo lo que se decida posteriormente debe alinearse 
 | LLM | **llama.cpp propio** (server gestionado por Cuadra) + `Bonsai-8B-Q1_0.gguf` (GPU) | Cuadra arranca/para su `llama-server` (concurrencia 1, `-ngl 99`, `-c 8192`); el modelo es seleccionable en caliente. Selección en `06_bakeoff_modelos.md` |
 | STT | faster-whisper **`small` int8**, CPU, 4 hilos (default; validar con 10 audios reales) | Preserva VRAM para el LLM. `large` descartado en CPU (minutos por audio). `initial_prompt` con nombres del catálogo para mejorar marcas/números. Ver `01_arquitectura.md` §6 |
 | Base de datos | SQLite (WAL, archivo único) | Un solo escritor (el servicio core) |
-| Dashboard | **Flutter Web** (estáticos servidos por FastAPI) | El usuario desarrolla en Flutter |
-| Frontend extra | Ninguno | Sin React, sin Streamlit, sin Grafana |
+| Dashboard | **React + Vite + TypeScript** (build estático servido por FastAPI) | Bundle ~141 KB gzip (vs ~1.5-3 MB de Flutter Web); ecosistema shadcn/Tailwind v4; mismo autor-editor que el resto del stack web |
+| Frontend extra | Ninguno | Sin Streamlit, sin Grafana |
 
 **Microservicios: descartados.** Motivo: RAM, complejidad de debugging, SQLite no se comparte entre procesos, volumen real mínimo. Se adopta en su lugar **monolito modular con fronteras de dominio + API-first**; el server de `llama.cpp` (gestionado por Cuadra) y el gateway de WhatsApp ya son procesos externos de facto donde de verdad se necesita separación.
 
-**Versiones mínimas:** Python 3.12+ (venv). Motor LLM: **llama.cpp propio** (build upstream, licencia MIT) instalado por `backend/scripts/install_llm.ps1` en `backend/tools/llamacpp/`, con el modelo GGUF ya descargado en `backend/models/`. **Ollama no se instala.** LM Studio solo para desarrollo. Node 20 LTS únicamente para Fase 2 (gateway WhatsApp).
+**Versiones mínimas:** Python 3.12+ (venv). Motor LLM: **llama.cpp propio** (build upstream, licencia MIT) instalado por `backend/scripts/install_llm.ps1` en `backend/tools/llamacpp/`, con el modelo GGUF ya descargado en `backend/models/`. **Ollama no se instala.** LM Studio solo para desarrollo. Node 20 LTS para el dashboard (React/Vite) y para el gateway WhatsApp de Fase 2.
 
 ## 3. Decisiones de negocio
 
@@ -78,7 +78,7 @@ Los **adaptadores de canal** se diseñan desde Fase 1 con la interfaz pensada pa
 - **Paneles:** General · Conversaciones · Catálogo · Grupos (difusión) · Difusiones · Auditoría · Salud.
 - **Acceso:** solo LAN (red local del hotspot/laptop). **Con PIN.**
 - **Futuro:** interacción (aprobar ventas, contestar manualmente) — ya previsto en el modelo de datos, no en Fase 1.
-- **¿Web y no Desktop?** El proyecto Flutter es el mismo para ambos targets. Web primero: acceso desde móvil en la misma red sin instalar nada, y los estáticos los sirve el propio FastAPI (cero despliegue extra). `flutter build windows` queda disponible sin reescritura si algún día se quiere el `.exe` local.
+- **¿Web y no Desktop?** El dashboard es web: acceso desde móvil en la misma red sin instalar nada, y los estáticos los sirve el propio FastAPI (cero despliegue extra). Se eligió **React + Vite + TypeScript** (no Flutter): bundle ~141 KB gzip, ecosistema shadcn/Tailwind v4 y sin toolchain Flutter que mantener.
 
 ### 7.1 Gestión de grupos de difusión (curaduría del operador)
 
@@ -92,6 +92,6 @@ Los **adaptadores de canal** se diseñan desde Fase 1 con la interfaz pensada pa
 
 - Un solo proceso Python para lógica de negocio, colas, scheduler y API del dashboard.
 - Dependencias mínimas del backend: `fastapi`, `uvicorn`, `aiogram`, `faster-whisper`, `httpx`, `APScheduler` (+ `pillow` para imágenes).
-- Flutter solo en `dashboard/`; el backend nunca depende de él.
+- Dashboard (React/Vite) solo en `dashboard/`; el backend nunca depende de él en runtime (solo sirve su build estático).
 - Preferir soluciones nativas de Windows sobre Docker/WSL2 en todo lo posible.
 - **Ventana de contexto del LLM gestionada por el backend** (no "todo el historial"): últimos ~12 mensajes + resumen rodante + contexto estructurado del producto en JSON. Presupuesto objetivo ~2-2.5K tokens. Ver `01_arquitectura.md` §6.1.

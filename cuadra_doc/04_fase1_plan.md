@@ -48,12 +48,13 @@ tags: [fase1, plan, build, acceptance]
 
 **Criterio:** cliente pregunta dato faltante → TCP (otra cuenta de Telegram) responde → cliente recibe la respuesta y el producto queda enriquecido. *Verificado de punta a punta: cliente pide `garantía` del `Cargador 20W USB-C` → `pipeline` clasifica `consulta_dato` → se crea el escalado `PENDING` y el JOB `send_escalation` escribe al TCP real (`@PeanutEmperor`, `suppliers.id=1`) con delay humano → el TCP responde → JOB `tcp_reply` correlaciona, enriquece el producto (`specifications_json.dato_proveedor`) y marca el escalado `RESOLVED` → el cliente recibe "Ya me confirmó el almacén…". Timeout: `scheduler/maintenance.check_escalation_timeouts` (cada 2 min) reintenta una vez a los `ESCALATION_TIMEOUT_MIN` y luego marca `TIMEOUT`.*
 
-### Hito 6 — Dashboard Flutter Web
-16. `dashboard/`: `flutter create` (web), cliente HTTP con `X-PIN`, navegación lateral con los 7 paneles.
-17. Paneles: General, Conversaciones (lectura), Catálogo (CRUD completo), **Grupos** (CRUD grupos de difusión + categorías + asignación grupo↔categorías y producto↔categoría), Difusiones (con log de envíos por grupo), Auditoría, Salud.
-18. Build web copiado a `backend/cuadra/web_dashboard/` y servido por FastAPI. (El mismo `lib/` servirá para `flutter build windows` si algún día se quiere el `.exe` local.)
+### Hito 6 — Dashboard React Web 🚧 (MVP: General + Catálogo + Salud)
+16. `dashboard/`: scaffold **React + Vite + TypeScript** con Tailwind v4 + shadcn/ui, cliente HTTP con `X-PIN` (fetch central en `lib/api.ts`, PIN en `localStorage`), gate de login y shell lateral.
+17. Paneles MVP ✅: **General** (`GET /api/summary`: mensajes hoy, conversaciones activas, escalados abiertos, latencia media LLM/STT, cola), **Catálogo** (CRUD completo de categorías, TCPs y productos **+ gestión de imágenes**: subir, marcar principal, eliminar), **Salud** (`GET /api/health` + controles del LLM `start|stop|restart`).
+18. Build (`npm run build`, o `build_dashboard.ps1` desde la raíz) → `backend/cuadra/web_dashboard/` (ignorado). Cuadra lo sirve con `StaticFiles` + **fallback SPA** (rutas de cliente devuelven `index.html`); `/media/*` sirve las fotos de producto desde `DATA_DIR`.
+19. **Pendientes (Hitos 7–8 + fase posterior):** Conversaciones (lectura), Grupos (CRUD difusión + categorías + asignación), Difusiones (con log por grupo), Auditoría. El backend ya expone (o expondrá) sus endpoints; solo falta la UI.
 
-**Criterio:** desde el móvil en la red local se ven datos reales en los 7 paneles, se edita el catálogo y se registra un grupo con sus categorías.
+**Criterio (MVP, cumplido):** desde el móvil en la red local se ven datos reales en General y Salud, y se administra el catálogo completo (TCPs, productos, categorías e imágenes) sin tocar la BD. *Verificado: core en `0.0.0.0:8321`, `/api/summary` devuelve métricas reales, `/api/products` incluye `main_image_url`, el SPA responde en `/` y `/catalogo`, y el ciclo imagen (subir → `url` `/media/fotos/product_1/img_001.jpg` → descargar `200 image/jpeg`) funciona de punta a punta.*
 
 ### Hito 7 — Grupos, categorías y difusiones Telegram
 19. Migración de tablas `categories`, `broadcast_groups`, `group_categories`, `broadcasts`, `broadcast_group_links`, `broadcast_posts` (ya en `001_init.sql`) + `products.category_id`.

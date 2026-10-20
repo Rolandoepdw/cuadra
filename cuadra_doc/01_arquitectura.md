@@ -36,7 +36,7 @@ tags: [arquitectura, backend, colas, dashboard, windows]
 │   server propio de Cuadra (en proceso, CPU)   cuadra.db + fotos/
 │   Bonsai-8B-Q1_0 ~2.4 GB  4 hilos
 │
-│   Dashboard Flutter Web  →  build estático servido por FastAPI
+│   Dashboard React Web  →  build estático servido por FastAPI
 │   (acceso desde móvil/laptop en la misma red local, con PIN)
 │
 [Fase 2] gateway WhatsApp (proceso Node nativo en Windows, sin Docker)
@@ -91,11 +91,13 @@ cuadra/
 │   ├── scripts/                # install_llm.ps1, start_llm.ps1, lab/
 │   ├── data/                   # cuadra.db, fotos/, logs/ (gitignored)
 │   └── requirements.txt
-└── dashboard/                  # flutter create (plantilla web)
-    └── lib/
-        ├── main.dart
-        ├── api/                # cliente HTTP + modelos
-        └── pantallas/          # los 7 paneles
+└── dashboard/                  # React + Vite + TS (fuente versionada)
+    └── src/
+        ├── main.tsx
+        ├── App.tsx / router    # login PIN + rutas
+        ├── lib/                # cliente HTTP (X-PIN) + hooks
+        ├── componentes/        # shell, tablas, diálogos
+        └── paneles/            # los 7 paneles
 ```
 
 **Regla de dependencia:** `channels/` y `api/` dependen de `domain/`; `domain/` no conoce a `channels/` ni a FastAPI. `ai/` es consumido por el worker de cola. Esto es lo que permite añadir el canal WhatsApp (Fase 2) sin tocar dominio.
@@ -229,10 +231,11 @@ Reglas:
 - **Mantenimiento SQLite:** `VACUUM` manual mensual (BD pequeña, <1 min). Monitorear el tamaño de `cuadra.db-wal` en el panel Salud (si crece descontrolado, falta un checkpoint).
 - **Límites de tamaño:** imágenes de catálogo comprimidas a máx. 1280 px / ~500 KB al subir. Audios de clientes limitados a 2 min.
 
-## 8. Dashboard Flutter Web
+## 8. Dashboard React Web
 
-- `flutter build web` → copiado a `backend/cuadra/web_dashboard/` y servido por FastAPI como `StaticFiles`.
-- **¿Web y no Desktop?** El proyecto Flutter es idéntico para ambos targets. Web primero: acceso desde el móvil en la LAN sin instalar nada, y cero despliegue extra (los estáticos los sirve el FastAPI que ya corre). Si algún día se quiere `.exe` local: `flutter build windows` sobre el mismo `lib/` — sin reescritura.
+- **Stack:** React 19 + Vite + TypeScript, Tailwind v4 (CSS-first) + shadcn/ui. Fuente versionada en `dashboard/`; el build (`npm run build`, o `build_dashboard.ps1` desde la raíz) emite a `backend/cuadra/web_dashboard/` (ignorado por git).
+- Cuadra sirve el build con `StaticFiles` + **fallback SPA** (rutas de cliente como `/catalogo` devuelven `index.html`); `/media/*` sirve las fotos de producto desde `DATA_DIR`.
+- **¿Web y no Desktop?** El dashboard es web: acceso desde el móvil en la LAN sin instalar nada, y cero despliegue extra (los estáticos los sirve el FastAPI que ya corre). Se eligió React sobre Flutter por el bundle mínimo (~141 KB gzip) y el ecosistema shadcn/Tailwind.
 - API REST bajo `/api/*` con header `X-PIN`.
 - **Paneles (Fase 1):**
 
@@ -247,7 +250,7 @@ Reglas:
 | Salud | RAM/VRAM, uptime, estado del LLM (llama.cpp: corriendo/modelo), tamaño de BD | — |
 
 - **Curaduría de grupos = 100% operador (nunca el bot):** el panel Grupos es donde se registran grupos manualmente (nombre, invite/chat id, categorías permitidas, tope diario, intervalos). El scheduler solo publica en grupos activos cuya categoría coincida con la del producto; producto sin categoría → solo grupos sin restricción. Ver `02_modelo_datos.md` §3 y `00_decisiones.md` §7.1.
-- Endpoints mínimos: `GET /api/health`; CRUD de catálogo `GET/POST/PATCH/DELETE /api/categories`, `/api/suppliers`, `/api/products` (+ `POST /api/products/{id}/images`, `PUT /api/products/{id}/main-image`, `DELETE /api/products/{id}/images/{image_id}`); LLM `GET /api/llm/status`, `GET /api/llm/models`, `POST /api/llm/start|stop|restart`; y (Hitos 5–8) `GET /api/conversations`, `GET/POST/PATCH/DELETE /api/broadcast-groups` y `/api/categories`, `GET/POST /api/broadcasts`, `GET /api/broadcast-posts`, `GET /api/audit`, `GET /api/sales` (Fase 1 solo lectura).
+- Endpoints mínimos: `GET /api/health`, `GET /api/summary`; CRUD de catálogo `GET/POST/PATCH/DELETE /api/categories`, `/api/suppliers`, `/api/products` (+ `POST /api/products/{id}/images`, `PUT /api/products/{id}/main-image`, `DELETE /api/products/{id}/images/{image_id}`); LLM `GET /api/llm/status`, `GET /api/llm/models`, `POST /api/llm/start|stop|restart`; y (Hitos 5–8) `GET /api/conversations`, `GET/POST/PATCH/DELETE /api/broadcast-groups` y `/api/categories`, `GET/POST /api/broadcasts`, `GET /api/broadcast-posts`, `GET /api/audit`, `GET /api/sales` (Fase 1 solo lectura). Las imágenes se sirven en `GET /media/<local_path>` (sin PIN).
 
 ## 9. Riesgos conocidos
 
