@@ -17,11 +17,12 @@ __pycache__/
 .venv/
 venv/
 
-# Flutter
-dashboard/.dart_tool/
-dashboard/build/
-dashboard/.flutter-plugins*
-dashboard/.packages
+# Dashboard (Node/Vite): source is versioned, build artifacts are not
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vite/
+dashboard/*.tsbuildinfo
+backend/cuadra/web_dashboard/
 
 # IDE / SO
 .idea/
