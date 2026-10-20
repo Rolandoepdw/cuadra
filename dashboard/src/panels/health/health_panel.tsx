@@ -8,9 +8,9 @@ import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ConfirmDialog } from "@/components/confirm-dialog";
+import { ConfirmDialog } from "@/components/confirm_dialog";
 
-export function SaludPanel() {
+export function HealthPanel() {
   const qc = useQueryClient();
   const { data, isLoading, error, dataUpdatedAt } = useQuery({
     queryKey: ["health"],
@@ -413,7 +413,7 @@ function GpuCard({
         )}
         {running && (
           <p className="flex items-center gap-1 text-sm text-muted-foreground">
-            <Check className="size-4 text-green-600" />
+            <Check className="size-4 text-primary" />
             La VRAM incluye el modelo cargado; detén el motor para liberarla.
           </p>
         )}

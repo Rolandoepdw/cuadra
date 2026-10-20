@@ -2,7 +2,7 @@ import { useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Upload, Star, Trash2 } from "lucide-react";
 import { deleteImage, getProduct, setMainImage, uploadImage } from "@/lib/api";
-import type { Product } from "@/tipos/api";
+import type { Product } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {

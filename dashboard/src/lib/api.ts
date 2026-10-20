@@ -14,7 +14,7 @@ import type {
   Supplier,
   SupplierIn,
   SupplierPatch,
-} from "@/tipos/api";
+} from "@/types/api";
 
 export class ApiError extends Error {
   status: number;

@@ -10,7 +10,7 @@ import {
   listSuppliers,
   updateProduct,
 } from "@/lib/api";
-import type { Currency, Product, ProductIn, ProductStatus } from "@/tipos/api";
+import type { Currency, Product, ProductIn, ProductStatus } from "@/types/api";
 import { formatMoney, STATUS_LABELS, STATUS_VARIANTS } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,8 +18,8 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { DataTable } from "@/components/data-table";
-import { ConfirmDialog } from "@/components/confirm-dialog";
+import { DataTable } from "@/components/data_table";
+import { ConfirmDialog } from "@/components/confirm_dialog";
 import {
   Dialog,
   DialogContent,
@@ -27,7 +27,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ProductImages } from "./product-images";
+import { ProductImages } from "./product_images";
 
 const STATUSES: ProductStatus[] = ["ACTIVE", "OUT_OF_STOCK", "PAUSED", "REMOVED"];
 

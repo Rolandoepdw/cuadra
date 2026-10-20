@@ -1,4 +1,4 @@
-import type { ProductStatus } from "@/tipos/api";
+import type { ProductStatus } from "@/types/api";
 
 export function formatMoney(amount: number, currency: string): string {
   const n = new Intl.NumberFormat("es-CU", { maximumFractionDigits: 2 }).format(amount);

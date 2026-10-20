@@ -3,13 +3,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 import { createCategory, deleteCategory, listCategories, updateCategory } from "@/lib/api";
-import type { Category } from "@/tipos/api";
+import type { Category } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { DataTable } from "@/components/data-table";
-import { ConfirmDialog } from "@/components/confirm-dialog";
+import { DataTable } from "@/components/data_table";
+import { ConfirmDialog } from "@/components/confirm_dialog";
 import {
   Dialog,
   DialogContent,
@@ -18,7 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-export function CategoriasTab() {
+export function CategoriesTab() {
   const qc = useQueryClient();
   const { data = [], isLoading } = useQuery({ queryKey: ["categories"], queryFn: listCategories });
   const [editing, setEditing] = useState<Category | null>(null);

@@ -1,19 +1,19 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { CategoriasTab } from "./categorias-tab";
-import { TcpTab } from "./tcp-tab";
-import { ProductsTab } from "./products-tab";
+import { CategoriesTab } from "./categories_tab";
+import { TcpTab } from "./tcp_tab";
+import { ProductsTab } from "./products_tab";
 
 const TABS = [
-  { id: "productos", label: "Productos" },
+  { id: "products", label: "Productos" },
   { id: "tcp", label: "TCPs" },
-  { id: "categorias", label: "Categorías" },
+  { id: "categories", label: "Categorías" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
 
-export function CatalogoPanel() {
-  const [tab, setTab] = useState<TabId>("productos");
+export function CatalogPanel() {
+  const [tab, setTab] = useState<TabId>("products");
 
   return (
     <div className="flex flex-col gap-6">
@@ -39,9 +39,9 @@ export function CatalogoPanel() {
         ))}
       </div>
 
-      {tab === "productos" && <ProductsTab />}
+      {tab === "products" && <ProductsTab />}
       {tab === "tcp" && <TcpTab />}
-      {tab === "categorias" && <CategoriasTab />}
+      {tab === "categories" && <CategoriesTab />}
     </div>
   );
 }

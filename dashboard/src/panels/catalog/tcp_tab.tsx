@@ -3,14 +3,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 import { createSupplier, deleteSupplier, listSuppliers, updateSupplier } from "@/lib/api";
-import type { Supplier, SupplierIn } from "@/tipos/api";
+import type { Supplier, SupplierIn } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { DataTable } from "@/components/data-table";
-import { ConfirmDialog } from "@/components/confirm-dialog";
+import { DataTable } from "@/components/data_table";
+import { ConfirmDialog } from "@/components/confirm_dialog";
 import {
   Dialog,
   DialogContent,
