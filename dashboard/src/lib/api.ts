@@ -4,7 +4,7 @@ import type {
   CategoryIn,
   CategoryPatch,
   Health,
-  LlmModel,
+  LlmModelsResponse,
   LlmStatus,
   Product,
   ProductImage,
@@ -111,6 +111,13 @@ export const deleteImage = (productId: number, imageId: number) =>
 // ------------------------------------------------------------------------- llm
 
 export const getLlmStatus = () => request<LlmStatus>("/api/llm/status");
-export const getLlmModels = () => request<LlmModel[]>("/api/llm/models");
-export const llmAction = (action: "start" | "stop" | "restart") =>
-  request<LlmStatus>(`/api/llm/${action}`, { method: "POST" });
+export const getLlmModels = () => request<LlmModelsResponse>("/api/llm/models");
+export const llmAction = (action: "start" | "stop" | "restart", model?: string) =>
+  request<LlmStatus>(`/api/llm/${action}`, {
+    method: "POST",
+    body: model ? JSON.stringify({ model }) : undefined,
+  });
+export const setLlmModel = (model: string) =>
+  request<LlmStatus>("/api/llm/model", { method: "POST", body: JSON.stringify({ model }) });
+export const setLlmCtx = (ctx: number) =>
+  request<LlmStatus>("/api/llm/ctx", { method: "POST", body: JSON.stringify({ ctx }) });

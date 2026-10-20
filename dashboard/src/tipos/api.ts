@@ -70,6 +70,12 @@ export interface Health {
     running: boolean;
     model: string | null;
     url: string;
+    gpu?: GpuInfo | null;
+    ctx?: number | null;
+    ctx_default?: number | null;
+    ctx_max?: number | null;
+    memory?: LlmMemory | null;
+    process_ram_mib?: number | null;
   };
   telegram_channel: string;
   debug: boolean;
@@ -79,14 +85,52 @@ export interface LlmModel {
   name: string;
   path: string;
   size_bytes: number;
+  context_max?: number | null;
+}
+
+export interface LlmModelsResponse {
+  models: LlmModel[];
+  current: string | null;
+}
+
+export interface GpuInfo {
+  name: string;
+  total_mib: number;
+  used_mib: number;
+  free_mib: number;
+}
+
+export interface LlmMemory {
+  model_vram_mib: number;
+  model_ram_mib: number;
+  model_total_mib: number;
+  kv_vram_mib: number;
+  kv_ram_mib: number;
+  compute_vram_mib: number;
+  compute_ram_mib: number;
+  vram_total_mib: number;
+  ram_total_mib: number;
+  offload_pct: number | null;
+  layers: { offloaded: number; total: number } | null;
 }
 
 export interface LlmStatus {
+  provider?: string;
   managed: boolean;
   running: boolean;
   model: string | null;
   url: string;
   pid?: number | null;
+  bin?: string;
+  bin_present?: boolean;
+  ctx?: number | null;
+  ctx_default?: number | null;
+  ctx_max?: number | null;
+  gpu_layers?: number | null;
+  port?: number | null;
+  gpu?: GpuInfo | null;
+  memory?: LlmMemory | null;
+  process_ram_mib?: number | null;
 }
 
 // ---- request payloads ----
