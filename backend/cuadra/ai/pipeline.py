@@ -108,23 +108,24 @@ async def _decide(
     product: dict | None,
     context: dict,
     history: list[dict],
-) -> tuple[str, bool, str]:
-    """Returns (reply, escalate, generator) where generator is 'template' | 'llm'."""
+) -> tuple[str, bool, str, str | None]:
+    """Returns (reply, escalate, generator, escalation_question)."""
     last_text = inbound["body"] or ""
 
     if intent.intencion in ("consulta_precio", "consulta_stock", "comprar"):
         if product is None:
-            return prompts.TEMPLATES["ask_which_product"], False, "template"
+            return prompts.TEMPLATES["ask_which_product"], False, "template", None
         if product["status"] != "ACTIVE" or (product.get("stock") or 0) <= 0:
-            return _render_out_of_stock(catalog.alternatives(conn, product)), False, "template"
+            return _render_out_of_stock(catalog.alternatives(conn, product)), False, "template", None
         reply = _render_greeting(conn, product)
         if intent.intencion == "comprar":
             canonical = catalog.llm_product_json(conn, product)
             reply += f" ¿Te reservo el {canonical['nombre']} y coordinamos la entrega?"
-        return reply, False, "template"
+        return reply, False, "template", None
 
     if intent.intencion == "consulta_dato":
-        return prompts.TEMPLATES["missing_data_escalate"], True, "template"
+        missing = ", ".join(intent.datos_faltantes) if intent.datos_faltantes else last_text
+        return prompts.TEMPLATES["missing_data_escalate"], True, "template", missing
 
     # comparar / queja / otro / low confidence -> careful free generation
     candidates = None
@@ -139,7 +140,7 @@ async def _decide(
     if candidates:
         extra = "El cliente compara productos: usa solo los PRODUCTOS CANDIDATOS que tienes."
     reply = await llm.compose(messages, last_text, extra=extra)
-    return reply, False, "llm"
+    return reply, False, "llm", None
 
 
 def _update_context(conn, conversation, intent, product, generator: str, escalate: bool) -> None:
@@ -183,9 +184,10 @@ async def handle_incoming(conn, conversation, inbound: dict) -> dict:
         degraded = True
 
     product = _resolve_product(conn, intent, context)
-    reply, escalate, generator = await _decide(
+    reply, escalate, generator, escalation_question = await _decide(
         conn, conversation, inbound, intent, product, context, history
     )
+    supplier_id = product["supplier_id"] if (escalate and product) else None
 
     _update_context(conn, conversation, intent, product, generator, escalate)
     return {
@@ -194,7 +196,9 @@ async def handle_incoming(conn, conversation, inbound: dict) -> dict:
         "degraded": degraded,
         "product_id": product["id"] if product else None,
         "product_name": product["name"] if product else None,
+        "supplier_id": supplier_id,
         "escalate": escalate,
+        "escalation_question": escalation_question,
         "generator": generator,
         "latency_ms": int((time.perf_counter() - started) * 1000),
         "context_tokens": llm.estimate_tokens(nlu_messages),

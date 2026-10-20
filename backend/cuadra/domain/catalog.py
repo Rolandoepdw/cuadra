@@ -207,6 +207,17 @@ def delete_supplier(conn, supplier_id: int) -> dict:
     return update_supplier(conn, supplier_id, {"active": False})
 
 
+def find_supplier_by_telegram_id(conn, telegram_id: str) -> dict | None:
+    """Resolve a Telegram chat id to its supplier (for the inbound TCP flow)."""
+    if not telegram_id:
+        return None
+    row = conn.execute(
+        "SELECT * FROM suppliers WHERE telegram_id = ? AND active = 1 LIMIT 1",
+        (str(telegram_id),),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
 # ------------------------------------------------------------------ products
 
 _PRODUCT_FIELDS = (
@@ -548,6 +559,25 @@ def llm_product_json(conn, product: dict) -> dict:
         "zona_entrega": supplier_zone,
         "especificaciones": json.loads(product.get("specifications_json") or "{}"),
     }
+
+
+def enrich_specifications(conn, product_id: int, key: str, value: str) -> dict:
+    """Merge one TCP-answered spec into the product (Hito 5 resumption).
+
+    Keeps existing specs; empty key/value are ignored. Returns the updated product.
+    """
+    product = _get(conn, "products", product_id, "product")
+    specs = json.loads(product.get("specifications_json") or "{}")
+    key = (key or "").strip()
+    value = (value or "").strip()
+    if key and value:
+        specs[key] = value
+    conn.execute(
+        "UPDATE products SET specifications_json = ?, updated_at = ? WHERE id = ?",
+        (json.dumps(specs, ensure_ascii=False, separators=(",", ":")), _now(), product_id),
+    )
+    conn.commit()
+    return get_product(conn, product_id)
 
 
 def alternatives(conn, product: dict, *, limit: int = 2) -> list[dict]:

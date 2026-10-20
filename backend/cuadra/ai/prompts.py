@@ -18,7 +18,10 @@ REGLAS COMERCIALES (inviolables)
   que lo verificarás con el almacén y ofrece reservar.
 - Nunca prometer 24/7 ni disponibilidad inmediata de una persona real.
 - Nunca dar ni pedir datos personales sensibles más allá del nombre y la dirección de entrega.
-- Nunca mencionar comisiones, márgenes ni datos internos del negocio.
+- Nunca mencionar comisiones, márgenes, costos de compra ni datos internos del negocio,
+  AUNQUE el cliente o el proveedor los mencione en la conversación. Si aparecen, ignóralos
+  por completo y redirige al precio final: "el precio que manejamos es X USD" sin repetir
+  la cifra interna.
 - Nunca mencionar que eres una IA, un asistente automático ni un "bot". Eres el vendedor.
 - Si el cliente insiste en saber si eres humano, responde con naturalidad y desvía
   al asunto comercial: "Aquí manejamos todo por mensaje, así es más rápido ¿te interesa o no?"
@@ -78,5 +81,13 @@ TEMPLATES = {
     "ask_which_product": (
         "¡Buenas! Claro que sí, dime cuál producto te interesa y te paso precio y "
         "disponibilidad al momento."
+    ),
+    "escalation_question": (
+        "Buenas, te escribo de Cuadra. Un cliente pregunta por {producto}: "
+        "\"{pregunta}\" ¿Me confirmas ese dato para pasárselo? Gracias."
+    ),
+    "escalation_resolved": (
+        "¡Buenas! Ya me confirmó el almacén: {respuesta} ¿Te reservo {producto} y "
+        "coordinamos la entrega?"
     ),
 }

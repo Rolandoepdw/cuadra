@@ -7,6 +7,8 @@ import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from cuadra.scheduler import maintenance
+
 log = logging.getLogger("cuadra.scheduler")
 
 _scheduler: AsyncIOScheduler | None = None
@@ -15,6 +17,8 @@ _scheduler: AsyncIOScheduler | None = None
 def start() -> None:
     global _scheduler
     _scheduler = AsyncIOScheduler(timezone="America/Havana")
+    # Escalation timeouts: check every couple of minutes (Hito 5).
+    _scheduler.add_job(maintenance.check_escalation_timeouts, "interval", seconds=120)
     _scheduler.start()
     # Hito 7: _scheduler.add_job(broadcasts.tick, "interval", seconds=60)
     log.info("scheduler started")

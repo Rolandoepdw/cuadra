@@ -24,6 +24,11 @@ _stop = asyncio.Event()
 POLL_INTERVAL_S = 1.0
 
 
+class PermanentJobError(Exception):
+    """Raised by a handler when a failure will never succeed by retrying
+    (e.g. Telegram 'chat not found'). The job is marked FAILED immediately."""
+
+
 def register_handler(job_type: str, handler: Handler) -> None:
     _handlers[job_type] = handler
 
@@ -141,7 +146,9 @@ async def _process(job: dict) -> None:
         log.exception("job %s failed", job["id"])
         conn = db.connect()
         try:
-            transient = isinstance(exc, (TimeoutError, ConnectionError, OSError))
+            transient = isinstance(exc, (TimeoutError, ConnectionError, OSError)) and not isinstance(
+                exc, PermanentJobError
+            )
             if transient and job["attempts"] + 1 < job["max_attempts"]:
                 conn.execute(
                     """UPDATE jobs

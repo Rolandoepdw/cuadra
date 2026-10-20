@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from cuadra import config, db
 from cuadra.ai import ingest, queue, stt
 from cuadra.api.auth import require_pin
-from cuadra.domain import conversations
+from cuadra.domain import conversations, escalations
 
 log = logging.getLogger("cuadra.debug")
 
@@ -165,3 +165,14 @@ def debug_conversation(conversation_id: int) -> dict:
     finally:
         conn.close()
     return {"conversation": conversation, "context": context, "messages": messages}
+
+
+@router.get("/escalations")
+def debug_escalations(status: str | None = None, limit: int = 50) -> dict:
+    _ensure_debug()
+    conn = db.connect()
+    try:
+        items = escalations.list_escalations(conn, status=status, limit=limit)
+    finally:
+        conn.close()
+    return {"escalations": items}

@@ -125,7 +125,7 @@ async def send_text(target: str, text: str) -> None:
     if _bot is None:
         log.info("[dummy] send_text to %s: %s", target, text)
         return
-    await _bot.send_message(target, text)
+    await _send(lambda: _bot.send_message(target, text))
 
 
 async def send_image(target: str, path: str, caption: str | None = None) -> None:
@@ -134,7 +134,7 @@ async def send_image(target: str, path: str, caption: str | None = None) -> None
         return
     from aiogram.types import FSInputFile
 
-    await _bot.send_photo(target, FSInputFile(path), caption=caption)
+    await _send(lambda: _bot.send_photo(target, FSInputFile(path), caption=caption))
 
 
 async def send_audio(target: str, path: str) -> None:
@@ -143,7 +143,24 @@ async def send_audio(target: str, path: str) -> None:
         return
     from aiogram.types import FSInputFile
 
-    await _bot.send_voice(target, FSInputFile(path))
+    await _send(lambda: _bot.send_voice(target, FSInputFile(path)))
+
+
+async def _send(call) -> None:
+    """Run a Telegram send, mapping permanent failures to PermanentJobError.
+
+    A 400 (chat not found, bot blocked, user deactivated) never succeeds by
+    retrying, so the queue must not back off forever on it. Network/timeouts
+    stay transient and let the queue retry.
+    """
+    from aiogram.exceptions import TelegramBadRequest
+
+    from cuadra.ai.queue import PermanentJobError
+
+    try:
+        await call()
+    except TelegramBadRequest as exc:
+        raise PermanentJobError(str(exc)) from exc
 
 
 async def typing(target: str) -> None:

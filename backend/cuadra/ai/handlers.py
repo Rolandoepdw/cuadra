@@ -6,8 +6,8 @@ import random
 from datetime import datetime
 
 from cuadra import channels, config, db
-from cuadra.ai import pipeline, queue, stt
-from cuadra.domain import conversations, events
+from cuadra.ai import pipeline, prompts, queue, stt
+from cuadra.domain import catalog, conversations, escalations, events
 
 log = logging.getLogger("cuadra.handlers")
 
@@ -16,6 +16,8 @@ def register() -> None:
     queue.register_handler("generate_reply", generate_reply)
     queue.register_handler("transcribe_audio", transcribe_audio)
     queue.register_handler("send_message", send_message)
+    queue.register_handler("send_escalation", send_escalation)
+    queue.register_handler("tcp_reply", tcp_reply)
 
 
 async def generate_reply(payload: dict) -> None:
@@ -23,6 +25,7 @@ async def generate_reply(payload: dict) -> None:
     conversation_id = payload["conversation_id"]
     message_id = payload["message_id"]
     conn = db.connect()
+    escalation_id = None
     try:
         conversation = conversations.get_conversation(conn, conversation_id)
         inbound = conversations.get_message(conn, message_id)
@@ -53,9 +56,32 @@ async def generate_reply(payload: dict) -> None:
                 "context_tokens": result["context_tokens"],
             },
         )
+        if result["escalate"] and result["product_id"] and result["supplier_id"]:
+            escalation = escalations.create(
+                conn,
+                conversation_id=conversation_id,
+                product_id=result["product_id"],
+                supplier_id=result["supplier_id"],
+                question=result["escalation_question"] or result["reply"],
+            )
+            escalation_id = escalation["id"]
+            events.log(
+                conn,
+                "bot",
+                "escalation_created",
+                entity="escalations",
+                entity_id=escalation_id,
+                details={"product_id": result["product_id"], "supplier_id": result["supplier_id"]},
+            )
         await pipeline.maybe_summarize(conn, conversation)
     finally:
         conn.close()
+    if escalation_id is not None:
+        queue.enqueue(
+            "send_escalation",
+            {"escalation_id": escalation_id},
+            priority=config.PRIORITY_TCP,
+        )
     queue.enqueue(
         "send_message",
         {"conversation_id": conversation_id, "message_id": outbound["id"]},
@@ -169,3 +195,133 @@ async def send_message(payload: dict) -> None:
         )
     finally:
         conn.close()
+
+
+async def send_escalation(payload: dict) -> None:
+    """Write the TCP the client's question, with a human delay (Hito 5).
+
+    Idempotent via `escalation_sent` event: a requeued job never double-asks.
+    """
+    escalation_id = payload["escalation_id"]
+    conn = db.connect()
+    try:
+        escalation = escalations.get(conn, escalation_id)
+        if escalation["status"] != "PENDING":
+            log.debug("escalation %s not pending, skipping", escalation_id)
+            return
+        already = conn.execute(
+            """SELECT 1 FROM events
+               WHERE type = 'escalation_sent' AND entity = 'escalations' AND entity_id = ?""",
+            (escalation_id,),
+        ).fetchone()
+        if already is not None:
+            log.debug("escalation %s already sent, skipping", escalation_id)
+            return
+        supplier = catalog.get_supplier(conn, escalation["supplier_id"])
+        product = None
+        if escalation["product_id"]:
+            try:
+                product = catalog.get_product(conn, escalation["product_id"])
+            except catalog.NotFound:
+                product = None
+        target = supplier.get("telegram_id")
+    finally:
+        conn.close()
+
+    if not target:
+        log.warning("supplier %s has no telegram_id; cannot escalate", escalation["supplier_id"])
+        return
+    adapter = channels.get_adapter("telegram")
+    if adapter is None:
+        return
+
+    text = prompts.TEMPLATES["escalation_question"].format(
+        producto=(product["name"] if product else "un producto del catálogo"),
+        pregunta=escalation["question"],
+    )
+    await adapter.typing(target)
+    await asyncio.sleep(_human_delay())
+    await adapter.send_text(target, text)
+
+    conn = db.connect()
+    try:
+        escalations.set_tcp_message_sent(conn, escalation_id, text)
+        events.log(
+            conn,
+            "bot",
+            "escalation_sent",
+            entity="escalations",
+            entity_id=escalation_id,
+            details={"supplier_id": escalation["supplier_id"], "target": target},
+        )
+    finally:
+        conn.close()
+
+
+async def tcp_reply(payload: dict) -> None:
+    """A TCP answered: correlate with its oldest pending escalation, enrich the
+    product, resolve the escalation and resume the client (Hito 5)."""
+    conversation_id = payload["conversation_id"]
+    message_id = payload["message_id"]
+    supplier_id = payload["supplier_id"]
+
+    conn = db.connect()
+    try:
+        message = conversations.get_message(conn, message_id)
+        answer = (message["body"] or "").strip()
+        escalation = escalations.oldest_pending_for_supplier(conn, supplier_id)
+        if escalation is None:
+            events.log(
+                conn,
+                "bot",
+                "tcp_reply_unmatched",
+                entity="suppliers",
+                entity_id=supplier_id,
+                details={"message_id": message_id},
+            )
+            log.info("TCP %s replied with no pending escalation", supplier_id)
+            return
+        escalations.set_answer(conn, escalation["id"], answer)
+    finally:
+        conn.close()
+
+    # Enrich the product with the answered detail, then tell the client.
+    product_name = "el producto"
+    if escalation["product_id"]:
+        conn = db.connect()
+        try:
+            product = catalog.get_product(conn, escalation["product_id"])
+            product_name = product["name"]
+            catalog.enrich_specifications(
+                conn, escalation["product_id"], "dato_proveedor", answer
+            )
+        except catalog.NotFound:
+            product = None
+        finally:
+            conn.close()
+
+    client_conversation_id = escalation["conversation_id"]
+    reply = prompts.TEMPLATES["escalation_resolved"].format(
+        producto=product_name, respuesta=answer
+    )
+    conn = db.connect()
+    try:
+        outbound = conversations.add_message(
+            conn, client_conversation_id, "OUTBOUND", "bot", body=reply
+        )
+        escalations.resolve(conn, escalation["id"])
+        events.log(
+            conn,
+            "bot",
+            "escalation_resolved",
+            entity="escalations",
+            entity_id=escalation["id"],
+            details={"supplier_id": supplier_id, "answer": answer},
+        )
+    finally:
+        conn.close()
+    queue.enqueue(
+        "send_message",
+        {"conversation_id": client_conversation_id, "message_id": outbound["id"]},
+        priority=config.PRIORITY_CUSTOMER,
+    )
