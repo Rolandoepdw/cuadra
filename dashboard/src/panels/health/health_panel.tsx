@@ -23,6 +23,7 @@ export function HealthPanel() {
     refetchInterval: 15_000,
   });
   const [confirmAction, setConfirmAction] = useState<null | "stop" | "restart">(null);
+  const [restartTick, setRestartTick] = useState(0);
   const ctxDefault = llm?.status.ctx_default ?? 8192;
 
   const action = useMutation({
@@ -36,8 +37,9 @@ export function HealthPanel() {
       }
       return llmAction(action);
     },
-    onSuccess: () => {
+    onSuccess: (_result, variables) => {
       setConfirmAction(null);
+      if (variables.action === "restart") setRestartTick((tick) => tick + 1);
       qc.invalidateQueries({ queryKey: ["health"] });
       qc.invalidateQueries({ queryKey: ["llm"] });
     },
@@ -85,7 +87,7 @@ export function HealthPanel() {
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">Base de datos</CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col gap-2">
+          <CardContent className="flex flex-col items-start gap-2">
             <Badge variant={dbOk ? "success" : "destructive"}>{dbOk ? "íntegra" : "FALLO"}</Badge>
             <span className="text-sm text-muted-foreground">
               {formatBytes(data.database.size_bytes)} · {data.database.migrations.join(", ")}
@@ -115,6 +117,7 @@ export function HealthPanel() {
         ctx={llm?.status.ctx ?? data.llm.ctx ?? null}
         ctxMax={llm?.status.ctx_max ?? data.llm.ctx_max ?? null}
         ctxDefault={ctxDefault}
+        restartSignal={restartTick}
         pending={action.isPending}
         onStart={() => action.mutate({ action: "start" })}
         onRestart={() => setConfirmAction("restart")}
@@ -157,6 +160,7 @@ function ModelCard({
   ctx,
   ctxMax,
   ctxDefault,
+  restartSignal,
   pending,
   onStart,
   onRestart,
@@ -172,6 +176,7 @@ function ModelCard({
   ctx?: number | null;
   ctxMax?: number | null;
   ctxDefault: number;
+  restartSignal: number;
   pending: boolean;
   onStart: () => void;
   onRestart: () => void;
@@ -188,6 +193,7 @@ function ModelCard({
     onSuccess: () => {
       setConfirmSwitch(false);
       setChoice("");
+      setCtxValue(ctxDefault);
       qc.invalidateQueries({ queryKey: ["health"] });
       qc.invalidateQueries({ queryKey: ["llm"] });
     },
@@ -208,6 +214,14 @@ function ModelCard({
   useEffect(() => {
     setCtxValue((value) => Math.min(value, maxCtx));
   }, [maxCtx]);
+
+  // A manual restart resets the context server-side, but the value prop may
+  // not change (it was already the default), so reset the slider draft too.
+  useEffect(() => {
+    if (restartSignal === 0) return;
+    setCtxValue(ctxDefault);
+    setChoice("");
+  }, [restartSignal, ctxDefault]);
   const setCtx = useMutation({
     mutationFn: (value: number) => setLlmCtx(value),
     onSuccess: () => {
@@ -309,19 +323,28 @@ function ModelCard({
         open={confirmSwitch}
         onOpenChange={(o) => !o && setConfirmSwitch(false)}
         title="Cambiar modelo / contexto"
-        description={`Se reiniciará el motor con "${selected}"${ctxChanged ? ` y contexto ${ctxValue}` : ""}. El bot no responderá durante el reinicio.`}
+        description={
+          changed
+            ? `Se reiniciará el motor con "${selected}" y el contexto volverá al valor por defecto (${ctxDefault.toLocaleString("es-CU")}). El bot no responderá durante el reinicio.`
+            : `Se reiniciará el motor con contexto ${ctxValue.toLocaleString("es-CU")}. El bot no responderá durante el reinicio.`
+        }
         confirmLabel="Reiniciar y aplicar"
         loading={switchModel.isPending || setCtx.isPending}
         onConfirm={() => {
-          const tasks: Promise<unknown>[] = [];
-          if (changed) tasks.push(switchModel.mutateAsync(selected));
-          if (ctxChanged) tasks.push(setCtx.mutateAsync(Number(ctxValue)));
-          Promise.all(tasks).then(() => {
+          const run = async () => {
+            if (changed) {
+              // A model change resets the context to the default.
+              await switchModel.mutateAsync(selected);
+              setCtxValue(ctxDefault);
+            } else if (ctxChanged) {
+              await setCtx.mutateAsync(Number(ctxValue));
+            }
             setConfirmSwitch(false);
             setChoice("");
             qc.invalidateQueries({ queryKey: ["health"] });
             qc.invalidateQueries({ queryKey: ["llm"] });
-          });
+          };
+          void run();
         }}
       />
     </Card>

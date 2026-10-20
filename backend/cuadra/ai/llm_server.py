@@ -137,6 +137,11 @@ def set_active_ctx(ctx: int) -> None:
         conn.close()
 
 
+def reset_ctx() -> None:
+    """Restore the boot-time default context (used on model changes/restart)."""
+    set_active_ctx(config.LLM_CTX)
+
+
 def _process_ram_mib() -> int | None:
     """Working set of the running llama-server, in MiB (best-effort)."""
     info = _read_pid()

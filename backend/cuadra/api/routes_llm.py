@@ -59,7 +59,13 @@ async def llm_models() -> dict:
 
 @router.post("/start")
 async def llm_start(choice: ModelChoice | None = None) -> dict:
-    return await _run(llm_server.start, choice.model if choice else None)
+    def _start() -> dict:
+        if choice and choice.model:
+            # A different model gets a fresh default context.
+            llm_server.reset_ctx()
+        return llm_server.start(choice.model if choice else None)
+
+    return await _run(_start)
 
 
 @router.post("/stop")
@@ -69,7 +75,12 @@ async def llm_stop() -> dict:
 
 @router.post("/restart")
 async def llm_restart(choice: ModelChoice | None = None) -> dict:
-    return await _run(llm_server.restart, choice.model if choice else None)
+    def _restart() -> dict:
+        # A manual restart forgets the operator-tuned context.
+        llm_server.reset_ctx()
+        return llm_server.restart(choice.model if choice else None)
+
+    return await _run(_restart)
 
 
 @router.post("/model")
@@ -84,6 +95,9 @@ async def llm_set_model(choice: ModelChoice) -> dict:
 
     def _switch() -> dict:
         llm_server.resolve_model(choice.model)  # validate it exists (raises)
+        # A model change starts from the default context; a context tuned for
+        # the previous model may not fit the new one.
+        llm_server.reset_ctx()
         if llm_server.is_running():
             return llm_server.restart(choice.model)
         llm_server.set_active_model(choice.model)

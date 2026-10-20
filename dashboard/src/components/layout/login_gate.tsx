@@ -17,7 +17,8 @@ export function LoginGate() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-sm">
-        <CardHeader>
+        <CardHeader className="items-center text-center">
+          <img src="/logo.png" alt="Cuadra" className="mb-2 w-36 rounded-xl" />
           <CardTitle className="text-xl">Cuadra</CardTitle>
           <CardDescription>Ingresa el PIN del panel.</CardDescription>
         </CardHeader>
