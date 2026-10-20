@@ -14,6 +14,7 @@ CLI (run from ``backend/``):
 
 import json
 import logging
+import re
 import subprocess
 import sys
 import time
@@ -21,7 +22,9 @@ from pathlib import Path
 
 import httpx
 
-from cuadra import config
+from cuadra import config, db
+from cuadra.ai import gguf, gpu, llm_memory
+from cuadra.domain import settings
 
 log = logging.getLogger("cuadra.llm_server")
 
@@ -63,14 +66,105 @@ def list_models() -> list[dict]:
     """GGUF models available locally, sorted by name."""
     if not config.LLM_MODELS_DIR.is_dir():
         return []
-    return [
-        {"name": path.name, "path": str(path), "size_bytes": path.stat().st_size}
-        for path in sorted(config.LLM_MODELS_DIR.glob("*.gguf"))
-    ]
+    models = []
+    for path in sorted(config.LLM_MODELS_DIR.glob("*.gguf")):
+        models.append(
+            {
+                "name": path.name,
+                "path": str(path),
+                "size_bytes": path.stat().st_size,
+                "context_max": gguf.context_max(path),
+            }
+        )
+    return models
+
+
+def model_context_max(name: str | None = None) -> int | None:
+    """Trained context length of the named (or active) model, if known."""
+    try:
+        path = resolve_model(name)
+    except FileNotFoundError:
+        return None
+    return gguf.context_max(path)
+
+
+def active_model() -> str:
+    """The model the operator selected (settings table), else the config default."""
+    conn = db.connect()
+    try:
+        chosen = settings.get(conn, settings.LLM_MODEL_KEY)
+    finally:
+        conn.close()
+    return chosen or config.LLM_MODEL
+
+
+def set_active_model(name: str) -> None:
+    """Persist the selected model so it survives restarts."""
+    conn = db.connect()
+    try:
+        settings.set(conn, settings.LLM_MODEL_KEY, name)
+    finally:
+        conn.close()
+
+
+def active_ctx() -> int:
+    """Context size in tokens (settings, else the config default)."""
+    conn = db.connect()
+    try:
+        chosen = settings.get(conn, settings.LLM_CTX_KEY)
+    finally:
+        conn.close()
+    try:
+        value = int(chosen) if chosen else config.LLM_CTX
+    except (TypeError, ValueError):
+        return config.LLM_CTX
+    # Guard against corrupt/stale values: 512 tokens .. 4M (model max ceiling).
+    if value < 512 or value > 4_194_304:
+        return config.LLM_CTX
+    return value
+
+
+def config_default_ctx() -> int:
+    """The boot-time default context (config/env)."""
+    return config.LLM_CTX
+
+
+def set_active_ctx(ctx: int) -> None:
+    conn = db.connect()
+    try:
+        settings.set(conn, settings.LLM_CTX_KEY, str(ctx))
+    finally:
+        conn.close()
+
+
+def _process_ram_mib() -> int | None:
+    """Working set of the running llama-server, in MiB (best-effort)."""
+    info = _read_pid()
+    pid = info.get("pid") if info else None
+    if not pid:
+        return None
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    # "...","...","1234","Console","1","1,234,567 K"
+    m = re.search(r'"([\d.,]+)\s*K"\s*$', out.stdout.strip())
+    if not m:
+        return None
+    try:
+        return round(int(m.group(1).replace(",", "").replace(".", "")) / 1024)
+    except ValueError:
+        return None
 
 
 def resolve_model(name: str | None = None) -> Path:
-    """Resolve a model by path, file name or stem; else the configured default."""
+    """Resolve a model by path, file name or stem; else the active model."""
     if name:
         candidate = Path(name)
         if candidate.is_file():
@@ -81,7 +175,7 @@ def resolve_model(name: str | None = None) -> Path:
         raise FileNotFoundError(f"model {name!r} not found in {config.LLM_MODELS_DIR}")
     if config.LLM_MODEL_PATH:
         return Path(config.LLM_MODEL_PATH)
-    default = config.LLM_MODELS_DIR / config.LLM_MODEL
+    default = config.LLM_MODELS_DIR / active_model()
     if default.exists():
         return default
     models = list_models()
@@ -99,7 +193,7 @@ def _build_cmd(model_path: Path) -> list[str]:
         "-m",
         str(model_path),
         "-c",
-        str(config.LLM_CTX),
+        str(active_ctx()),
         "-ngl",
         str(config.LLM_GPU_LAYERS),
         "-np",
@@ -108,6 +202,8 @@ def _build_cmd(model_path: Path) -> list[str]:
         "off",
         "--jinja",
         "--no-webui",
+        "-lv",
+        "4",
         "--host",
         config.LLM_HOST,
         "--port",
@@ -154,6 +250,7 @@ def start(model: str | None = None, *, wait: bool = True, timeout: float = 180) 
             "(run scripts/install_llm.ps1; check your antivirus didn't quarantine it)"
         )
     model_path = resolve_model(model)
+    set_active_model(model_path.name)
     log.info("starting llama-server: %s", model_path.name)
     _process = _spawn(model_path)
     _write_pid(
@@ -222,13 +319,18 @@ def status() -> dict:
         "autostart": config.LLM_AUTOSTART,
         "running": running,
         "url": config.LLM_BASE_URL,
-        "model": info.get("model") if running else None,
+        "model": (info.get("model") if running else None) or active_model(),
         "pid": info.get("pid") if running else None,
         "bin": str(config.LLM_BIN),
         "bin_present": Path(config.LLM_BIN).exists(),
-        "ctx": config.LLM_CTX,
+        "ctx": active_ctx(),
+        "ctx_default": config.LLM_CTX,
+        "ctx_max": model_context_max(),
         "gpu_layers": config.LLM_GPU_LAYERS,
         "port": config.LLM_PORT,
+        "gpu": gpu.query(),
+        "memory": llm_memory.parse() if running else None,
+        "process_ram_mib": _process_ram_mib() if running else None,
     }
 
 

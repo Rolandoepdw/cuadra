@@ -18,8 +18,9 @@ from typing import Literal
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
-from cuadra import config
+from cuadra import config, db
 from cuadra.ai import prompts
+from cuadra.domain import settings
 
 log = logging.getLogger("cuadra.llm")
 
@@ -104,6 +105,15 @@ async def _post_chat(client: httpx.AsyncClient, payload: dict, structured: bool)
     return response.json()
 
 
+def _active_model() -> str:
+    """Model selected by the operator (settings), else the config default."""
+    conn = db.connect()
+    try:
+        return settings.get(conn, settings.LLM_MODEL_KEY) or config.LLM_MODEL
+    finally:
+        conn.close()
+
+
 async def chat(
     messages: list[dict],
     *,
@@ -116,7 +126,7 @@ async def chat(
     request structured output where the backend supports it."""
     temp = config.LLM_TEMPERATURE if temperature is None else temperature
     payload: dict = {
-        "model": config.LLM_MODEL,
+        "model": _active_model(),
         "messages": messages,
         "stream": False,
         "temperature": temp,
