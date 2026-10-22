@@ -26,6 +26,7 @@ def ingest_incoming(
     body: str | None = None,
     file_path: str | None = None,
     customer_name: str | None = None,
+    identity: str | None = None,
 ) -> dict:
     conn = db.connect()
     try:
@@ -45,13 +46,14 @@ def ingest_incoming(
                 type=type,
                 body=body,
                 file_path=file_path,
+                identity=identity,
             )
 
         customer = conversations.get_or_create_customer(
             conn, channel, identifier, customer_name
         )
         conversation = conversations.get_or_create_open_conversation(
-            conn, customer["id"], channel
+            conn, customer["id"], channel, identity=identity
         )
         inbound = conversations.add_message(
             conn,
@@ -88,6 +90,7 @@ def _ingest_supplier(
     type: str,
     body: str | None,
     file_path: str | None,
+    identity: str | None = None,
 ) -> dict:
     """Store a TCP message and enqueue correlation with its oldest escalation."""
     # Supplier replies live in the same conversation bound to that TCP's channel,
@@ -96,7 +99,7 @@ def _ingest_supplier(
         conn, channel, identifier, supplier["name"]
     )
     conversation = conversations.get_or_create_open_conversation(
-        conn, customer["id"], channel
+        conn, customer["id"], channel, identity=identity
     )
     inbound = conversations.add_message(
         conn,

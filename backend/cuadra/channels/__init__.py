@@ -6,10 +6,25 @@ inbound wiring. Adapters are imported lazily so the package stays import-light.
 """
 
 
-def get_adapter(channel: str):
-    """Return the adapter module for a channel name, or None if unknown."""
+def get_adapter(channel: str, identity: str | None = None):
+    """Return the adapter module for a channel and identity."""
     if channel == "telegram":
+        return get_sender(identity or "bot")
+    return None
+
+
+def get_sender(sender: str):
+    """Return the outbound adapter for a sender identity.
+
+    `bot` = Bot API (aiogram); `userbot` = Telethon userbot.
+    """
+    if sender == "userbot":
+        from cuadra.channels import telegram_user
+
+        return telegram_user
+    if sender == "bot":
         from cuadra.channels import telegram
 
         return telegram
     return None
+

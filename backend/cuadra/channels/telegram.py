@@ -1,4 +1,4 @@
-"""Telegram channel (aiogram 3, polling). No token => dummy mode.
+﻿"""Telegram channel (aiogram 3, polling). No token => dummy mode.
 
 Inbound messages (text/voice/audio/photo) are normalized and pushed into the
 pipeline via ai/ingest.py. Outbound replies are delivered by the queue's
@@ -27,8 +27,8 @@ def available() -> bool:
 
 async def start() -> None:
     global _bot, _dp, _polling
-    if not config.TELEGRAM_TOKEN:
-        log.warning("TELEGRAM_TOKEN empty — channel in dummy mode (development)")
+    if not config.TELEGRAM_ENABLED or not config.TELEGRAM_TOKEN:
+        log.warning("telegram disabled or token empty - channel in dummy mode")
         return
     from aiogram import Bot, Dispatcher, F
 
@@ -98,6 +98,7 @@ async def _handle(bot, *, identifier, from_user, type, body=None, file_path=None
             body=body,
             file_path=file_path,
             customer_name=name,
+            identity="bot",
         )
     except Exception:  # noqa: BLE001 — never kill polling on a single bad message
         log.exception("failed to ingest incoming telegram message")
@@ -153,13 +154,23 @@ async def _send(call) -> None:
     retrying, so the queue must not back off forever on it. Network/timeouts
     stay transient and let the queue retry.
     """
-    from aiogram.exceptions import TelegramBadRequest
+    from aiogram.exceptions import (
+        TelegramBadRequest,
+        TelegramForbiddenError,
+        TelegramNetworkError,
+        TelegramRetryAfter,
+        TelegramServerError,
+    )
 
     from cuadra.ai.queue import PermanentJobError
 
     try:
         await call()
-    except TelegramBadRequest as exc:
+    except TelegramRetryAfter as exc:
+        raise TimeoutError(f"telegram retry after {exc.retry_after}s") from exc
+    except (TelegramNetworkError, TelegramServerError) as exc:
+        raise TimeoutError(str(exc)) from exc
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
         raise PermanentJobError(str(exc)) from exc
 
 
@@ -175,4 +186,5 @@ async def typing(target: str) -> None:
 
 
 def mode() -> str:
-    return "polling" if config.TELEGRAM_TOKEN else "dummy"
+    return "polling" if config.TELEGRAM_ENABLED and config.TELEGRAM_TOKEN else "dummy"
+

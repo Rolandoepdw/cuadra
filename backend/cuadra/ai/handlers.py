@@ -1,4 +1,4 @@
-"""Job handlers registered on the persistent queue."""
+﻿"""Job handlers registered on the persistent queue."""
 
 import asyncio
 import logging
@@ -7,7 +7,7 @@ from datetime import datetime
 
 from cuadra import channels, config, db
 from cuadra.ai import pipeline, prompts, queue, stt
-from cuadra.domain import catalog, conversations, escalations, events
+from cuadra.domain import broadcasts as broadcasts_domain, catalog, conversations, escalations, events
 
 log = logging.getLogger("cuadra.handlers")
 
@@ -18,6 +18,7 @@ def register() -> None:
     queue.register_handler("send_message", send_message)
     queue.register_handler("send_escalation", send_escalation)
     queue.register_handler("tcp_reply", tcp_reply)
+    queue.register_handler("send_broadcast", send_broadcast)
 
 
 async def generate_reply(payload: dict) -> None:
@@ -165,9 +166,12 @@ async def send_message(payload: dict) -> None:
     if target is None:
         log.warning("no channel identifier for conversation %s", conversation_id)
         return
-    adapter = channels.get_adapter(conversation["channel"])
+    identity = conversation.get("identity") or "bot"
+    adapter = channels.get_adapter(conversation["channel"], identity)
     if adapter is None:
-        log.warning("no adapter for channel %r", conversation["channel"])
+        log.warning(
+            "no adapter for channel %r identity %r", conversation["channel"], identity
+        )
         return
 
     delay = _human_delay()
@@ -191,7 +195,11 @@ async def send_message(payload: dict) -> None:
             "message_sent",
             entity="messages",
             entity_id=message_id,
-            details={"channel": conversation["channel"], "delay_s": round(delay, 2)},
+            details={
+                "channel": conversation["channel"],
+                "identity": identity,
+                "delay_s": round(delay, 2),
+            },
         )
     finally:
         conn.close()
@@ -218,6 +226,8 @@ async def send_escalation(payload: dict) -> None:
             log.debug("escalation %s already sent, skipping", escalation_id)
             return
         supplier = catalog.get_supplier(conn, escalation["supplier_id"])
+        conversation = conversations.get_conversation(conn, escalation["conversation_id"])
+        identity = conversation.get("identity") or "bot"
         product = None
         if escalation["product_id"]:
             try:
@@ -231,7 +241,7 @@ async def send_escalation(payload: dict) -> None:
     if not target:
         log.warning("supplier %s has no telegram_id; cannot escalate", escalation["supplier_id"])
         return
-    adapter = channels.get_adapter("telegram")
+    adapter = channels.get_adapter("telegram", identity)
     if adapter is None:
         return
 
@@ -252,7 +262,11 @@ async def send_escalation(payload: dict) -> None:
             "escalation_sent",
             entity="escalations",
             entity_id=escalation_id,
-            details={"supplier_id": escalation["supplier_id"], "target": target},
+            details={
+                "supplier_id": escalation["supplier_id"],
+                "target": target,
+                "identity": identity,
+            },
         )
     finally:
         conn.close()
@@ -325,3 +339,95 @@ async def tcp_reply(payload: dict) -> None:
         {"conversation_id": client_conversation_id, "message_id": outbound["id"]},
         priority=config.PRIORITY_CUSTOMER,
     )
+
+
+async def send_broadcast(payload: dict) -> None:
+    """Publish one queued campaign post in one group."""
+    post_id = payload.get("post_id")
+    if post_id is None:
+        raise queue.PermanentJobError("broadcast job has no post_id")
+    broadcast_id = payload["broadcast_id"]
+    group_id = payload["group_id"]
+
+    conn = db.connect()
+    try:
+        post = conn.execute(
+            "SELECT * FROM broadcast_posts WHERE id = ?", (post_id,)
+        ).fetchone()
+        if post is None:
+            raise queue.PermanentJobError(f"broadcast post {post_id} not found")
+        if post["status"] in ("SENT", "FAILED"):
+            log.debug("broadcast post %s is already %s; skipping", post_id, post["status"])
+            return
+        broadcast = broadcasts_domain.get_broadcast(conn, broadcast_id)
+        group = broadcasts_domain.get_group(conn, group_id)
+        text = post["sent_text"] or ""
+        image_path = post["image_path"]
+    finally:
+        conn.close()
+
+    if broadcast["status"] == "CANCELLED":
+        conn = db.connect()
+        try:
+            broadcasts_domain.record_result(conn, post_id, "FAILED", "broadcast cancelled")
+        finally:
+            conn.close()
+        return
+    if group["status"] != "ACTIVE":
+        conn = db.connect()
+        try:
+            broadcasts_domain.record_result(
+                conn, post_id, "FAILED", f"group is {group['status']}"
+            )
+        finally:
+            conn.close()
+        return
+
+    sender = channels.get_sender(group["sender"])
+    if sender is None:
+        raise queue.PermanentJobError(f"unknown sender '{group['sender']}'")
+
+    abs_image = None
+    if image_path:
+        candidate = config.DATA_DIR / image_path
+        if candidate.is_file():
+            abs_image = str(candidate)
+        else:
+            log.warning(
+                "broadcast %s: image %s missing; sending text only", broadcast_id, image_path
+            )
+
+    try:
+        if abs_image and len(text) <= 1024:
+            await sender.send_image(group["target"], abs_image, caption=text)
+        elif abs_image:
+            await sender.send_image(group["target"], abs_image, caption=None)
+            await sender.send_text(group["target"], text)
+        else:
+            await sender.send_text(group["target"], text)
+    except Exception as exc:  # noqa: BLE001 - classified below
+        permanent = isinstance(exc, queue.PermanentJobError)
+        conn = db.connect()
+        try:
+            if permanent:
+                broadcasts_domain.record_result(conn, post_id, "FAILED", str(exc)[:500])
+            else:
+                conn.execute(
+                    """UPDATE broadcast_posts
+                       SET attempts = attempts + 1, error = ? WHERE id = ?""",
+                    (str(exc)[:500], post_id),
+                )
+                conn.commit()
+        finally:
+            conn.close()
+        if permanent:
+            raise
+        if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+            raise
+        raise queue.PermanentJobError(str(exc)) from exc
+
+    conn = db.connect()
+    try:
+        broadcasts_domain.record_result(conn, post_id, "SENT")
+    finally:
+        conn.close()

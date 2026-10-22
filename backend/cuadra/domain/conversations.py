@@ -54,7 +54,9 @@ def get_channel_identifier(conn, customer_id: int, channel: str) -> str | None:
     return row["identifier"] if row is not None else None
 
 
-def get_or_create_open_conversation(conn, customer_id: int, channel: str) -> dict:
+def get_or_create_open_conversation(
+    conn, customer_id: int, channel: str, identity: str | None = None
+) -> dict:
     placeholders = ", ".join("?" for _ in OPEN_STATUSES)
     row = conn.execute(
         f"""SELECT * FROM conversations
@@ -63,10 +65,17 @@ def get_or_create_open_conversation(conn, customer_id: int, channel: str) -> dic
         (customer_id, channel, *OPEN_STATUSES),
     ).fetchone()
     if row is not None:
+        if identity is not None and row["identity"] != identity:
+            conn.execute(
+                "UPDATE conversations SET identity = ?, updated_at = ? WHERE id = ?",
+                (identity, _now(), row["id"]),
+            )
+            conn.commit()
+            return get_conversation(conn, row["id"])
         return dict(row)
     cur = conn.execute(
-        "INSERT INTO conversations (customer_id, channel) VALUES (?, ?)",
-        (customer_id, channel),
+        "INSERT INTO conversations (customer_id, channel, identity) VALUES (?, ?, ?)",
+        (customer_id, channel, identity or "userbot"),
     )
     conn.commit()
     return get_conversation(conn, cur.lastrowid)

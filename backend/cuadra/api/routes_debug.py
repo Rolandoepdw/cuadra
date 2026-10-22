@@ -75,6 +75,7 @@ async def debug_message(payload: DebugMessageIn) -> dict:
         type="text",
         body=payload.text,
         customer_name=payload.customer_name,
+        identity="bot",
     )
     reply = await _wait_for_reply(info["job_id"], info["conversation_id"], payload.wait_s)
     return {
@@ -116,7 +117,7 @@ async def debug_audio(
     try:
         customer = conversations.get_or_create_customer(conn, channel, identifier)
         conversation = conversations.get_or_create_open_conversation(
-            conn, customer["id"], channel
+            conn, customer["id"], channel, identity="bot"
         )
         inbound = conversations.add_message(
             conn,

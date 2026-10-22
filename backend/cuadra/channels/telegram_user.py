@@ -1,0 +1,360 @@
+"""Telegram userbot channel (Telethon).
+
+Used ONLY for broadcast groups whose `sender` is `userbot`. Conversational flows
+stay on the Bot API: running both on the same chats would duplicate replies.
+
+The userbot is optional. It starts only when api_id/api_hash and a session file
+exist; otherwise the core keeps running with the bot. Create the session once
+with `python scripts/telegram_login.py` while cuadra-core is stopped.
+"""
+
+import asyncio
+import logging
+import re
+import uuid
+from pathlib import Path
+
+from cuadra import config
+from cuadra.ai import ingest
+
+log = logging.getLogger("cuadra.telegram_user")
+
+_client = None
+_me = None
+_status: dict = {
+    "configured": False,
+    "connected": False,
+    "username": None,
+    "user_id": None,
+    "error": None,
+}
+
+_INVITE_RE = re.compile(
+    r"(?:https?://)?(?:t\.me|telegram\.me)/(?:\+|joinchat/)([A-Za-z0-9_-]+)"
+)
+_NUMERIC_RE = re.compile(r"-?\d+")
+
+
+def session_file() -> Path:
+    path = Path(config.TELETHON_SESSION)
+    return path if path.suffix == ".session" else Path(f"{path}.session")
+
+
+def configured() -> bool:
+    return bool(config.TELETHON_API_ID and config.TELETHON_API_HASH)
+
+
+def available() -> bool:
+    return _client is not None
+
+
+def status() -> dict:
+    return {
+        **_status,
+        "configured": configured(),
+        "session_file": str(session_file()),
+        "session_exists": session_file().exists(),
+        "connected": _client is not None,
+    }
+
+
+def _set_error(message: str | None) -> None:
+    _status["error"] = message
+    _status["connected"] = _client is not None
+
+
+def _sender_name(sender) -> str | None:
+    parts = [
+        getattr(sender, "first_name", None),
+        getattr(sender, "last_name", None),
+    ]
+    name = " ".join(part for part in parts if part).strip()
+    return name or getattr(sender, "username", None)
+
+
+def _ingest_userbot(identifier: str, name: str | None, **kwargs) -> None:
+    ingest.ingest_incoming(
+        channel="telegram",
+        identifier=identifier,
+        customer_name=name,
+        identity="userbot",
+        **kwargs,
+    )
+
+
+async def _on_private_message(event) -> None:
+    try:
+        sender = await event.get_sender()
+        if sender is None or getattr(sender, "bot", False):
+            return
+        if getattr(sender, "id", None) == _status.get("user_id"):
+            return
+        message = event.message
+        identifier = str(event.sender_id)
+        name = _sender_name(sender)
+        if message.text:
+            log.info("inbound userbot text from %s (%s): %s", identifier, name, message.text)
+            _ingest_userbot(identifier, name, type="text", body=message.text)
+        elif message.voice or message.audio:
+            media = message.voice or message.audio
+            suffix = Path(getattr(media, "file_name", None) or "").suffix
+            if not suffix:
+                suffix = ".ogg" if message.voice else ".mp3"
+            config.AUDIOS_DIR.mkdir(parents=True, exist_ok=True)
+            path = config.AUDIOS_DIR / f"{uuid.uuid4().hex}{suffix}"
+            await message.download_media(file=str(path))
+            log.info("inbound userbot audio from %s (%s): %s", identifier, name, path.name)
+            _ingest_userbot(
+                identifier,
+                name,
+                type="audio",
+                file_path=f"audios/{path.name}",
+            )
+        elif message.photo:
+            config.IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+            path = config.IMAGES_DIR / f"{uuid.uuid4().hex}.jpg"
+            await message.download_media(file=str(path))
+            log.info("inbound userbot image from %s (%s): %s", identifier, name, path.name)
+            _ingest_userbot(
+                identifier,
+                name,
+                type="image",
+                file_path=f"images/{path.name}",
+            )
+    except Exception:  # noqa: BLE001 - never let one bad update kill the userbot
+        log.exception("failed to ingest incoming userbot message")
+
+
+async def start() -> None:
+    global _client, _me
+    if _client is not None:
+        return
+    if not configured():
+        log.info("userbot disabled (CUADRA_TELETHON_API_ID/API_HASH empty)")
+        _set_error(None)
+        return
+    if not session_file().exists():
+        log.warning(
+            "userbot session missing at %s; run scripts/telegram_login.py",
+            session_file(),
+        )
+        _set_error("session missing")
+        return
+
+    from telethon import TelegramClient, events
+
+    client = TelegramClient(
+        str(config.TELETHON_SESSION),
+        config.TELETHON_API_ID,
+        config.TELETHON_API_HASH,
+    )
+    try:
+        await client.connect()
+        if not await client.is_user_authorized():
+            log.warning("userbot session is not authorized; run scripts/telegram_login.py")
+            _set_error("session not authorized")
+            await client.disconnect()
+            return
+        me = await client.get_me()
+    except Exception as exc:  # noqa: BLE001 - never take the core down for the userbot
+        log.exception("userbot failed to start")
+        _set_error(str(exc))
+        try:
+            await client.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
+        return
+
+    _client = client
+    _me = me
+    _status["connected"] = True
+    _status["username"] = getattr(me, "username", None)
+    _status["user_id"] = getattr(me, "id", None)
+    _status["error"] = None
+    client.add_event_handler(
+        _on_private_message,
+        events.NewMessage(incoming=True, func=lambda event: event.is_private),
+    )
+    log.info(
+        "userbot connected as @%s (id %s); listening for private messages",
+        _status["username"] or "?",
+        _status["user_id"],
+    )
+
+
+async def stop() -> None:
+    global _client, _me
+    if _client is not None:
+        try:
+            await _client.disconnect()
+        except Exception:  # noqa: BLE001
+            log.debug("userbot disconnect failed", exc_info=True)
+        _client = None
+    _me = None
+    _status.update(
+        {"connected": False, "username": None, "user_id": None}
+    )
+    log.info("userbot stopped")
+
+
+def _require_client():
+    if _client is None:
+        from cuadra.ai.queue import PermanentJobError
+
+        raise PermanentJobError(
+            "userbot is not connected; check api_id/api_hash and run scripts/telegram_login.py"
+        )
+    return _client
+
+
+async def _resolve(client, target: str):
+    """Resolve @username, numeric id or invite link to a Telethon entity."""
+    raw = (target or "").strip()
+    if not raw:
+        from cuadra.ai.queue import PermanentJobError
+
+        raise PermanentJobError("empty group target")
+
+    if _NUMERIC_RE.fullmatch(raw):
+        return await client.get_entity(int(raw))
+
+    invite = _INVITE_RE.search(raw)
+    if invite is not None:
+        return await _resolve_invite(client, invite.group(1))
+
+    try:
+        return await client.get_entity(raw)
+    except ValueError:
+        if raw.startswith("@"):
+            raise
+        return await client.get_entity(f"@{raw}")
+
+
+async def _resolve_invite(client, invite_hash: str):
+    from telethon.errors import (
+        InviteHashExpiredError,
+        InviteHashInvalidError,
+        UserAlreadyParticipantError,
+    )
+    from telethon.tl.functions.messages import (
+        CheckChatInviteRequest,
+        ImportChatInviteRequest,
+    )
+
+    from cuadra.ai.queue import PermanentJobError
+
+    try:
+        updates = await client(ImportChatInviteRequest(invite_hash))
+        chats = getattr(updates, "chats", None) or []
+        if chats:
+            return chats[0]
+    except UserAlreadyParticipantError:
+        pass
+    except (InviteHashExpiredError, InviteHashInvalidError) as exc:
+        raise PermanentJobError(f"invite link is no longer valid: {exc}") from exc
+
+    info = await client(CheckChatInviteRequest(invite_hash))
+    chat = getattr(info, "chat", None)
+    if chat is None:
+        raise PermanentJobError("could not resolve invite link to a group")
+    return chat
+
+
+def _map_error(exc: Exception) -> Exception:
+    from telethon.errors import (
+        ChannelInvalidError,
+        ChannelPrivateError,
+        ChatAdminRequiredError,
+        ChatWriteForbiddenError,
+        FloodWaitError,
+        InviteHashExpiredError,
+        InviteHashInvalidError,
+        PeerFloodError,
+        SlowModeWaitError,
+        UserBannedInChannelError,
+    )
+
+    from cuadra.ai.queue import PermanentJobError
+
+    if isinstance(exc, (FloodWaitError, SlowModeWaitError)):
+        seconds = getattr(exc, "seconds", 0) or 0
+        return TimeoutError(f"telegram rate limit: wait {seconds}s")
+    if isinstance(exc, PeerFloodError):
+        return TimeoutError("telegram peer flood limit; the account needs a cooldown")
+    if isinstance(
+        exc,
+        (
+            ChannelInvalidError,
+            ChannelPrivateError,
+            ChatAdminRequiredError,
+            ChatWriteForbiddenError,
+            InviteHashExpiredError,
+            InviteHashInvalidError,
+            UserBannedInChannelError,
+            ValueError,
+        ),
+    ):
+        return PermanentJobError(str(exc))
+    return exc
+
+
+async def send_text(target: str, text: str) -> None:
+    client = _require_client()
+    try:
+        entity = await _resolve(client, target)
+        await client.send_message(entity, text, link_preview=False)
+    except Exception as exc:  # noqa: BLE001 - mapped below
+        raise _map_error(exc) from exc
+
+
+async def send_image(target: str, path: str, caption: str | None = None) -> None:
+    client = _require_client()
+    abs_path = Path(path)
+    if not abs_path.is_file():
+        from cuadra.ai.queue import PermanentJobError
+
+        raise PermanentJobError(f"image not found: {path}")
+    try:
+        entity = await _resolve(client, target)
+        await client.send_file(
+            entity,
+            str(abs_path),
+            caption=caption,
+            force_document=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - mapped below
+        raise _map_error(exc) from exc
+
+
+async def send_audio(target: str, path: str) -> None:
+    client = _require_client()
+    abs_path = Path(path)
+    if not abs_path.is_file():
+        from cuadra.ai.queue import PermanentJobError
+
+        raise PermanentJobError(f"audio not found: {path}")
+    try:
+        entity = await _resolve(client, target)
+        await client.send_file(entity, str(abs_path), voice_note=True)
+    except Exception as exc:  # noqa: BLE001 - mapped below
+        raise _map_error(exc) from exc
+
+
+async def typing(target: str) -> None:
+    client = _client
+    if client is None:
+        return
+    try:
+        entity = await _resolve(client, target)
+        await client.action(entity, "typing")
+        await asyncio.sleep(0)
+    except Exception:  # noqa: BLE001 - cosmetic only
+        log.debug("userbot typing failed for %s", target)
+
+
+def mode() -> str:
+    if _client is not None:
+        return "userbot"
+    if configured():
+        return "userbot-offline"
+    return "disabled"
