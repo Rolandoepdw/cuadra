@@ -7,6 +7,7 @@ comparisons, complaints and unforeseen cases, always fed with real catalog JSON.
 
 import json
 import logging
+import re
 import time
 
 from cuadra import config
@@ -58,7 +59,29 @@ def _fit_budget(messages: list[dict]) -> list[dict]:
     return [system, *keep]
 
 
-def _resolve_product(conn, intent, context: dict) -> dict | None:
+_ID_PREFIXED = re.compile(
+    r"\b(?:id|producto|codigo|código)\s*[:#]?\s*(\d{1,9})\b", re.IGNORECASE
+)
+_ID_BARE = re.compile(r"^\s*#?(\d{1,6})\s*$")
+
+
+def product_id_from_text(text: str) -> int | None:
+    """Return an explicit product id, so the bot never has to guess from a photo."""
+    body = (text or "").strip()
+    match = _ID_BARE.match(body) or _ID_PREFIXED.search(body)
+    return int(match.group(1)) if match else None
+
+
+def _resolve_product(
+    conn, intent, context: dict, text: str = ""
+) -> dict | None:
+    explicit_id = product_id_from_text(text)
+    if explicit_id is not None:
+        try:
+            return catalog.get_product(conn, explicit_id)
+        except catalog.NotFound:
+            if _ID_PREFIXED.search(text):
+                return None
     if intent.producto:
         product = catalog.find_product(conn, intent.producto)
         if product is not None:
@@ -159,8 +182,11 @@ async def handle_incoming(conn, conversation, inbound: dict) -> dict:
     context = conversations.get_context(conn, conversation["id"])
     history = conversations.recent_messages(conn, conversation["id"], config.HISTORY_WINDOW)
     history_base = [m for m in history if m["id"] != inbound["id"]]
+    message_text = inbound["body"] or ""
 
-    current_product = _resolve_product(conn, llm.Intent(intencion="otro"), context)
+    current_product = _resolve_product(
+        conn, llm.Intent(intencion="otro"), context, message_text
+    )
     nlu_messages = _fit_budget(
         _build_base_messages(
             conn, conversation, history_base, context, product=current_product
@@ -183,7 +209,11 @@ async def handle_incoming(conn, conversation, inbound: dict) -> dict:
         intent = llm.Intent(intencion="otro", confianza=0.0)
         degraded = True
 
-    product = _resolve_product(conn, intent, context)
+    product = _resolve_product(conn, intent, context, message_text)
+    if product is not None and product_id_from_text(message_text) is not None:
+        if intent.intencion == "otro":
+            intent.intencion = "consulta_precio"
+            intent.confianza = max(intent.confianza, 0.9)
     reply, escalate, generator, escalation_question = await _decide(
         conn, conversation, inbound, intent, product, context, history
     )
