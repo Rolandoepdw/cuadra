@@ -1,4 +1,4 @@
-"""Runtime configuration for cuadra-core.
+﻿"""Runtime configuration for cuadra-core.
 
 All values have operational defaults and can be overridden via environment
 variables. Versions: always latest stable of each dependency (no pins).
@@ -54,8 +54,20 @@ DEBUG = os.environ.get("CUADRA_DEBUG", "1") == "1"
 # Service port (dashboard API + static files + Phase 2 webhooks)
 PORT = int(os.environ.get("CUADRA_PORT", "8321"))
 
-# Telegram. Empty token => dummy mode (development without a real bot).
+# Telegram. Empty token or enabled=0 => dummy mode (development/tests).
+TELEGRAM_ENABLED = os.environ.get("CUADRA_TELEGRAM_ENABLED", "1") == "1"
 TELEGRAM_TOKEN = os.environ.get("CUADRA_TELEGRAM_TOKEN", "")
+
+# Telegram userbot (Telethon), default identity for broadcast groups and
+# private conversations. The Bot API account remains available as a fallback.
+# Requires api_id/api_hash from https://my.telegram.org and a session created
+# once with scripts/telegram_login.py. Empty => disabled.
+TELETHON_API_ID = int(os.environ.get("CUADRA_TELETHON_API_ID", "0") or 0)
+TELETHON_API_HASH = os.environ.get("CUADRA_TELETHON_API_HASH", "")
+TELETHON_PHONE = os.environ.get("CUADRA_TELETHON_PHONE", "")
+TELETHON_SESSION = Path(
+    os.environ.get("CUADRA_TELETHON_SESSION", DATA_DIR / "telegram_user")
+)
 
 # LLM transport. "openai" = any OpenAI-compatible endpoint (Cuadra's own
 # llama.cpp server by default, also LM Studio/vLLM); "ollama" = native /api/chat.
@@ -104,6 +116,9 @@ PRIORITY_CUSTOMER = 10
 PRIORITY_TCP = 50
 PRIORITY_BROADCAST = 100
 
+# Broadcast scheduler (Hito 7): how often due campaigns are dispatched.
+BROADCAST_TICK_S = int(os.environ.get("CUADRA_BROADCAST_TICK_S", "5"))
+
 # Persona / human-like delays (seconds)
 TYPING_DELAY_MIN = float(os.environ.get("CUADRA_TYPING_DELAY_MIN", "1"))
 TYPING_DELAY_MAX = float(os.environ.get("CUADRA_TYPING_DELAY_MAX", "4"))
@@ -123,3 +138,4 @@ ESCALATION_MAX_RETRIES = int(os.environ.get("CUADRA_ESCALATION_MAX_RETRIES", "1"
 def ensure_dirs() -> None:
     for d in (DATA_DIR, PHOTOS_DIR, AUDIOS_DIR, IMAGES_DIR, LOGS_DIR, LLM_MODELS_DIR):
         d.mkdir(parents=True, exist_ok=True)
+

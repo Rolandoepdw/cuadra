@@ -9,6 +9,12 @@ export interface Category {
   active: boolean;
 }
 
+export interface Zone {
+  id: number;
+  name: string;
+  active: boolean;
+}
+
 export interface Supplier {
   id: number;
   name: string;
@@ -78,7 +84,18 @@ export interface Health {
     process_ram_mib?: number | null;
   };
   telegram_channel: string;
+  telegram_user: TelegramUserStatus;
   debug: boolean;
+}
+
+export interface TelegramUserStatus {
+  configured: boolean;
+  connected: boolean;
+  username: string | null;
+  user_id: number | null;
+  error: string | null;
+  session_file: string;
+  session_exists: boolean;
 }
 
 export interface LlmModel {
@@ -140,6 +157,11 @@ export interface CategoryIn {
   active?: boolean;
 }
 
+export interface ZoneIn {
+  name: string;
+  active?: boolean;
+}
+
 export interface SupplierIn {
   name: string;
   business_alias?: string | null;
@@ -167,5 +189,94 @@ export interface ProductIn {
 }
 
 export type CategoryPatch = Partial<CategoryIn>;
+export type ZonePatch = Partial<ZoneIn>;
 export type SupplierPatch = Partial<SupplierIn>;
 export type ProductPatch = Partial<Omit<ProductIn, "supplier_id">>;
+
+// ---------------------------------------------------------------- broadcasts
+
+export type BroadcastChannel = "telegram" | "whatsapp";
+export type GroupStatus = "ACTIVE" | "PAUSED" | "BLOCKED";
+export type Sender = "bot" | "userbot";
+export type BroadcastStatus = "SCHEDULED" | "SENDING" | "COMPLETED" | "FAILED" | "CANCELLED";
+
+export interface BroadcastGroup {
+  id: number;
+  channel: BroadcastChannel;
+  target: string;
+  name: string;
+  zone_ids: number[];
+  sender: Sender;
+  status: GroupStatus;
+  max_posts_per_day: number;
+  min_interval_s: number;
+  max_interval_s: number;
+  category_ids: number[];
+  notes: string | null;
+}
+
+export interface BroadcastStrategy {
+  max_posts_per_day: number;
+  min_interval_s: number;
+  max_interval_s: number;
+  repeat_passes: number;
+  repeat_window_days: number;
+}
+
+export interface BroadcastStrategyIn extends BroadcastStrategy {
+  apply_to_groups?: boolean;
+}
+
+export interface Broadcast {
+  id: number;
+  channel: BroadcastChannel;
+  template: string;
+  product_id: number | null;
+  status: BroadcastStatus;
+  next_send_at: string | null;
+  posts_sent: number;
+  posts_failed: number;
+  group_count: number;
+  group_ids: number[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BroadcastPost {
+  id: number;
+  broadcast_id: number;
+  group_id: number;
+  channel: string;
+  group_name: string;
+  group_target: string;
+  group_sender: Sender;
+  sent_text: string;
+  image_path: string | null;
+  status: "QUEUED" | "SENT" | "FAILED";
+  error: string | null;
+  attempts: number;
+  sent_at: string;
+}
+
+export interface BroadcastGroupIn {
+  channel?: BroadcastChannel;
+  target: string;
+  name: string;
+  zone_ids?: number[];
+  sender?: Sender;
+  status?: GroupStatus;
+  max_posts_per_day?: number;
+  min_interval_s?: number;
+  max_interval_s?: number;
+  category_ids?: number[];
+  notes?: string | null;
+}
+
+export type BroadcastGroupPatch = Partial<BroadcastGroupIn>;
+
+export interface BroadcastIn {
+  channel?: BroadcastChannel;
+  template: string;
+  product_id?: number | null;
+  group_ids?: number[];
+}

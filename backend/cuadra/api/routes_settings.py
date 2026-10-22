@@ -1,0 +1,53 @@
+"""Dashboard-editable publication strategy (no code changes needed)."""
+
+from fastapi import APIRouter, Depends, HTTPException, status
+
+from cuadra import db
+from cuadra.api.auth import require_pin
+from cuadra.api.models import BroadcastStrategyIn
+from cuadra.domain import broadcasts, settings
+
+router = APIRouter(prefix="/api/settings", dependencies=[Depends(require_pin)])
+
+
+def _public(values: dict[str, int]) -> dict[str, int]:
+    return {
+        "max_posts_per_day": values[settings.BROADCAST_DEFAULT_MAX_POSTS],
+        "min_interval_s": values[settings.BROADCAST_DEFAULT_MIN_INTERVAL],
+        "max_interval_s": values[settings.BROADCAST_DEFAULT_MAX_INTERVAL],
+        "repeat_passes": values[settings.BROADCAST_REPEAT_PASSES],
+        "repeat_window_days": values[settings.BROADCAST_REPEAT_WINDOW_DAYS],
+    }
+
+
+@router.get("/broadcast")
+def get_broadcast_strategy() -> dict:
+    conn = db.connect()
+    try:
+        return _public(settings.broadcast_defaults(conn))
+    finally:
+        conn.close()
+
+
+@router.put("/broadcast")
+def set_broadcast_strategy(
+    payload: BroadcastStrategyIn, apply_to_groups: bool = False
+) -> dict:
+    data = {
+        settings.BROADCAST_DEFAULT_MAX_POSTS: payload.max_posts_per_day,
+        settings.BROADCAST_DEFAULT_MIN_INTERVAL: payload.min_interval_s,
+        settings.BROADCAST_DEFAULT_MAX_INTERVAL: payload.max_interval_s,
+        settings.BROADCAST_REPEAT_PASSES: payload.repeat_passes,
+        settings.BROADCAST_REPEAT_WINDOW_DAYS: payload.repeat_window_days,
+    }
+    conn = db.connect()
+    try:
+        if apply_to_groups:
+            result = broadcasts.apply_strategy_to_all(conn, data)
+            return {**_public(result), "groups": result["groups"]}
+        values = settings.set_broadcast_defaults(conn, data)
+        return _public(values)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    finally:
+        conn.close()

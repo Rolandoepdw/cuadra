@@ -1,5 +1,13 @@
-import { NavLink } from "react-router-dom";
-import { LayoutDashboard, Package, Activity, LogOut } from "lucide-react";
+﻿import { NavLink } from "react-router-dom";
+import {
+  Activity,
+  LayoutDashboard,
+  LogOut,
+  Megaphone,
+  Package,
+  SlidersHorizontal,
+  Users,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth";
@@ -7,6 +15,9 @@ import { useAuth } from "@/lib/auth";
 const items = [
   { to: "/", label: "General", icon: LayoutDashboard, end: true },
   { to: "/catalog", label: "Catálogo", icon: Package, end: false },
+  { to: "/groups", label: "Grupos", icon: Users, end: false },
+  { to: "/broadcasts", label: "Difusiones", icon: Megaphone, end: false },
+  { to: "/strategy", label: "Estrategia", icon: SlidersHorizontal, end: false },
   { to: "/health", label: "Salud", icon: Activity, end: false },
 ];
 
@@ -48,3 +59,4 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     </div>
   );
 }
+

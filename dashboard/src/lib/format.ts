@@ -41,3 +41,29 @@ export const STATUS_VARIANTS: Record<ProductStatus, "success" | "warning" | "sec
   PAUSED: "secondary",
   REMOVED: "destructive",
 };
+
+export function formatDateTime(value: string | null | undefined): string {
+  if (!value) return "—";
+  const iso = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("es-CU", {
+    dateStyle: "short",
+    timeStyle: "short",
+    timeZone: "America/Havana",
+  }).format(date);
+}
+
+export const GROUP_STATUS_LABELS = {
+  ACTIVE: "Activo",
+  PAUSED: "Pausado",
+  BLOCKED: "Bloqueado",
+} as const;
+
+export const BROADCAST_STATUS_LABELS = {
+  SCHEDULED: "Programada",
+  SENDING: "Enviando",
+  COMPLETED: "Completada",
+  FAILED: "Fallida",
+  CANCELLED: "Cancelada",
+} as const;

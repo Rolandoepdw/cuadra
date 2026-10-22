@@ -1,4 +1,4 @@
-"""Dashboard endpoints (Phase 1: health + summary)."""
+﻿"""Dashboard endpoints (Phase 1: health + summary)."""
 
 import json
 import time
@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 from cuadra import __version__, config, db
 from cuadra.api.auth import require_pin
 from cuadra.channels import telegram as telegram_channel
+from cuadra.channels import telegram_user
 from cuadra.ai import llm, llm_server, queue
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_pin)])
@@ -57,6 +58,7 @@ async def health() -> dict:
             "process_ram_mib": server["process_ram_mib"],
         },
         "telegram_channel": telegram_channel.mode(),
+        "telegram_user": telegram_user.status(),
         "debug": config.DEBUG,
     }
 
@@ -136,3 +138,4 @@ async def summary() -> dict:
         "avg_stt_ms": stt_ms,
         "queue_size": queue_size,
     }
+

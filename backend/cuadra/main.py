@@ -1,4 +1,4 @@
-"""cuadra-core entrypoint — single-service runtime.
+﻿"""cuadra-core entrypoint — single-service runtime.
 
 One process runs: dashboard API, job queue, broadcast scheduler and the
 Telegram channel (polling). See cuadra_doc/01_arquitectura.md.
@@ -15,8 +15,16 @@ from fastapi.staticfiles import StaticFiles
 
 from cuadra import config, db, instance
 from cuadra.ai import handlers, llm_server, queue
-from cuadra.api import routes_catalog, routes_dashboard, routes_debug, routes_llm
+from cuadra.api import (
+    routes_broadcasts,
+    routes_catalog,
+    routes_dashboard,
+    routes_debug,
+    routes_llm,
+    routes_settings,
+)
 from cuadra.channels import telegram as telegram_channel
+from cuadra.channels import telegram_user
 from cuadra.domain.errors import DomainError, NotFound
 from cuadra.scheduler import broadcasts as scheduler_broadcasts
 
@@ -63,6 +71,7 @@ async def lifespan(app: FastAPI):
     queue.start()
     scheduler_broadcasts.start()
     await telegram_channel.start()
+    await telegram_user.start()
 
     # Bring up the local llama.cpp server in the background so the API is
     # available immediately while the model loads (the queue retries meanwhile).
@@ -81,6 +90,7 @@ async def lifespan(app: FastAPI):
 
     if llm_task is not None and not llm_task.done():
         llm_task.cancel()
+    await telegram_user.stop()
     await telegram_channel.stop()
     scheduler_broadcasts.stop()
     await queue.stop()
@@ -92,6 +102,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Cuadra Core", lifespan=lifespan)
 app.include_router(routes_dashboard.router)
 app.include_router(routes_catalog.router)
+app.include_router(routes_broadcasts.router)
+app.include_router(routes_settings.router)
 app.include_router(routes_llm.router)
 app.include_router(routes_debug.router)
 
@@ -124,3 +136,4 @@ async def spa(path: str = ""):
 async def _domain_error_handler(request, exc: DomainError):
     code = 404 if isinstance(exc, NotFound) else 400
     return JSONResponse({"detail": str(exc)}, status_code=code)
+

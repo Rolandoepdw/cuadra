@@ -7,3 +7,4 @@ apscheduler
 pillow
 faster-whisper
 av<19
+telethon

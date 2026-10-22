@@ -79,6 +79,17 @@ export function HealthPanel() {
               <Badge variant={data.telegram_channel === "polling" ? "success" : "secondary"}>
                 Telegram: {data.telegram_channel}
               </Badge>
+              <Badge
+                variant={data.telegram_user?.connected ? "success" : "secondary"}
+                title={data.telegram_user?.error ?? data.telegram_user?.session_file ?? ""}
+              >
+                Userbot:{" "}
+                {data.telegram_user?.connected
+                  ? `@${data.telegram_user.username ?? "?"}`
+                  : data.telegram_user?.configured
+                    ? "sin sesión"
+                    : "deshabilitado"}
+              </Badge>
             </div>
           </CardContent>
         </Card>
