@@ -1,8 +1,8 @@
 ---
 tipo: modelo_datos
 proyecto: Cuadra
-estado: implementado (migración 001_init.sql)
-actualizado: 2026-10-19
+estado: implementado (migraciones 001–004)
+actualizado: 2026-10-21
 tags: [sqlite, schema, ventas, comisiones]
 ---
 
@@ -42,20 +42,23 @@ Verbatim en `backend/migrations/001_init.sql`. Resumen de referencia:
 | `product_images` | Galería por producto (ruta relativa bajo `data/fotos/product_{id}/`) | `is_main`, `sort_order` |
 | `customers` | Cliente con identidad multi-canal | — |
 | `customer_channels` | `(channel, identifier)` único por cliente | `channel`: `telegram`, `whatsapp` |
-| `conversations` | Sesión de atención | `status`: `ACTIVE`, `WAITING_TCP`, `CLOSED` |
+| `conversations` | Sesión de atención | `status`: `ACTIVE`, `WAITING_TCP`, `CLOSED`; `identity`: `bot`/`userbot` (cuenta por la que entró y se responde) |
 | `messages` | Historial completo (contexto del LLM y auditoría) | `direction`: `INBOUND`/`OUTBOUND`; `author`: `customer`/`bot`/`tcp`/`operator`; `type`: `text`/`audio`/`image`/`document` |
 | `escalations` | Bucle crítico de consulta al TCP | `status`: `PENDING`, `ANSWERED`, `RESOLVED`, `CANCELLED`, `TIMEOUT` |
 | `sales` | Ventas y comisiones | `status`: `DRAFT` → `PENDING_APPROVAL` → `CONFIRMED` → `PAID` \| `CANCELLED`; `source`: `bot`/`operator`; `commission_type`: `FIXED`/`PERCENT` |
-| `broadcast_groups` | Grupos de difusión (canal-agnósticos) | `status`: `ACTIVE`, `PAUSED`, `BLOCKED`; topes `max_posts_per_day`, `min/max_interval_min` |
+| `broadcast_groups` | Grupos de difusión (canal-agnósticos) | `status`: `ACTIVE`, `PAUSED`, `BLOCKED`; `sender`: `bot`/`userbot` (default `userbot`); topes `max_posts_per_day`, `min/max_interval_s` (segundos) |
 | `group_categories` | Categorías permitidas por grupo (M:N) | — |
-| `broadcasts` | Campañas (plantilla con spintax) | `status`: `SCHEDULED`, `SENDING`, `COMPLETED`, `FAILED`, `CANCELLED` |
+| `zones` | Catálogo de zonas de mensajería | `name` único, `active` |
+| `group_zones` | Zonas asignadas por grupo (M:N) | — |
+| `broadcasts` | Campañas (plantilla con spintax) | `status`: `SCHEDULED`, `SENDING`, `FAILED`, `CANCELLED` (recurrentes: `SCHEDULED` se reprograma cada ciclo; `COMPLETED` quedó obsoleto) |
 | `broadcast_group_links` | Selección manual opcional de grupos | — |
-| `broadcast_posts` | Log auditable de cada publicación real | `status`: `SENT`/`FAILED` |
+| `broadcast_posts` | Log auditable de cada publicación (una fila por intento) | `status`: `QUEUED`/`SENT`/`FAILED`; `image_path`, `attempts`, `error`, `window_start` |
 | `jobs` | Cola persistente (sobrevive apagones) | `status`: `PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED` |
 | `events` | Auditoría del sistema | `source`: `system`/`bot`/`dashboard`/`scheduler`/`llm`/`stt` |
+| `settings` | Configuración mutable por clave | Defaults de difusión en `broadcast.default_*`; recurrencia en `broadcast.repeat_*` |
 | `schema_migrations` | Runner de migraciones (creada por `db.py`) | — |
 
-> **El esquema ejecutable manda:** la fuente de verdad es `backend/migrations/001_init.sql`. Este documento es el resumen de referencia; si divergen, se corrige el documento.
+> **El esquema ejecutable manda:** la fuente de verdad son las migraciones de `backend/migrations/` aplicadas en orden (`001` base, `002` settings, `003` sender/imágenes, `004` userbot/zona/estrategia, `005` identidad de conversación, `006` ciclos de difusión, `007` zonas). Este documento es el resumen de referencia; si divergen, se corrige el documento.
 
 ## 3. Notas de implementación
 
@@ -68,8 +71,14 @@ Verbatim en `backend/migrations/001_init.sql`. Resumen de referencia:
 - **Rutas de imágenes:** relativas bajo `data/` (p. ej. `fotos/product_12/img_001.jpg`), nunca rutas absolutas — la BD es portable entre máquinas. Las imágenes se comprimen al subir (máx. 1280 px, ~500 KB).
 - **Borrado lógico preferido:** `suppliers.active = 0` y `products.status = 'REMOVED'` en lugar de `DELETE` físico (las ventas y el historial referencian estas filas). `DELETE` físico reservado para datos sin referencias (imágenes sueltas, categorías sin usar).
 - **Regla de seguridad de categorías (anti-baneo):** el scheduler solo publica un producto en grupos `ACTIVE` cuyas categorías (`group_categories`) incluyan su `category_id`. **Producto con `category_id = NULL` solo va a grupos sin categorías asignadas** (grupos libres). La selección manual (`broadcast_group_links`) tiene prioridad sobre el auto-match, pero la regla de NULL se aplica igual.
+- **Userbot (Telethon):** `sender = 'userbot'` (default) publica con una cuenta normal (`backend/data/telegram_user.session`, creada con `scripts/telegram_login.py`). Esa cuenta también **atiende los 1:1 que entran por ella**: `conversations.identity` guarda `bot`/`userbot` y la respuesta sale por la misma cuenta. `sender = 'bot'` queda inactivo para difusiones (el bot sigue atendiendo los 1:1 que entran por él). Si la sesión no está configurada, el grupo falla con un error permanente visible en el log.
+- **Solo grupos/canales:** las comunidades no son destinos publicables ni se modelan. `kind` no se implementó; `channel` sigue siendo el transporte (`telegram`/`whatsapp`).
+- **Zonas:** `zones` es un catálogo (como `categories`) con CRUD desde el dashboard (Catálogo → Zonas) y relación M:N con los grupos (`group_zones`). El producto hereda `suppliers.delivery_zone` (texto libre del TCP) al renderizar el token `{zona}`; el cruce de cobertura fino y el scoring multi-zona quedan para Fase 2.
+- **ID de producto:** las difusiones agregan `ID: <products.id>` si la plantilla no contiene `{id}`. El pipeline resuelve IDs explícitos antes de nombre/imagen/NLU.
+- **Estrategia configurable:** `settings` guarda `broadcast.default_max_posts_per_day`, `broadcast.default_min_interval_s`, `broadcast.default_max_interval_s`, `broadcast.repeat_passes` y `broadcast.repeat_window_days`. El panel Estrategia los edita y puede aplicar los topes por grupo a todos los grupos. `repeat_passes` = veces que cada campaña se publica en cada grupo dentro del ciclo; `repeat_window_days` = duración del ciclo (al cerrarse, se reinicia el conteo).
+- **Rate limits sin bloquear la cola:** `FloodWait`/`SlowModeWait` (Telethon) y `RetryAfter` (Bot API) se convierten en fallo transitorio para que el worker aplique backoff; nunca se duerme dentro del handler (la cola es única y atendería tarde a los clientes).
 - **Vista segura al LLM:** el JSON de producto que se inyecta en el contexto (`catalog.llm_product_json`) **excluye campos internos** (`commission`, `commission_currency`): lo que entra al prompt puede repetirse al cliente. Ver `01_arquitectura.md` §6.1.
-- **Límite diario por grupo:** el scheduler consulta `broadcast_posts` del día por grupo y respeta `max_posts_per_day` + rango `[min_interval_min, max_interval_min]` de jitter. `status = 'BLOCKED'` es la lista negra explícita.
+- **Límites y recurrencia:** el scheduler consulta `broadcast_posts` por grupo; respeta `max_posts_per_day` (tope de seguridad del día, America/Havana) y el jitter `[min_interval_s, max_interval_s]` en segundos. Cada campaña se republica `repeat_passes` veces por grupo dentro de un ciclo de `repeat_window_days` días (ventana anclada a America/Havana); al completar el ciclo la campaña queda `SCHEDULED` hasta el inicio del siguiente. `status = 'BLOCKED'` es la lista negra explícita.
 
 ## 4. Caminos de evolución (documentados, NO implementados — ordenados por fase)
 

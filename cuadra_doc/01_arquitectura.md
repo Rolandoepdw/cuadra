@@ -1,8 +1,8 @@
 ---
 tipo: arquitectura
 proyecto: Cuadra
-estado: diseño + implementación (Hitos 1–3)
-actualizado: 2026-10-19
+estado: diseño + implementación (Hitos 1–7)
+actualizado: 2026-10-21
 tags: [arquitectura, backend, colas, dashboard, windows]
 ---
 
@@ -60,7 +60,9 @@ cuadra/
 │   │   │   ├── events.py         # auditoría (tabla events)
 │   │   │   ├── errors.py         # errores de dominio
 │   │   │   ├── escalations.py    # escalado al TCP + flujo inverso (Hito 5)
-│   │   │   └── (sales, broadcasts)  # Hitos 7/8
+│   │   │   ├── broadcasts.py     # grupos, campañas, render y estrategia (Hito 7)
+│   │   │   ├── settings.py       # settings mutables + defaults de difusión
+│   │   │   └── sales.py          # Hito 8 (pendiente)
 │   │   ├── channels/
 │   │   │   ├── __init__.py       # registry de adaptadores (get_adapter)
 │   │   │   ├── base.py           # interfaz Channel (Protocol)
@@ -81,9 +83,11 @@ cuadra/
 │   │   │   ├── routes_dashboard.py  # salud + resumen
 │   │   │   ├── routes_catalog.py    # CRUD catálogo
 │   │   │   ├── routes_llm.py        # start/stop/restart del LLM
+│   │   │   ├── routes_broadcasts.py # grupos, campañas, send-now, log
+│   │   │   ├── routes_settings.py   # estrategia de difusión
 │   │   │   └── routes_debug.py      # endpoints de desarrollo
 │   │   └── scheduler/
-│   │       ├── broadcasts.py    # APScheduler + jitter (Hito 7)
+│   │       ├── broadcasts.py    # APScheduler + topes/intervalos (Hito 7)
 │   │       └── maintenance.py   # timeouts de escalado (Hito 5)
 │   ├── migrations/             # SQL numerados (001_init.sql, …)
 │   ├── models/                 # GGUF (gitignored)
@@ -114,6 +118,9 @@ class Channel(Protocol):
 Los mensajes entrantes se normalizan a un evento interno (`channel`, `identifier`,
 `type`, `body_or_path`, `sender`) — del cual cuelga todo el pipeline de negocio.
 **Fase 2 = implementar `channels/whatsapp.py` y registrarla; nada más.**
+
+- `channels/telegram_user.py` (Telethon) es un adaptador de **salida** para difusiones: `get_sender('bot'|'userbot')` elige la identidad de cada grupo (default `userbot`; `bot` inactivo). La sesión se crea una vez con `backend/scripts/telegram_login.py` y se guarda en `data/` (gitignored). Solo grupos/canales son destinos; las comunidades no se modelan.
+- `api/routes_broadcasts.py` expone grupos, campañas, `send-now` y el log de envíos.
 
 ## 4. Pipeline de un mensaje entrante (cliente)
 
@@ -159,11 +166,11 @@ devuelve `source: customer|supplier`.
 - **Whisper corre en `run_in_executor`** (4 hilos CPU, no bloquea el event loop). Máximo 1 transcripción a la vez para no pelear por CPU con el LLM.
 - **Prioridades:** respuestas a clientes (10) > consultas a TCP (50) > difusiones (100).
 - **Timeout de escalado TCP:** `scheduler/maintenance.check_escalation_timeouts` corre cada 2 min; un escalado `PENDING` sin respuesta tras `ESCALATION_TIMEOUT_MIN` (30) se reintenta una vez (`ESCALATION_MAX_RETRIES=1`) y, si sigue sin respuesta, se marca `TIMEOUT` para que el operador lo retome. Nunca dejar la conversación colgada.
-- **Delays humanos** aplicados en la salida (job `send_message`): typing de 1–4 s + jitter; fuera de horario (8–21 h, America/Havana) 5–15 s; en difusiones, 3–40 min entre posts. Nunca <1 s.
+- **Delays humanos** aplicados en la salida (job `send_message`): typing de 1–4 s + jitter; fuera de horario (8–21 h, America/Havana) 5–15 s; en difusiones, intervalo configurable por grupo/estrategia (default 5–20 min). Nunca <1 s.
 - **Idempotencia tras apagón:** al arrancar, los trabajos en `IN_PROGRESS` se devuelven a `PENDING` con `attempts + 1` (evento `jobs_requeued`). Antes de enviar un mensaje saliente, el worker comprueba si ya existe un evento `message_sent` para ese mensaje; si existe, el trabajo se marca COMPLETED sin reenviar. Queda una ventana residual mínima de doble envío (crash exacto entre el envío y el registro del evento): aceptable para 1:1 y documentada.
 - **Logging:** `logging` con RotatingFileHandler en `data/logs/cuadra.log` (5 MB × 5 archivos). Nivel INFO en producción; DEBUG con variable de entorno. Todo trabajo fallido deja `last_error` + fila en `events`.
 - **Errores del worker:** transitorios (red, modelo caído, Telegram 429) → reintento con backoff exponencial hasta `max_intentos`, luego FALLIDO. Permanentes (payload inválido, producto dado de baja, y `TelegramBadRequest` como "chat not found"/bot bloqueado, mapeado a `PermanentJobError`) → FALLIDO directo + evento `job_failed`, sin backoff infinito. El worker nunca muere sin marcar el trabajo en curso.
-- **Rate limits de canal:** Telethon duerme el `FloodWait` que Telegram pida; la Bot API respeta `RetryAfter`. Ambos aplican también a difusiones (no solo 1:1).
+- **Rate limits de canal:** `FloodWait`/`SlowModeWait` (Telethon) y `RetryAfter` (Bot API) se convierten en error transitorio y el worker aplica backoff; no se duerme dentro del handler para no bloquear respuestas a clientes. Aplica también a difusiones.
 
 ## 6. llama.cpp y Whisper — configuración operativa
 
@@ -244,13 +251,15 @@ Reglas:
 | General | mensajes hoy, conversaciones activas, latencia media LLM/STT, cola | — |
 | Conversaciones | historial en vivo, estados, duración, escalados abiertos | — |
 | Catálogo | CRUD TCPs → productos → imágenes (subida) | ✅ |
-| Grupos | CRUD de grupos de difusión (canal, destino, topes, intervalos) y categorías; asignar categorías aceptadas por grupo y categoría por producto | ✅ |
+| Grupos | CRUD de grupos de difusión (canal, destino, zonas, identidad, topes, intervalos) y catálogos de categorías y zonas; asignar categorías y zonas por grupo, y categoría por producto | ✅ |
+| Estrategia | Tope diario e intervalo por defecto; aplicar a grupos nuevos o a todos | ✅ |
 | Difusiones | programadas, próximas (jitter visible), enviadas, fallidas, y **log de envíos por grupo** | programar/cancelar |
 | Auditoría | eventos del sistema, jobs fallidos, reintentos | — |
 | Salud | RAM/VRAM, uptime, estado del LLM (llama.cpp: corriendo/modelo), tamaño de BD | — |
 
-- **Curaduría de grupos = 100% operador (nunca el bot):** el panel Grupos es donde se registran grupos manualmente (nombre, invite/chat id, categorías permitidas, tope diario, intervalos). El scheduler solo publica en grupos activos cuya categoría coincida con la del producto; producto sin categoría → solo grupos sin restricción. Ver `02_modelo_datos.md` §3 y `00_decisiones.md` §7.1.
-- Endpoints mínimos: `GET /api/health`, `GET /api/summary`; CRUD de catálogo `GET/POST/PATCH/DELETE /api/categories`, `/api/suppliers`, `/api/products` (+ `POST /api/products/{id}/images`, `PUT /api/products/{id}/main-image`, `DELETE /api/products/{id}/images/{image_id}`); LLM `GET /api/llm/status`, `GET /api/llm/models`, `POST /api/llm/start|stop|restart`; y (Hitos 5–8) `GET /api/conversations`, `GET/POST/PATCH/DELETE /api/broadcast-groups` y `/api/categories`, `GET/POST /api/broadcasts`, `GET /api/broadcast-posts`, `GET /api/audit`, `GET /api/sales` (Fase 1 solo lectura). Las imágenes se sirven en `GET /media/<local_path>` (sin PIN).
+- **Curaduría de grupos = 100% operador (nunca el bot):** el panel Grupos registra manualmente nombre, invite/chat id, zonas, identidad (`userbot` default), categorías permitidas, tope diario e intervalos. El scheduler solo publica en grupos activos cuya categoría coincida con la del producto; producto sin categoría → solo grupos sin restricción. No se modelan comunidades; solo grupos/canales. Ver `02_modelo_datos.md` §3 y `00_decisiones.md` §7.1–7.2.
+- **Publicación manual hoy, autopublicación después:** el operador elige producto/plantilla/grupos; el scheduler solo decide cuándo. La selección futura producto × grupo × franja será determinista (reglas + scoring), nunca por LLM. El panel Estrategia configura los defaults; ver `00_decisiones.md` §7.2.
+- Endpoints mínimos: `GET /api/health`, `GET /api/summary`; CRUD de catálogo `GET/POST/PATCH/DELETE /api/categories`, `/api/suppliers`, `/api/products` (+ `POST /api/products/{id}/images`, `PUT /api/products/{id}/main-image`, `DELETE /api/products/{id}/images/{image_id}`); LLM `GET /api/llm/status`, `GET /api/llm/models`, `POST /api/llm/start|stop|restart`; difusiones `GET/POST/PATCH/DELETE /api/broadcast-groups`, `GET/POST/PATCH /api/broadcasts`, `POST /api/broadcasts/{id}/send-now`, `GET /api/broadcasts/{id}/posts`, estrategia `GET/PUT /api/settings/broadcast`; y (Hitos 5-8) `GET /api/conversations`, `GET /api/audit`, `GET /api/sales` (Fase 1 solo lectura). Las imágenes se sirven en `GET /media/<local_path>` (sin PIN).
 
 ## 9. Riesgos conocidos
 

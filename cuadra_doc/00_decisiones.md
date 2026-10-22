@@ -2,7 +2,7 @@
 tipo: decisiones
 proyecto: Cuadra — Gestor de Ventas con IA Local
 estado: cerrado (fase de diseño)
-actualizado: 2026-10-19
+actualizado: 2026-10-21
 tags: [decisiones, constraints, stack, fases]
 ---
 
@@ -58,8 +58,8 @@ Documento fuente de verdad. Todo lo que se decida posteriormente debe alinearse 
 2. **Línea secundaria** dedicada al bot; si se banea, se rota. La línea principal nunca se toca.
 3. **Calentamiento** de línea nueva: primera semana solo conversaciones reales, pocas salientes.
 4. **Sesión estable:** una sola IP/dispositivo; no reescanear el QR seguido.
-5. **Spintax** obligatorio en difusiones (no en 1:1). Jitter de 3–40 min según canal.
-6. **Telegram (Telethon y Bot API):** manejar `FloodWait` durmiendo lo que se pida (Telethon) y `RetryAfter` (Bot API); tope 5–8 posts/día por grupo; respetar reglas de cada grupo. Aplica también a difusiones, no solo a 1:1.
+5. **Spintax** obligatorio en difusiones (no en 1:1). Intervalo configurable por grupo/estrategia en **segundos** (default 300–1200 s). Recurrencia: cada campaña se publica `repeat_passes` veces por grupo dentro de un ciclo de `repeat_window_days` días; al completar el ciclo se reinicia.
+6. **Telegram (Telethon y Bot API):** `FloodWait`/`SlowModeWait` y `RetryAfter` se tratan como fallo transitorio con backoff (sin dormir al worker); tope configurable por grupo (default 20 posts/día, ajustable en Estrategia); respetar reglas de cada grupo. Aplica también a difusiones, no solo a 1:1.
 7. Nada de links acortados; tono de marca (precio claro, sin spam) también es anti-ban.
 
 ## 6. Fases
@@ -75,7 +75,7 @@ Los **adaptadores de canal** se diseñan desde Fase 1 con la interfaz pensada pa
 ## 7. Dashboard (Fase 1)
 
 - **Alcance:** lectura completa + **CRUD de catálogo** (TCPs, productos, imágenes) + **CRUD de grupos de difusión y categorías** (curaduría 100% del operador, nunca del bot). Nada de operación manual de conversaciones.
-- **Paneles:** General · Conversaciones · Catálogo · Grupos (difusión) · Difusiones · Auditoría · Salud.
+- **Paneles:** General · Conversaciones · Catálogo · Grupos (difusión) · Difusiones · Estrategia · Auditoría · Salud.
 - **Acceso:** solo LAN (red local del hotspot/laptop). **Con PIN.**
 - **Futuro:** interacción (aprobar ventas, contestar manualmente) — ya previsto en el modelo de datos, no en Fase 1.
 - **¿Web y no Desktop?** El dashboard es web: acceso desde móvil en la misma red sin instalar nada, y los estáticos los sirve el propio FastAPI (cero despliegue extra). Se eligió **React + Vite + TypeScript** (no Flutter): bundle ~141 KB gzip, ecosistema shadcn/Tailwind v4 y sin toolchain Flutter que mantener.
@@ -85,13 +85,25 @@ Los **adaptadores de canal** se diseñan desde Fase 1 con la interfaz pensada pa
 - El bot **no busca ni depura grupos** — eso es complejidad y riesgo de baneo injustificados en fases tempranas. La curaduría es 100% manual desde el dashboard.
 - Cada **producto se clasifica en una categoría** (alimentos, tecnología, construcción, hogar…). Cada **grupo declara qué categorías acepta**.
 - **Regla de seguridad anti-baneo:** un producto **sin categoría solo se publica en grupos sin restricción**. Un error de clasificación nunca puede mandar material de construcción a un grupo de alimentos.
-- El scheduler cruza producto × grupos activos × categoría, respeta tope de posts/día e intervalo por grupo, y aplica spintax. Todo queda logueado en `broadcast_posts` (auditable desde el panel).
+- El scheduler cruza la categoría del producto de la campaña con los grupos activos, respeta tope de posts/día e intervalo por grupo, y aplica spintax. Todo queda logueado en `broadcast_posts` (auditable desde el panel).
 - El registro de grupos es **canal-agnóstico** (telegram/whatsapp): el mismo panel servirá en Fase 2 sin cambios.
+
+- **Identidad de envío por grupo (`broadcast_groups.sender`):** default `userbot` (Telethon); `bot` (Bot API) queda inactivo para difusiones y solo se conserva para el futuro. El userbot cubre grupos que rechazan bots. Es una cuenta normal: automatizarla viola los ToS de Telegram, así que riesgo de ban, `FloodWait` y reglas de cada grupo son parte del costo operativo. El userbot también **atiende los 1:1 que entran por esa cuenta**: `conversations.identity` registra por cuál cuenta entró cada chat y la respuesta sale por la misma (`bot` para los chats del bot, `userbot` para los del userbot), evitando respuestas duplicadas. `operator` no es identidad de difusión: es el humano que interviene en un chat 1:1.
+- **Sin comunidades:** las comunidades de Telegram no son destinos publicables; no se modelan. Solo se registran grupos y canales.
+- **Zonas del grupo (`zones` + `group_zones`):** catálogo de zonas con CRUD en el dashboard (Catálogo → Zonas) y relación M:N con los grupos, igual que las categorías. `suppliers.delivery_zone` (texto del TCP) sigue alimentando el token `{zona}`; el cruce de cobertura y el scoring multi-zona quedan para Fase 2.
+
+### 7.2 Publicación: manual ahora, autopublicación después
+
+- **Hito 7 = campaña manual:** el operador elige producto, plantilla y grupos. El scheduler solo decide **cuándo** publicar (elegibilidad, topes, intervalo, jitter); no elige el producto.
+- **Autopublicación futura:** un planificador determinista (reglas + scoring) propondrá producto × grupo × franja. **El LLM no participa en la selección ni en los horarios**; solo conversa y, opcionalmente, redacta variantes.
+- **Estrategia configurable:** el panel Estrategia edita tope diario e intervalos por defecto. Se aplican a grupos nuevos; con `apply_to_groups` se sobrescriben todos. Cada grupo puede seguir sobrescribiéndolos. Defaults provisionales: 20 posts/día, 5–20 min.
+- **ID de producto en la publicación:** el texto incluye `ID: <products.id>` para que el cliente lo cite. Si la plantilla no usa `{id}`, el backend lo agrega al final. El pipeline resuelve un ID explícito (`ID 42`, `#42` o un número solo) **antes** de usar nombre, imagen o NLU. Si el ID no existe, no se reutiliza el producto del contexto.
+- **Bot vs userbot vs humano:** `bot`/`userbot` son identidades de envío y de atención (`conversations.identity`); `operator` es autor humano. Un futuro takeover humano debe pausar la automatización de esa conversación, no cambiar el `sender` de difusiones.
 
 ## 8. Restricciones de ingeniería
 
 - Un solo proceso Python para lógica de negocio, colas, scheduler y API del dashboard.
-- Dependencias mínimas del backend: `fastapi`, `uvicorn`, `aiogram`, `faster-whisper`, `httpx`, `APScheduler` (+ `pillow` para imágenes).
+- Dependencias mínimas del backend: `fastapi`, `uvicorn`, `aiogram`, `faster-whisper`, `httpx`, `APScheduler`, `telethon` (userbot) (+ `pillow` para imágenes).
 - Dashboard (React/Vite) solo en `dashboard/`; el backend nunca depende de él en runtime (solo sirve su build estático).
 - Preferir soluciones nativas de Windows sobre Docker/WSL2 en todo lo posible.
 - **Ventana de contexto del LLM gestionada por el backend** (no "todo el historial"): últimos ~12 mensajes + resumen rodante + contexto estructurado del producto en JSON. Presupuesto objetivo ~2-2.5K tokens. Ver `01_arquitectura.md` §6.1.

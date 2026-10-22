@@ -1,8 +1,8 @@
 ---
 tipo: plan
 proyecto: Cuadra
-estado: en ejecución (Hitos 1–4 hechos)
-actualizado: 2026-10-19
+estado: en ejecución (Hitos 1–7 hechos; Hito 8 pendiente)
+actualizado: 2026-10-21
 tags: [fase1, plan, build, acceptance]
 ---
 
@@ -52,17 +52,19 @@ tags: [fase1, plan, build, acceptance]
 16. `dashboard/`: scaffold **React + Vite + TypeScript** con Tailwind v4 + shadcn/ui, cliente HTTP con `X-PIN` (fetch central en `lib/api.ts`, PIN en `localStorage`), gate de login y shell lateral.
 17. Paneles MVP ✅: **General** (`GET /api/summary`: mensajes hoy, conversaciones activas, escalados abiertos, latencia media LLM/STT, cola), **Catálogo** (CRUD completo de categorías, TCPs y productos **+ gestión de imágenes**: subir, marcar principal, eliminar), **Salud** (`GET /api/health` + controles del LLM `start|stop|restart`).
 18. Build (`npm run build`, o `build_dashboard.ps1` desde la raíz) → `backend/cuadra/web_dashboard/` (ignorado). Cuadra lo sirve con `StaticFiles` + **fallback SPA** (rutas de cliente devuelven `index.html`); `/media/*` sirve las fotos de producto desde `DATA_DIR`.
-19. **Pendientes (Hitos 7–8 + fase posterior):** Conversaciones (lectura), Grupos (CRUD difusión + categorías + asignación), Difusiones (con log por grupo), Auditoría. El backend ya expone (o expondrá) sus endpoints; solo falta la UI.
+19. **Pendientes (Hito 8 + fase posterior):** Conversaciones (lectura), Auditoría, Ventas. Grupos, Difusiones y Estrategia ya están implementados (Hito 7); el backend expone sus endpoints y el dashboard tiene sus paneles.
 
 **Criterio (MVP, cumplido):** desde el móvil en la red local se ven datos reales en General y Salud, y se administra el catálogo completo (TCPs, productos, categorías e imágenes) sin tocar la BD. *Verificado: core en `0.0.0.0:8321`, `/api/summary` devuelve métricas reales, `/api/products` incluye `main_image_url`, el SPA responde en `/` y `/catalogo`, y el ciclo imagen (subir → `url` `/media/fotos/product_1/img_001.jpg` → descargar `200 image/jpeg`) funciona de punta a punta.*
 
 ### Hito 7 — Grupos, categorías y difusiones Telegram
 19. Migración de tablas `categories`, `broadcast_groups`, `group_categories`, `broadcasts`, `broadcast_group_links`, `broadcast_posts` (ya en `001_init.sql`) + `products.category_id`.
 20. `domain/broadcasts.py`: plantilla con spintax, selección de destinos (auto-match por categoría, con prioridad a `broadcast_group_links` si hay selección manual; producto sin categoría → solo grupos libres), respeto de `max_posts_per_day` e intervalos, estados.
-21. `scheduler/broadcasts.py`: jitter 3–40 min (o el rango del grupo), tope diario por grupo, log en `broadcast_posts`.
-22. `Telethon` opcional (solo si se requieren userbot para grupos que el bot no puede alcanzar); empezar solo con Bot API donde alcance.
+21. `scheduler/broadcasts.py`: intervalo configurable (default 5–20 min), tope diario por grupo, jitter, log en `broadcast_posts`.
+22. `Telethon` (userbot) implementado como **identidad de envío por defecto**: `broadcast_groups.sender = userbot|bot`; sesión creada con `scripts/telegram_login.py`. `bot` queda inactivo/opcional.
 
 **Criterio:** registrando desde el dashboard dos grupos (uno con categoría "alimentos" y uno libre) y 3 productos (con y sin categoría), las difusiones llegan **solo a los grupos que corresponden**, con textos distintos (spintax) y horarios espaciados; el panel muestra el log de envíos por grupo.
+
+> **Estado Hito 7:** backend y dashboard implementados (grupos, categorías, campañas, spintax, topes, jitter, log por grupo, userbot; migración 004 con zona, identidades y defaults; panel Estrategia; ID de producto en el texto). Verificado por API con grupos temporales; pendiente la prueba real en grupos del operador. La **autopublicación** (elegir producto × grupo × franja) no es parte de este hito: será determinista (reglas + scoring), sin LLM en el scheduler. Ver `00_decisiones.md` §7.2.
 
 ### Hito 8 — Ventas (mínimo viable)
 23. `domain/sales.py`: el bot crea `DRAFT → PENDING_APPROVAL` al confirmar TCP + cliente; endpoint para que el operador confirme/cancele/pague desde el dashboard (lectura + botón de aprobación).
@@ -84,6 +86,8 @@ tags: [fase1, plan, build, acceptance]
 ## Fuera de alcance de Fase 1 (explícito)
 
 - WhatsApp (cualquier forma) — Fase 2.
+- Autopublicación (elegir producto × grupo × franja): el Hito 7 es campaña manual. La selección futura será determinista (reglas + scoring), sin LLM.
+- Comunidades de Telegram como destinos: solo grupos y canales.
 - Liquidación/estadísticas avanzadas de comisiones.
 - Operación manual de conversaciones desde el dashboard.
 - Login multiusuario, túnel de acceso remoto, HTTPS.
@@ -98,4 +102,4 @@ tags: [fase1, plan, build, acceptance]
 | Polling de Telegram latencia | Polling corto (1–2 s) es aceptable; webhook solo si algún día hay dominio |
 | Imágenes de catálogo grandes | Comprimir a máx. 1280 px / ~500 KB al subir (el upload es por WiFi local — no consume datos del hotspot; el límite protege disco y los reenvíos por WA de Fase 2) |
 | **Eco de comisiones internas** (visto en prueba real: el TCP escribió "la comisión es de 0.5 USD" y el bot la repitió) | Reforzado `ai/prompts.py`: regla explícita de **ignorar** comisiones/márgenes aunque el interlocutor las mencione, redirigiendo al precio final. Pendiente: validar en conversación real durante el piloto |
-| Guard de instancia única | Hecho en Hito 4 (`cuadra/instance.py`, `data/cuadra.lock`). Ver `07_telegram_setup.md` §6.1 |
+| Guard de instancia única | Hecho en Hito 4 (`cuadra/instance.py`, `data/cuadra.lock`). Ver `01_arquitectura.md` (concurrencia) |
