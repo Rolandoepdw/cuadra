@@ -27,7 +27,7 @@ JPEG_QUALITY = 82
 CURRENCIES = ("USD", "CUP")
 PRODUCT_STATUSES = ("ACTIVE", "OUT_OF_STOCK", "PAUSED", "REMOVED")
 
-_TABLES = ("categories", "suppliers", "products", "product_images")
+_TABLES = ("categories", "zones", "suppliers", "products", "product_images")
 
 
 def _now() -> str:
@@ -117,6 +117,55 @@ def delete_category(conn, category_id: int) -> dict:
     conn.execute("DELETE FROM categories WHERE id = ?", (category_id,))
     conn.commit()
     return {"ok": True, "id": category_id, "deleted": True}
+
+
+# --------------------------------------------------------------------- zones
+
+def list_zones(conn, active: bool | None = None) -> list[dict]:
+    sql, args = "SELECT * FROM zones", []
+    if active is not None:
+        sql += " WHERE active = ?"
+        args.append(int(active))
+    return [dict(r) for r in conn.execute(sql + " ORDER BY name", args)]
+
+
+def create_zone(conn, data: dict) -> dict:
+    name = _clean_name(data.get("name"), "name")
+    dupe = conn.execute("SELECT 1 FROM zones WHERE name = ?", (name,)).fetchone()
+    _require(dupe is None, f"zone '{name}' already exists")
+    cur = conn.execute(
+        "INSERT INTO zones (name, active) VALUES (?, ?)",
+        (name, int(data.get("active", True))),
+    )
+    conn.commit()
+    return _get(conn, "zones", cur.lastrowid, "zone")
+
+
+def update_zone(conn, zone_id: int, data: dict) -> dict:
+    _get(conn, "zones", zone_id, "zone")
+    fields: dict = {}
+    if "name" in data:
+        name = _clean_name(data["name"], "name")
+        dupe = conn.execute(
+            "SELECT 1 FROM zones WHERE name = ? AND id != ?", (name, zone_id)
+        ).fetchone()
+        _require(dupe is None, f"zone '{name}' already exists")
+        fields["name"] = name
+    if "active" in data:
+        fields["active"] = int(bool(data["active"]))
+    _require(bool(fields), "nothing to update")
+    clause, values = _set_clause(fields)
+    conn.execute(f"UPDATE zones SET {clause} WHERE id = ?", (*values, zone_id))
+    conn.commit()
+    return _get(conn, "zones", zone_id, "zone")
+
+
+def delete_zone(conn, zone_id: int) -> dict:
+    _get(conn, "zones", zone_id, "zone")
+    conn.execute("DELETE FROM group_zones WHERE zone_id = ?", (zone_id,))
+    conn.execute("DELETE FROM zones WHERE id = ?", (zone_id,))
+    conn.commit()
+    return {"ok": True, "id": zone_id, "deleted": True}
 
 
 # ----------------------------------------------------------------- suppliers

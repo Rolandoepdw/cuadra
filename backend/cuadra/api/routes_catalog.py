@@ -12,6 +12,8 @@ from cuadra.api.models import (
     ProductPatch,
     SupplierIn,
     SupplierPatch,
+    ZoneIn,
+    ZonePatch,
 )
 from cuadra.domain import catalog
 
@@ -79,6 +81,30 @@ def update_category(category_id: int, payload: CategoryPatch) -> dict:
 @router.delete("/categories/{category_id}")
 def delete_category(category_id: int) -> dict:
     return _run(catalog.delete_category, category_id)
+
+
+# --------------------------------------------------------------------- zones
+
+
+@router.get("/zones")
+def list_zones(active: bool | None = None) -> list[dict]:
+    return [_out(z) for z in _run(catalog.list_zones, active=active)]
+
+
+@router.post("/zones", status_code=status.HTTP_201_CREATED)
+def create_zone(payload: ZoneIn) -> dict:
+    return _out(_run(catalog.create_zone, payload.model_dump()))
+
+
+@router.patch("/zones/{zone_id}")
+def update_zone(zone_id: int, payload: ZonePatch) -> dict:
+    data = payload.model_dump(exclude_unset=True)
+    return _out(_run(catalog.update_zone, zone_id, data))
+
+
+@router.delete("/zones/{zone_id}")
+def delete_zone(zone_id: int) -> dict:
+    return _run(catalog.delete_zone, zone_id)
 
 
 # ----------------------------------------------------------------- suppliers

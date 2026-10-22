@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { CategoriesTab } from "./categories_tab";
+import { ZonesTab } from "./zones_tab";
 import { TcpTab } from "./tcp_tab";
 import { ProductsTab } from "./products_tab";
 
@@ -8,6 +9,7 @@ const TABS = [
   { id: "products", label: "Productos" },
   { id: "tcp", label: "TCPs" },
   { id: "categories", label: "Categorías" },
+  { id: "zones", label: "Zonas" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -42,6 +44,7 @@ export function CatalogPanel() {
       {tab === "products" && <ProductsTab />}
       {tab === "tcp" && <TcpTab />}
       {tab === "categories" && <CategoriesTab />}
+      {tab === "zones" && <ZonesTab />}
     </div>
   );
 }
