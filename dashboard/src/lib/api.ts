@@ -6,6 +6,7 @@ import type {
   BroadcastGroupPatch,
   BroadcastIn,
   BroadcastPost,
+  BroadcastReevaluate,
   BroadcastStrategy,
   BroadcastStrategyIn,
   Category,
@@ -172,6 +173,8 @@ export const cancelBroadcast = (id: number) =>
   });
 export const sendBroadcastNow = (id: number) =>
   request<Broadcast>(`/api/broadcasts/${id}/send-now`, { method: "POST" });
+export const reevaluateBroadcasts = () =>
+  request<BroadcastReevaluate>("/api/broadcasts/reevaluate", { method: "POST" });
 export const listBroadcastPosts = (id: number) =>
   request<BroadcastPost[]>(`/api/broadcasts/${id}/posts`);
 

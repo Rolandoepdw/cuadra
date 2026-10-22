@@ -86,7 +86,9 @@ Invoke-RestMethod http://127.0.0.1:8321/api/health -Headers @{ "X-PIN" = "0000" 
 > La campaña es recurrente: cada `repeat_window_days` días (panel Estrategia) se
 > republica `repeat_passes` veces por grupo, respetando `max_posts_per_day` y el
 > intervalo en segundos del grupo. Al completar el ciclo queda `SCHEDULED` hasta
-> el siguiente inicio de ventana.
+> el siguiente inicio de ventana. El botón **Reevaluar** (en Difusiones) fuerza
+> esa re-evaluación al instante, sin esperar la fecha programada: si subiste
+> `repeat_passes` y aún hay cupo en el ciclo actual, publica ya.
 
 > Solo grupos y canales. Las comunidades de Telegram no son destinos publicables y no se registran.
 

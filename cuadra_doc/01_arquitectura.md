@@ -120,7 +120,7 @@ Los mensajes entrantes se normalizan a un evento interno (`channel`, `identifier
 **Fase 2 = implementar `channels/whatsapp.py` y registrarla; nada más.**
 
 - `channels/telegram_user.py` (Telethon) es un adaptador de **salida** para difusiones: `get_sender('bot'|'userbot')` elige la identidad de cada grupo (default `userbot`; `bot` inactivo). La sesión se crea una vez con `backend/scripts/telegram_login.py` y se guarda en `data/` (gitignored). Solo grupos/canales son destinos; las comunidades no se modelan.
-- `api/routes_broadcasts.py` expone grupos, campañas, `send-now` y el log de envíos.
+- `api/routes_broadcasts.py` expone grupos, campañas, `send-now`, `reevaluate` y el log de envíos. `reevaluate` re-evalúa las campañas activas ignorando su `next_send_at`: si hay cupo en algún grupo dentro del ciclo actual publica ya (limpia la fecha futura); si no, la vuelve a estacionar. Es manual (botón **Reevaluar** en Difusiones); no hay auto-despertar al arrancar.
 
 ## 4. Pipeline de un mensaje entrante (cliente)
 
@@ -259,7 +259,7 @@ Reglas:
 
 - **Curaduría de grupos = 100% operador (nunca el bot):** el panel Grupos registra manualmente nombre, invite/chat id, zonas, identidad (`userbot` default), categorías permitidas, tope diario e intervalos. El scheduler solo publica en grupos activos cuya categoría coincida con la del producto; producto sin categoría → solo grupos sin restricción. No se modelan comunidades; solo grupos/canales. Ver `02_modelo_datos.md` §3 y `00_decisiones.md` §7.1–7.2.
 - **Publicación manual hoy, autopublicación después:** el operador elige producto/plantilla/grupos; el scheduler solo decide cuándo. La selección futura producto × grupo × franja será determinista (reglas + scoring), nunca por LLM. El panel Estrategia configura los defaults; ver `00_decisiones.md` §7.2.
-- Endpoints mínimos: `GET /api/health`, `GET /api/summary`; CRUD de catálogo `GET/POST/PATCH/DELETE /api/categories`, `/api/suppliers`, `/api/products` (+ `POST /api/products/{id}/images`, `PUT /api/products/{id}/main-image`, `DELETE /api/products/{id}/images/{image_id}`); LLM `GET /api/llm/status`, `GET /api/llm/models`, `POST /api/llm/start|stop|restart`; difusiones `GET/POST/PATCH/DELETE /api/broadcast-groups`, `GET/POST/PATCH /api/broadcasts`, `POST /api/broadcasts/{id}/send-now`, `GET /api/broadcasts/{id}/posts`, estrategia `GET/PUT /api/settings/broadcast`; y (Hitos 5-8) `GET /api/conversations`, `GET /api/audit`, `GET /api/sales` (Fase 1 solo lectura). Las imágenes se sirven en `GET /media/<local_path>` (sin PIN).
+- Endpoints mínimos: `GET /api/health`, `GET /api/summary`; CRUD de catálogo `GET/POST/PATCH/DELETE /api/categories`, `/api/suppliers`, `/api/products` (+ `POST /api/products/{id}/images`, `PUT /api/products/{id}/main-image`, `DELETE /api/products/{id}/images/{image_id}`); LLM `GET /api/llm/status`, `GET /api/llm/models`, `POST /api/llm/start|stop|restart`; difusiones `GET/POST/PATCH/DELETE /api/broadcast-groups`, `GET/POST/PATCH /api/broadcasts`, `POST /api/broadcasts/{id}/send-now`, `POST /api/broadcasts/reevaluate`, `GET /api/broadcasts/{id}/posts`, estrategia `GET/PUT /api/settings/broadcast`; y (Hitos 5-8) `GET /api/conversations`, `GET /api/audit`, `GET /api/sales` (Fase 1 solo lectura). Las imágenes se sirven en `GET /media/<local_path>` (sin PIN).
 
 ## 9. Riesgos conocidos
 

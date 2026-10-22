@@ -502,6 +502,41 @@ def send_now(conn, broadcast_id: int) -> dict:
     return get_broadcast(conn, broadcast_id)
 
 
+def reevaluate_all(conn) -> dict:
+    """Re-check every active campaign ignoring the `next_send_at` gate.
+
+    Used by the dashboard "Reevaluar" action: after the strategy changes (for
+    example raising `repeat_passes`) campaigns parked until the end of the cycle
+    are re-examined immediately, so an available slot is published now instead of
+    waiting for the window to reset. Campaigns with no capacity are re-parked.
+    """
+    summary = {"checked": 0, "queued": 0, "waiting": 0, "failed": 0, "skipped": 0}
+    rows = conn.execute(
+        """SELECT * FROM broadcasts
+           WHERE status IN ('SCHEDULED', 'SENDING')
+           ORDER BY id"""
+    ).fetchall()
+    for row in rows:
+        broadcast = dict(row)
+        summary["checked"] += 1
+        try:
+            outcome = schedule_next(conn, broadcast)
+        except Exception:  # noqa: BLE001 - one bad campaign must not stop the sweep
+            conn.rollback()
+            log.exception("broadcast %s reevaluation failed", broadcast["id"])
+            outcome = "skipped"
+        summary[outcome] = summary.get(outcome, 0) + 1
+    events.log(
+        conn,
+        "dashboard",
+        "broadcasts_reevaluated",
+        entity="settings",
+        details=summary,
+    )
+    conn.commit()
+    return summary
+
+
 def list_posts(conn, broadcast_id: int) -> list[dict]:
     get_broadcast(conn, broadcast_id)
     rows = conn.execute(

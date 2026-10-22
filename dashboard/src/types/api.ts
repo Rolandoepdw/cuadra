@@ -227,6 +227,14 @@ export interface BroadcastStrategyIn extends BroadcastStrategy {
   apply_to_groups?: boolean;
 }
 
+export interface BroadcastReevaluate {
+  checked: number;
+  queued: number;
+  waiting: number;
+  failed: number;
+  skipped: number;
+}
+
 export interface Broadcast {
   id: number;
   channel: BroadcastChannel;

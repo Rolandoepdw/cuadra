@@ -1,7 +1,7 @@
 ﻿import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Plus, Eye, Send, Ban } from "lucide-react";
+import { Plus, Eye, Send, Ban, RefreshCw } from "lucide-react";
 import {
   cancelBroadcast,
   createBroadcast,
@@ -9,6 +9,7 @@ import {
   listBroadcastPosts,
   listBroadcasts,
   listProducts,
+  reevaluateBroadcasts,
   sendBroadcastNow,
 } from "@/lib/api";
 import type {
@@ -58,6 +59,7 @@ export function BroadcastsPanel() {
   const [creating, setCreating] = useState(false);
   const [logFor, setLogFor] = useState<Broadcast | null>(null);
   const [toCancel, setToCancel] = useState<Broadcast | null>(null);
+  const [reevalMsg, setReevalMsg] = useState<string | null>(null);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["broadcasts"] });
@@ -76,6 +78,15 @@ export function BroadcastsPanel() {
   const sendNow = useMutation({
     mutationFn: (id: number) => sendBroadcastNow(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["broadcasts"] }),
+  });
+  const reevaluate = useMutation({
+    mutationFn: () => reevaluateBroadcasts(),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["broadcasts"] });
+      setReevalMsg(
+        `Reevaluadas ${res.checked}: ${res.queued} encoladas, ${res.waiting} siguen en espera, ${res.failed} sin destino.`,
+      );
+    },
   });
 
   const productName = (id: number | null) =>
@@ -167,12 +178,30 @@ export function BroadcastsPanel() {
             Campañas con spintax, filtro por categoría y log por grupo.
           </p>
         </div>
-        <Button onClick={() => setCreating(true)}>
-          <Plus />
-          Nueva difusión
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            disabled={reevaluate.isPending}
+            title="Vuelve a evaluar las difusiones activas ahora, sin esperar la fecha programada."
+            onClick={() => {
+              setReevalMsg(null);
+              reevaluate.mutate();
+            }}
+          >
+            <RefreshCw />
+            {reevaluate.isPending ? "Reevaluando…" : "Reevaluar"}
+          </Button>
+          <Button onClick={() => setCreating(true)}>
+            <Plus />
+            Nueva difusión
+          </Button>
+        </div>
       </div>
 
+      {reevalMsg && <p className="text-sm text-muted-foreground">{reevalMsg}</p>}
+      {reevaluate.error && (
+        <p className="text-sm text-destructive">{(reevaluate.error as Error).message}</p>
+      )}
       {save.error && <p className="text-sm text-destructive">{(save.error as Error).message}</p>}
       {sendNow.error && <p className="text-sm text-destructive">{(sendNow.error as Error).message}</p>}
       {cancel.error && <p className="text-sm text-destructive">{(cancel.error as Error).message}</p>}

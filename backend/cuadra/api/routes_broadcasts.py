@@ -88,6 +88,11 @@ def update_broadcast(broadcast_id: int, payload: BroadcastPatch) -> dict:
     raise HTTPException(status.HTTP_400_BAD_REQUEST, "unsupported status change")
 
 
+@router.post("/broadcasts/reevaluate")
+def reevaluate_broadcasts() -> dict:
+    return _run(broadcasts.reevaluate_all)
+
+
 @router.post("/broadcasts/{broadcast_id}/send-now")
 def send_now(broadcast_id: int) -> dict:
     return _run(broadcasts.send_now, broadcast_id)
