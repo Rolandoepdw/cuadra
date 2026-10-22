@@ -17,6 +17,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+$OutputEncoding = [Console]::OutputEncoding
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $backend = Join-Path $root "backend"
 $python = Join-Path $backend ".venv\Scripts\python.exe"

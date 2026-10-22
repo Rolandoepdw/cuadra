@@ -5,6 +5,8 @@
 # as a static SPA (see main.py). Run this after any frontend change.
 
 $ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+$OutputEncoding = [Console]::OutputEncoding
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $dashboard = Join-Path $root "dashboard"
 
