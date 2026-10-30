@@ -70,6 +70,7 @@ export interface Health {
   uptime_s: number;
   database: { integrity: string; migrations: string[]; size_bytes: number };
   job_queue: number;
+  pacing: PacingState;
   llm: {
     provider: string;
     status: string;
@@ -87,6 +88,16 @@ export interface Health {
   telegram_channel: string;
   telegram_user: TelegramUserStatus;
   debug: boolean;
+}
+
+export interface PacingState {
+  sender: string;
+  min_gap_s: number;
+  last_action_at: string | null;
+  blocked_until: string | null;
+  next_action_at: string;
+  wait_s: number;
+  reason: "ready" | "gap" | "cooldown";
 }
 
 export interface TelegramUserStatus {

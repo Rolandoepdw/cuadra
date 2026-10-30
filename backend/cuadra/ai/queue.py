@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
 from cuadra import config, db
+from cuadra.channels import rate_limit
 from cuadra.domain import events
 
 log = logging.getLogger("cuadra.queue")
@@ -32,17 +33,35 @@ class PermanentJobError(Exception):
 
 
 class RateLimited(TimeoutError):
-    """Telegram asked us to wait before the next action.
+    """The sender must wait before the next action.
 
-    `retry_after` is Telegram's own FloodWait seconds. When `account` is true
-    the cooldown applies to the whole sender (every group), not just this job.
-    Subclasses TimeoutError so existing handlers keep treating it as transient.
+    Two very different cases share this exception:
+
+    - A real Telegram limit (FloodWait/PeerFlood): ``penalize=True``. It is
+      counted in ``rate_limit_hits`` and can exhaust ``max_hits``.
+    - Local pacing (the human-like gap) or a pre-flight cooldown guard:
+      ``penalize=False``. The job is parked until ``retry_at`` without
+      consuming attempts or rate-limit hits; it is not a failure.
+
+    When `account` is true the cooldown applies to the whole sender (every
+    group), not just this job. Subclasses TimeoutError so existing handlers
+    keep treating it as transient.
     """
 
-    def __init__(self, retry_after: float, message: str, *, account: bool = True):
+    def __init__(
+        self,
+        retry_after: float,
+        message: str,
+        *,
+        account: bool = True,
+        penalize: bool = True,
+        retry_at: datetime | None = None,
+    ):
         super().__init__(message)
         self.retry_after = max(1.0, float(retry_after or 0))
         self.account = bool(account)
+        self.penalize = bool(penalize)
+        self.retry_at = retry_at
 
 
 def register_handler(job_type: str, handler: Handler) -> None:
@@ -127,16 +146,22 @@ def requeue_in_progress() -> int:
         conn.close()
 
 
-def _claim(conn) -> dict | None:
-    """Take the next ready PENDING job (priority first, then FIFO)."""
-    row = conn.execute(
-        """SELECT * FROM jobs
-           WHERE status = 'PENDING'
-             AND (next_retry_at IS NULL OR next_retry_at <= ?)
-           ORDER BY priority, id
-           LIMIT 1""",
-        (_now(),),
-    ).fetchone()
+def _claim(conn, *, allow_broadcast: bool = True) -> dict | None:
+    """Take the next ready PENDING job (priority first, then FIFO).
+
+    ``allow_broadcast=False`` is used while the userbot is inside its global
+    pacing/cooldown window: broadcasts stay parked instead of being claimed,
+    hitting the gap and being counted as rate-limit failures. Other jobs keep
+    flowing, so customer replies are not blocked by bulk traffic.
+    """
+    query = """SELECT * FROM jobs
+               WHERE status = 'PENDING'
+                 AND (next_retry_at IS NULL OR next_retry_at <= ?)"""
+    args: list = [_now()]
+    if not allow_broadcast:
+        query += " AND type != 'send_broadcast'"
+    query += " ORDER BY priority, id LIMIT 1"
+    row = conn.execute(query, args).fetchone()
     if row is None:
         return None
     conn.execute(
@@ -155,9 +180,11 @@ def _finish(
     *,
     job_type: str | None = None,
 ) -> None:
+    # A terminal job has no pending retry, and a completed job must not keep
+    # a stale pacing/rate-limit message in `last_error`.
     conn.execute(
         """UPDATE jobs
-           SET status = ?, last_error = COALESCE(?, last_error), updated_at = ?
+           SET status = ?, last_error = ?, next_retry_at = NULL, updated_at = ?
            WHERE id = ?""",
         (state, error, _now(), job_id),
     )
@@ -199,6 +226,30 @@ async def _process(job: dict) -> None:
         finally:
             conn.close()
     except Exception as exc:  # noqa: BLE001 — the worker never dies without marking the job
+        if isinstance(exc, RateLimited) and not exc.penalize:
+            # Local pacing or a pre-flight cooldown guard: park the job, but
+            # do not consume attempts or rate-limit hits, and do not emit a
+            # noisy event. The scheduler/claim gate keeps this rare.
+            retry_at = exc.retry_at or (
+                datetime.now(timezone.utc) + timedelta(seconds=exc.retry_after)
+            )
+            conn = db.connect()
+            try:
+                conn.execute(
+                    """UPDATE jobs
+                       SET status = 'PENDING', next_retry_at = ?,
+                           last_error = ?, updated_at = ?
+                       WHERE id = ?""",
+                    (retry_at.isoformat(), str(exc), _now(), job["id"]),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            log.debug(
+                "job %s deferred until %s: %s", job["id"], retry_at.isoformat(), exc
+            )
+            return
+
         if isinstance(exc, RateLimited):
             log.warning("job %s rate limited: %s", job["id"], exc)
         else:
@@ -272,9 +323,12 @@ async def _process(job: dict) -> None:
 async def _loop() -> None:
     log.info("job queue worker started")
     while not _stop.is_set():
+        # The userbot gap is account-wide. While it is active, leave bulk
+        # broadcasts in the queue and keep serving customer/TCP work.
+        wait = rate_limit.remaining("userbot", config.USERBOT_MIN_SEND_GAP_S)
         conn = db.connect()
         try:
-            job = _claim(conn)
+            job = _claim(conn, allow_broadcast=wait <= 0)
         finally:
             conn.close()
         if job is None:
@@ -309,6 +363,24 @@ def queue_size(conn=None) -> int:
         return conn.execute(
             "SELECT COUNT(*) FROM jobs WHERE status IN ('PENDING','IN_PROGRESS')"
         ).fetchone()[0]
+    finally:
+        if own:
+            conn.close()
+
+
+def has_pending(job_type: str, conn=None) -> bool:
+    """True if a job of this type is queued or running (admission control)."""
+    own = conn is None
+    if own:
+        conn = db.connect()
+    try:
+        row = conn.execute(
+            """SELECT 1 FROM jobs
+               WHERE type = ? AND status IN ('PENDING','IN_PROGRESS')
+               LIMIT 1""",
+            (job_type,),
+        ).fetchone()
+        return row is not None
     finally:
         if own:
             conn.close()

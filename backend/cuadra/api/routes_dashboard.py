@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends
 
 from cuadra import __version__, config, db
 from cuadra.api.auth import require_pin
-from cuadra.channels import telegram as telegram_channel
+from cuadra.channels import rate_limit, telegram as telegram_channel
 from cuadra.channels import telegram_user
 from cuadra.ai import llm, llm_server, queue
 
@@ -43,6 +43,7 @@ async def health() -> dict:
             "size_bytes": db_size,
         },
         "job_queue": jobs,
+        "pacing": rate_limit.snapshot("userbot", config.USERBOT_MIN_SEND_GAP_S),
         "llm": {
             "provider": config.LLM_PROVIDER,
             "status": (await llm.health())["status"],

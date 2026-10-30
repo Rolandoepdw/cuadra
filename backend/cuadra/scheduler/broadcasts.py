@@ -10,6 +10,8 @@ import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from cuadra import config, db
+from cuadra.ai import queue
+from cuadra.channels import rate_limit
 from cuadra.domain import broadcasts
 from cuadra.scheduler import maintenance
 
@@ -18,9 +20,29 @@ log = logging.getLogger("cuadra.scheduler")
 _scheduler: AsyncIOScheduler | None = None
 
 
+def _admission_open(conn) -> tuple[bool, str]:
+    """Ask the sender governor whether a new broadcast may be created.
+
+    The scheduler is the producer: creating a post while the userbot is still
+    inside its pacing window only piles up jobs that will be parked (and, in
+    the old design, wrongly counted as rate-limit failures). MVP policy: at
+    most one broadcast in flight at a time.
+    """
+    wait = rate_limit.remaining("userbot", config.USERBOT_MIN_SEND_GAP_S)
+    if wait > 0:
+        return False, f"userbot busy ({wait:.0f}s)"
+    if queue.has_pending("send_broadcast", conn):
+        return False, "broadcast already in flight"
+    return True, ""
+
+
 def tick() -> None:
     conn = db.connect()
     try:
+        allowed, reason = _admission_open(conn)
+        if not allowed:
+            log.debug("scheduler tick skipped: %s", reason)
+            return
         for broadcast in broadcasts.due_broadcasts(conn):
             try:
                 outcome = broadcasts.schedule_next(conn, broadcast)
@@ -28,6 +50,9 @@ def tick() -> None:
                     log.info(
                         "broadcast %s: post scheduled", broadcast["id"]
                     )
+                    # One post per tick: keep the global gap meaningful and
+                    # avoid a stampede across campaigns.
+                    break
             except Exception:  # noqa: BLE001 - one bad campaign must not stop the tick
                 conn.rollback()
                 log.exception("broadcast %s scheduling failed", broadcast["id"])

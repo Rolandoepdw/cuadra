@@ -1,11 +1,16 @@
-"""Per-account Telegram rate-limit state.
+"""Per-sender Telegram pacing and rate-limit state.
 
-Telegram FloodWait is account-wide: a wait triggered by one group must stop
-every action of that sender. The state lives in SQLite so a core restart cannot
-reset the cooldown and resume hammering the API.
+Two different waits share this state:
 
-Also stores the last successful action so the userbot can keep a human-like
-global gap between sends (independent of each group's interval).
+- ``blocked_until``: a real Telegram punishment (FloodWait/PeerFlood). It is
+  account-wide and is counted as a rate-limit hit by the job queue.
+- ``last_action_at``: the last successful send. It drives the local human-like
+  gap, which is Cuadra's own pacing and must never be treated as a failure.
+
+Keeping both in SQLite means a restart cannot reset the cooldown or resume
+sending too fast. This module is the single source of truth for "when may this
+sender act next"; the scheduler, the queue and the adapters all ask it instead
+of duplicating the rule.
 
 Bookkeeping is best-effort on purpose: a local database hiccup must not turn a
 successful Telegram send into a failed job (which would resend it) nor stop the
@@ -51,22 +56,98 @@ def _get(sender: str) -> dict:
         conn.close()
 
 
+def _next_at(
+    state: dict, min_gap: float, now: datetime
+) -> tuple[datetime, datetime | None, datetime | None]:
+    """Return (next_action_at, blocked_until, last_action_at) in UTC."""
+    next_at = now
+    blocked = _parse(state.get("blocked_until"))
+    if blocked is not None:
+        next_at = max(next_at, blocked)
+    last = _parse(state.get("last_action_at"))
+    if last is not None and min_gap > 0:
+        next_at = max(next_at, last + timedelta(seconds=float(min_gap)))
+    return next_at, blocked, last
+
+
 def remaining(sender: str, min_gap: float = 0.0) -> float:
-    """Seconds until this sender may act again (0 means ready now)."""
+    """Seconds until this sender may act again (0 means ready now).
+
+    Includes both the local gap and any real Telegram cooldown. Callers that
+    need to tell them apart use ``local_gap_remaining``/``cooldown_remaining``.
+    """
     try:
         state = _get(sender)
     except sqlite3.Error:
         log.warning("could not read sender_state for %s", sender, exc_info=True)
         return 0.0
     now = _now()
-    wait = 0.0
-    blocked = _parse(state.get("blocked_until"))
-    if blocked is not None:
-        wait = max(wait, (blocked - now).total_seconds())
+    next_at, _blocked, _last = _next_at(state, min_gap, now)
+    return max(0.0, (next_at - now).total_seconds())
+
+
+def local_gap_remaining(sender: str, min_gap: float) -> float:
+    """Seconds left in the local human-like gap (never a Telegram punishment)."""
+    if min_gap <= 0:
+        return 0.0
+    try:
+        state = _get(sender)
+    except sqlite3.Error:
+        log.warning("could not read sender_state for %s", sender, exc_info=True)
+        return 0.0
+    now = _now()
     last = _parse(state.get("last_action_at"))
-    if last is not None and min_gap > 0:
-        wait = max(wait, (last + timedelta(seconds=float(min_gap)) - now).total_seconds())
-    return max(0.0, wait)
+    if last is None:
+        return 0.0
+    end = last + timedelta(seconds=float(min_gap))
+    return max(0.0, (end - now).total_seconds())
+
+
+def cooldown_remaining(sender: str) -> float:
+    """Seconds left in a real Telegram cooldown (0 means ready now)."""
+    try:
+        state = _get(sender)
+    except sqlite3.Error:
+        log.warning("could not read sender_state for %s", sender, exc_info=True)
+        return 0.0
+    now = _now()
+    blocked = _parse(state.get("blocked_until"))
+    if blocked is None:
+        return 0.0
+    return max(0.0, (blocked - now).total_seconds())
+
+
+def snapshot(sender: str, min_gap: float = 0.0) -> dict:
+    """Small, JSON-friendly view of the sender for the health panel."""
+    try:
+        state = _get(sender)
+    except sqlite3.Error:
+        log.warning("could not read sender_state for %s", sender, exc_info=True)
+        state = {}
+    now = _now()
+    next_at, blocked, last = _next_at(state, min_gap, now)
+    wait = max(0.0, (next_at - now).total_seconds())
+
+    if blocked is not None and blocked > now and blocked >= next_at:
+        reason = "cooldown"
+    elif (
+        last is not None
+        and min_gap > 0
+        and last + timedelta(seconds=float(min_gap)) > now
+    ):
+        reason = "gap"
+    else:
+        reason = "ready"
+
+    return {
+        "sender": sender,
+        "min_gap_s": float(min_gap),
+        "last_action_at": last.isoformat() if last else None,
+        "blocked_until": blocked.isoformat() if blocked else None,
+        "next_action_at": next_at.isoformat(),
+        "wait_s": round(wait, 1),
+        "reason": reason,
+    }
 
 
 def mark_action(sender: str) -> None:

@@ -383,9 +383,14 @@ def _map_error(exc: Exception) -> Exception:
         return RateLimited(seconds, f"telegram rate limit: wait {seconds}s")
     if isinstance(exc, SlowModeWaitError):
         seconds = getattr(exc, "seconds", 0) or 0
-        # Slow mode is per chat; the account itself is not in trouble.
+        # Slow mode is per chat; the account itself is not in trouble. It is
+        # a real Telegram wait, but not an account-wide punishment, so it is
+        # parked without consuming the FloodWait hit budget.
         return RateLimited(
-            seconds, f"telegram slow mode: wait {seconds}s", account=False
+            seconds,
+            f"telegram slow mode: wait {seconds}s",
+            account=False,
+            penalize=False,
         )
     if isinstance(exc, PeerFloodError):
         seconds = config.TELEGRAM_PEER_FLOOD_COOLDOWN_S
@@ -410,13 +415,20 @@ def _map_error(exc: Exception) -> Exception:
 
 
 def _guard_account() -> None:
-    """Refuse to touch Telegram while the account is cooling down."""
-    wait = rate_limit.remaining(_USERBOT_SENDER)
+    """Refuse to touch Telegram while the account is cooling down.
+
+    This is a pre-flight guard: the real FloodWait was already counted when it
+    happened, so the deferral itself does not consume the hit budget.
+    """
+    wait = rate_limit.cooldown_remaining(_USERBOT_SENDER)
     if wait > 0:
         from cuadra.ai.queue import RateLimited
 
         raise RateLimited(
-            wait, f"telegram userbot cooldown: wait {wait:.0f}s", account=False
+            wait,
+            f"telegram userbot cooldown: wait {wait:.0f}s",
+            account=False,
+            penalize=False,
         )
 
 
@@ -493,7 +505,7 @@ async def typing(target: str) -> None:
     client = _client
     if client is None:
         return
-    if rate_limit.remaining(_USERBOT_SENDER) > 0:
+    if rate_limit.cooldown_remaining(_USERBOT_SENDER) > 0:
         # Cosmetic only; never touch Telegram during a cooldown.
         return
     try:

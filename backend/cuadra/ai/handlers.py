@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import random
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from cuadra import channels, config, db
 from cuadra.ai import pipeline, prompts, queue, stt
@@ -24,17 +24,29 @@ def register() -> None:
 def _respect_userbot_gap(sender) -> None:
     """Park the job while the userbot is inside its global human-like gap.
 
-    Kept at the handler (not inside send_text/send_image) so a multi-part
-    broadcast checks once and a retry never re-sends the image by accident.
+    This is Cuadra's own pacing, not a Telegram punishment: it is marked
+    ``penalize=False`` so the queue parks the job without consuming attempts
+    or rate-limit hits. Kept at the handler (not inside send_text/send_image)
+    so a multi-part broadcast checks once and a retry never re-sends the image
+    by accident.
     """
     from cuadra.channels import rate_limit, telegram_user
 
     if sender is not telegram_user:
         return
-    wait = rate_limit.remaining("userbot", config.USERBOT_MIN_SEND_GAP_S)
+    wait = rate_limit.local_gap_remaining(
+        "userbot", config.USERBOT_MIN_SEND_GAP_S
+    )
     if wait > 0:
+        # Absolute retry time with a small margin, so the next wake-up lands
+        # after the gap instead of exactly on its edge.
+        retry_at = datetime.now(timezone.utc) + timedelta(seconds=wait + 0.25)
         raise queue.RateLimited(
-            wait, f"userbot send gap: wait {wait:.0f}s", account=False
+            wait,
+            f"userbot send gap: wait {wait:.0f}s",
+            account=False,
+            penalize=False,
+            retry_at=retry_at,
         )
 
 

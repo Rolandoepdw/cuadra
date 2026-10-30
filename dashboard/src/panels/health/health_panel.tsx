@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Play, Square, RotateCw, Cpu, Check } from "lucide-react";
 import { getHealth, getLlmModels, getLlmStatus, llmAction, setLlmCtx, setLlmModel } from "@/lib/api";
-import { formatBytes, formatUptime } from "@/lib/format";
+import { formatBytes, formatDateTime, formatUptime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/confirm_dialog";
+import type { PacingState } from "@/types/api";
 
 export function HealthPanel() {
   const qc = useQueryClient();
@@ -115,6 +116,8 @@ export function HealthPanel() {
             <span className="ml-2 text-sm text-muted-foreground">trabajos pendientes</span>
           </CardContent>
         </Card>
+
+        <PacingCard pacing={data.pacing} />
       </div>
 
       <ModelCard
@@ -157,6 +160,38 @@ export function HealthPanel() {
         onConfirm={() => confirmAction && action.mutate({ action: confirmAction })}
       />
     </div>
+  );
+}
+
+const PACING_LABELS: Record<PacingState["reason"], string> = {
+  ready: "listo",
+  gap: "ritmo local",
+  cooldown: "cooldown",
+};
+
+function PacingCard({ pacing }: { pacing: PacingState }) {
+  const waiting = pacing.wait_s > 0;
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium text-muted-foreground">Ritmo de envío</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Badge variant={pacing.reason === "ready" ? "success" : pacing.reason === "cooldown" ? "destructive" : "warning"}>
+            {PACING_LABELS[pacing.reason]}
+          </Badge>
+          <Badge variant="outline" title="Separación mínima entre envíos del userbot">
+            gap {pacing.min_gap_s}s
+          </Badge>
+        </div>
+        <span className="text-sm text-muted-foreground">
+          {waiting
+            ? `Próximo turno ${formatDateTime(pacing.next_action_at)} (${Math.ceil(pacing.wait_s)} s)`
+            : "Próximo turno: disponible ahora"}
+        </span>
+      </CardContent>
+    </Card>
   );
 }
 
