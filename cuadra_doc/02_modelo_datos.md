@@ -1,8 +1,8 @@
 ---
 tipo: modelo_datos
 proyecto: Cuadra
-estado: implementado (migraciones 001–004)
-actualizado: 2026-10-21
+estado: implementado (migraciones 001–010)
+actualizado: 2026-10-30
 tags: [sqlite, schema, ventas, comisiones]
 ---
 
@@ -56,11 +56,11 @@ Verbatim en `backend/migrations/001_init.sql`. Resumen de referencia:
 | `broadcast_posts` | Log auditable de cada publicación (una fila por intento) | `status`: `QUEUED`/`SENT`/`FAILED`; `image_path`, `attempts`, `error`, `window_start` |
 | `jobs` | Cola persistente (sobrevive apagones) | `status`: `PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED`; `rate_limit_hits` cuenta aparte los `FloodWait` |
 | `sender_state` | Cooldown global por cuenta de envío y último envío | `sender` (`userbot`), `blocked_until`, `last_action_at`, `reason` |
-| `events` | Auditoría del sistema | `source`: `system`/`bot`/`dashboard`/`scheduler`/`llm`/`stt` |
+| `events` | Auditoría del sistema (fuente de la vista Logs) | `source`: `system`/`bot`/`dashboard`/`scheduler`/`llm`/`stt`; `category`: `publications`/`conversations`/`entities`/`system` |
 | `settings` | Configuración mutable por clave | Defaults de difusión en `broadcast.default_*`; recurrencia en `broadcast.repeat_*` |
 | `schema_migrations` | Runner de migraciones (creada por `db.py`) | — |
 
-> **El esquema ejecutable manda:** la fuente de verdad son las migraciones de `backend/migrations/` aplicadas en orden (`001` base, `002` settings, `003` sender/imágenes, `004` userbot/zona/estrategia, `005` identidad de conversación, `006` ciclos de difusión, `007` zonas, `008` zonas por TCP, `009` rate limits de Telegram). Este documento es el resumen de referencia; si divergen, se corrige el documento.
+> **El esquema ejecutable manda:** la fuente de verdad son las migraciones de `backend/migrations/` aplicadas en orden (`001` base, `002` settings, `003` sender/imágenes, `004` userbot/zona/estrategia, `005` identidad de conversación, `006` ciclos de difusión, `007` zonas, `008` zonas por TCP, `009` rate limits de Telegram, `010` categorías de eventos). Este documento es el resumen de referencia; si divergen, se corrige el documento.
 
 ## 3. Notas de implementación
 
@@ -80,6 +80,7 @@ Verbatim en `backend/migrations/001_init.sql`. Resumen de referencia:
 - **Estrategia configurable:** `settings` guarda `broadcast.default_max_posts_per_day`, `broadcast.default_min_interval_s`, `broadcast.default_max_interval_s`, `broadcast.repeat_passes` y `broadcast.repeat_window_days`. El panel Estrategia los edita y puede aplicar los topes por grupo a todos los grupos. `repeat_passes` = veces que cada campaña se publica en cada grupo dentro del ciclo; `repeat_window_days` = duración del ciclo (al cerrarse, se reinicia el conteo).
 - **Rate limits sin bloquear la cola:** `FloodWait`/`SlowModeWait` (Telethon) y `RetryAfter` (Bot API) se convierten en fallo transitorio para que el worker aplique backoff; nunca se duerme dentro del handler (la cola es única y atendería tarde a los clientes).
 - **Vista segura al LLM:** el JSON de producto que se inyecta en el contexto (`catalog.llm_product_json`) **excluye campos internos** (`commission`, `commission_currency`): lo que entra al prompt puede repetirse al cliente. Ver `01_arquitectura.md` §6.1.
+- **Vista Logs (`events.category`):** `events.log()` calcula la categoría en un solo lugar y la persiste (migración `010` con backfill). Las cuatro ventanas son `publications` (programación/envío de campañas), `conversations` (bot, LLM, STT y flujo TCP), `entities` (cambios CRUD de catálogo, grupos, campañas y estrategia; etiqueta «Cambios») y `system` (cola, rate limits, arranque y gestión del LLM). `GET /api/logs` filtra por categoría, búsqueda y ventana (`1h`/`24h`/`7d`/`all`), y devuelve `label`, `summary`, `severity` y `details` ya humanizados en español para que el dashboard solo renderice.
 - **Límites y recurrencia:** el scheduler consulta `broadcast_posts` por grupo; respeta `max_posts_per_day` (tope de seguridad del día, America/Havana) y el jitter `[min_interval_s, max_interval_s]` en segundos. Cada campaña se republica `repeat_passes` veces por grupo dentro de un ciclo de `repeat_window_days` días (ventana anclada a America/Havana); al completar el ciclo la campaña queda `SCHEDULED` hasta el inicio del siguiente. `status = 'BLOCKED'` es la lista negra explícita.
 
 ## 4. Caminos de evolución (documentados, NO implementados — ordenados por fase)
