@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from cuadra import db
 from cuadra.api.auth import require_pin
 from cuadra.api.models import BroadcastStrategyIn
-from cuadra.domain import broadcasts, settings
+from cuadra.domain import broadcasts, events, settings
 
 router = APIRouter(prefix="/api/settings", dependencies=[Depends(require_pin)])
 
@@ -46,6 +46,13 @@ def set_broadcast_strategy(
             result = broadcasts.apply_strategy_to_all(conn, data)
             return {**_public(result), "groups": result["groups"]}
         values = settings.set_broadcast_defaults(conn, data)
+        events.log(
+            conn,
+            "dashboard",
+            "broadcast_strategy_saved",
+            entity="settings",
+            details={"values": _public(values)},
+        )
         return _public(values)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc

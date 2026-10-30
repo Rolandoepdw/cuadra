@@ -21,6 +21,7 @@ from cuadra.api import (
     routes_dashboard,
     routes_debug,
     routes_llm,
+    routes_logs,
     routes_settings,
 )
 from cuadra.channels import telegram as telegram_channel
@@ -105,6 +106,7 @@ app.include_router(routes_catalog.router)
 app.include_router(routes_broadcasts.router)
 app.include_router(routes_settings.router)
 app.include_router(routes_llm.router)
+app.include_router(routes_logs.router)
 app.include_router(routes_debug.router)
 
 # Product images: /media/<local_path> (e.g. /media/fotos/product_1/img_1.jpg).

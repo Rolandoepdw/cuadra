@@ -16,6 +16,7 @@ from typing import Any
 from PIL import Image, ImageOps
 
 from cuadra import config
+from cuadra.domain import events
 from cuadra.domain.errors import CatalogError, Invalid, NotFound
 
 __all__ = ["CatalogError", "Invalid", "NotFound"]
@@ -81,6 +82,14 @@ def create_category(conn, data: dict) -> dict:
         "INSERT INTO categories (name, active) VALUES (?, ?)",
         (name, int(data.get("active", True))),
     )
+    events.log(
+        conn,
+        "dashboard",
+        "category_created",
+        entity="categories",
+        entity_id=cur.lastrowid,
+        details={"name": name},
+    )
     conn.commit()
     return _get(conn, "categories", cur.lastrowid, "category")
 
@@ -100,12 +109,20 @@ def update_category(conn, category_id: int, data: dict) -> dict:
     _require(bool(fields), "nothing to update")
     clause, values = _set_clause(fields)
     conn.execute(f"UPDATE categories SET {clause} WHERE id = ?", (*values, category_id))
+    events.log(
+        conn,
+        "dashboard",
+        "category_updated",
+        entity="categories",
+        entity_id=category_id,
+        details={"fields": sorted(data)},
+    )
     conn.commit()
     return _get(conn, "categories", category_id, "category")
 
 
 def delete_category(conn, category_id: int) -> dict:
-    _get(conn, "categories", category_id, "category")
+    category = _get(conn, "categories", category_id, "category")
     used = conn.execute(
         "SELECT COUNT(*) FROM products WHERE category_id = ?", (category_id,)
     ).fetchone()[0]
@@ -119,12 +136,21 @@ def delete_category(conn, category_id: int) -> dict:
     )
     conn.execute("DELETE FROM group_categories WHERE category_id = ?", (category_id,))
     conn.execute("DELETE FROM categories WHERE id = ?", (category_id,))
+    unlinked = {"products": used, "groups": len(group_links)}
+    events.log(
+        conn,
+        "dashboard",
+        "category_deleted",
+        entity="categories",
+        entity_id=category_id,
+        details={"name": category["name"], "unlinked": unlinked},
+    )
     conn.commit()
     return {
         "ok": True,
         "id": category_id,
         "deleted": True,
-        "unlinked": {"products": used, "groups": len(group_links)},
+        "unlinked": unlinked,
     }
 
 
@@ -146,6 +172,14 @@ def create_zone(conn, data: dict) -> dict:
         "INSERT INTO zones (name, active) VALUES (?, ?)",
         (name, int(data.get("active", True))),
     )
+    events.log(
+        conn,
+        "dashboard",
+        "zone_created",
+        entity="zones",
+        entity_id=cur.lastrowid,
+        details={"name": name},
+    )
     conn.commit()
     return _get(conn, "zones", cur.lastrowid, "zone")
 
@@ -165,14 +199,30 @@ def update_zone(conn, zone_id: int, data: dict) -> dict:
     _require(bool(fields), "nothing to update")
     clause, values = _set_clause(fields)
     conn.execute(f"UPDATE zones SET {clause} WHERE id = ?", (*values, zone_id))
+    events.log(
+        conn,
+        "dashboard",
+        "zone_updated",
+        entity="zones",
+        entity_id=zone_id,
+        details={"fields": sorted(data)},
+    )
     conn.commit()
     return _get(conn, "zones", zone_id, "zone")
 
 
 def delete_zone(conn, zone_id: int) -> dict:
-    _get(conn, "zones", zone_id, "zone")
+    zone = _get(conn, "zones", zone_id, "zone")
     conn.execute("DELETE FROM group_zones WHERE zone_id = ?", (zone_id,))
     conn.execute("DELETE FROM zones WHERE id = ?", (zone_id,))
+    events.log(
+        conn,
+        "dashboard",
+        "zone_deleted",
+        entity="zones",
+        entity_id=zone_id,
+        details={"name": zone["name"]},
+    )
     conn.commit()
     return {"ok": True, "id": zone_id, "deleted": True}
 
@@ -245,6 +295,14 @@ def create_supplier(conn, data: dict) -> dict:
         if conn.execute("SELECT 1 FROM zones WHERE id = ?", (zone_id,)).fetchone() is None:
             raise Invalid(f"unknown zone id: {zone_id}")
     set_supplier_zones(conn, cur.lastrowid, delivery_zone_ids)
+    events.log(
+        conn,
+        "dashboard",
+        "supplier_created",
+        entity="suppliers",
+        entity_id=cur.lastrowid,
+        details={"name": name, "zones": delivery_zone_ids},
+    )
     conn.commit()
     return get_supplier(conn, cur.lastrowid)
 
@@ -263,7 +321,7 @@ _SUPPLIER_FIELDS = (
 
 
 def update_supplier(conn, supplier_id: int, data: dict) -> dict:
-    _get(conn, "suppliers", supplier_id, "supplier")
+    supplier = _get(conn, "suppliers", supplier_id, "supplier")
     fields: dict = {}
     delivery_zone_ids: list[int] | None = None
     for key in _SUPPLIER_FIELDS:
@@ -291,13 +349,38 @@ def update_supplier(conn, supplier_id: int, data: dict) -> dict:
         )
     if delivery_zone_ids is not None:
         set_supplier_zones(conn, supplier_id, delivery_zone_ids)
+    changed = sorted(
+        set(fields) | ({"delivery_zone_ids"} if delivery_zone_ids is not None else set())
+    )
+    events.log(
+        conn,
+        "dashboard",
+        "supplier_updated",
+        entity="suppliers",
+        entity_id=supplier_id,
+        details={"name": supplier["name"], "fields": changed},
+    )
     conn.commit()
     return get_supplier(conn, supplier_id)
 
 
 def delete_supplier(conn, supplier_id: int) -> dict:
     """Soft delete: sales and history reference this row."""
-    return update_supplier(conn, supplier_id, {"active": False})
+    supplier = _get(conn, "suppliers", supplier_id, "supplier")
+    conn.execute(
+        "UPDATE suppliers SET active = 0, updated_at = ? WHERE id = ?",
+        (_now(), supplier_id),
+    )
+    events.log(
+        conn,
+        "dashboard",
+        "supplier_deleted",
+        entity="suppliers",
+        entity_id=supplier_id,
+        details={"name": supplier["name"], "active": False},
+    )
+    conn.commit()
+    return get_supplier(conn, supplier_id)
 
 
 def list_supplier_zones(conn, supplier_id: int) -> list[dict]:
@@ -482,12 +565,20 @@ def create_product(conn, data: dict) -> dict:
     cur = conn.execute(
         f"INSERT INTO products ({cols}) VALUES ({marks})", tuple(fields.values())
     )
+    events.log(
+        conn,
+        "dashboard",
+        "product_created",
+        entity="products",
+        entity_id=cur.lastrowid,
+        details={"name": fields["name"], "supplier_id": fields["supplier_id"]},
+    )
     conn.commit()
     return get_product(conn, cur.lastrowid)
 
 
 def update_product(conn, product_id: int, data: dict) -> dict:
-    _get(conn, "products", product_id, "product")
+    product = _get(conn, "products", product_id, "product")
     fields = _validate_product_fields(conn, data, partial=True)
     _require(bool(fields), "nothing to update")
     clause, values = _set_clause(fields)
@@ -495,13 +586,34 @@ def update_product(conn, product_id: int, data: dict) -> dict:
         f"UPDATE products SET {clause}, updated_at = ? WHERE id = ?",
         (*values, _now(), product_id),
     )
+    events.log(
+        conn,
+        "dashboard",
+        "product_updated",
+        entity="products",
+        entity_id=product_id,
+        details={"name": product["name"], "fields": sorted(data)},
+    )
     conn.commit()
     return get_product(conn, product_id)
 
 
 def delete_product(conn, product_id: int) -> dict:
     """Soft delete: sales reference this row."""
-    update_product(conn, product_id, {"status": "REMOVED"})
+    product = _get(conn, "products", product_id, "product")
+    conn.execute(
+        "UPDATE products SET status = 'REMOVED', updated_at = ? WHERE id = ?",
+        (_now(), product_id),
+    )
+    events.log(
+        conn,
+        "dashboard",
+        "product_deleted",
+        entity="products",
+        entity_id=product_id,
+        details={"name": product["name"], "status": "REMOVED"},
+    )
+    conn.commit()
     return {"ok": True, "id": product_id, "status": "REMOVED"}
 
 
@@ -541,6 +653,14 @@ def add_image(conn, product_id: int, data: bytes) -> dict:
         "VALUES (?, ?, ?, ?)",
         (product_id, rel.as_posix(), int(is_main), sort_order),
     )
+    events.log(
+        conn,
+        "dashboard",
+        "product_image_added",
+        entity="product_images",
+        entity_id=cur.lastrowid,
+        details={"product_id": product_id, "is_main": is_main, "sort_order": sort_order},
+    )
     conn.commit()
     return _get(conn, "product_images", cur.lastrowid, "image")
 
@@ -562,6 +682,14 @@ def set_main_image(conn, product_id: int, image_id: int) -> dict:
     conn.execute(
         "UPDATE product_images SET is_main = 1 WHERE id = ?", (image_id,)
     )
+    events.log(
+        conn,
+        "dashboard",
+        "product_image_main_set",
+        entity="product_images",
+        entity_id=image_id,
+        details={"product_id": product_id},
+    )
     conn.commit()
     return _get(conn, "product_images", image_id, "image")
 
@@ -577,6 +705,14 @@ def delete_image(conn, product_id: int, image_id: int) -> dict:
                            ORDER BY sort_order LIMIT 1)""",
             (product_id,),
         )
+    events.log(
+        conn,
+        "dashboard",
+        "product_image_deleted",
+        entity="product_images",
+        entity_id=image_id,
+        details={"product_id": product_id},
+    )
     conn.commit()
     abs_path = config.DATA_DIR / image["local_path"]
     try:

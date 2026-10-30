@@ -14,9 +14,10 @@ interface DataTableProps<T> {
   columns: ColumnDef<T, unknown>[];
   data: T[];
   empty?: ReactNode;
+  onRowClick?: (row: T) => void;
 }
 
-export function DataTable<T>({ columns, data, empty }: DataTableProps<T>) {
+export function DataTable<T>({ columns, data, empty, onRowClick }: DataTableProps<T>) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const table = useReactTable({
     data,
@@ -63,7 +64,14 @@ export function DataTable<T>({ columns, data, empty }: DataTableProps<T>) {
             </tr>
           ) : (
             table.getRowModel().rows.map((row) => (
-              <tr key={row.id} className={cn("border-b last:border-0 hover:bg-muted/30")}>
+              <tr
+                key={row.id}
+                onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+                className={cn(
+                  "border-b last:border-0 hover:bg-muted/30",
+                  onRowClick && "cursor-pointer",
+                )}
+              >
                 {row.getVisibleCells().map((cell) => (
                   <td key={cell.id} className="px-4 py-2.5 align-middle">
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}

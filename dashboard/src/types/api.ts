@@ -290,3 +290,33 @@ export interface BroadcastIn {
   product_id?: number | null;
   group_ids?: number[];
 }
+
+// ---------------------------------------------------------------------- logs
+
+export type LogCategory = "publications" | "conversations" | "entities" | "system";
+export type LogSeverity = "info" | "success" | "warning" | "error";
+export type LogWindow = "1h" | "24h" | "7d" | "all";
+
+export interface LogEntry {
+  id: number;
+  created_at: string;
+  category: LogCategory;
+  source: string;
+  type: string;
+  label: string;
+  summary: string;
+  severity: LogSeverity;
+  entity: string | null;
+  entity_id: number | null;
+  entity_label: string | null;
+  details: Record<string, unknown>;
+}
+
+export interface LogList {
+  items: LogEntry[];
+  total: number;
+  counts: Record<LogCategory, number>;
+  category_labels: Record<LogCategory, string>;
+  window: LogWindow;
+  generated_at: string;
+}

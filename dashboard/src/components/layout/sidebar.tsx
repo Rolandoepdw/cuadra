@@ -5,6 +5,7 @@ import {
   LogOut,
   Megaphone,
   Package,
+  ScrollText,
   SlidersHorizontal,
   Users,
 } from "lucide-react";
@@ -18,6 +19,7 @@ const items = [
   { to: "/groups", label: "Grupos", icon: Users, end: false },
   { to: "/broadcasts", label: "Difusiones", icon: Megaphone, end: false },
   { to: "/strategy", label: "Estrategia", icon: SlidersHorizontal, end: false },
+  { to: "/logs", label: "Logs", icon: ScrollText, end: false },
   { to: "/health", label: "Salud", icon: Activity, end: false },
 ];
 

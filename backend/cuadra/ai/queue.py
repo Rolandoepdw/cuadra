@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
 from cuadra import config, db
+from cuadra.domain import events
 
 log = logging.getLogger("cuadra.queue")
 
@@ -113,10 +114,12 @@ def requeue_in_progress() -> int:
         )
         recovered = cur.rowcount
         if recovered:
-            conn.execute(
-                """INSERT INTO events (source, type, entity, details_json)
-                   VALUES ('system', 'jobs_requeued', 'jobs', ?)""",
-                (json.dumps({"count": recovered}),),
+            events.log(
+                conn,
+                "system",
+                "jobs_requeued",
+                entity="jobs",
+                details={"count": recovered},
             )
         conn.commit()
         return recovered
@@ -144,21 +147,30 @@ def _claim(conn) -> dict | None:
     return dict(row)
 
 
-def _finish(conn, job_id: int, state: str, error: str | None = None) -> None:
+def _finish(
+    conn,
+    job_id: int,
+    state: str,
+    error: str | None = None,
+    *,
+    job_type: str | None = None,
+) -> None:
     conn.execute(
         """UPDATE jobs
            SET status = ?, last_error = COALESCE(?, last_error), updated_at = ?
            WHERE id = ?""",
         (state, error, _now(), job_id),
     )
-    conn.execute(
-        """INSERT INTO events (source, type, entity, entity_id, details_json)
-           VALUES ('system', ?, 'jobs', ?, ?)""",
-        (
-            "job_completed" if state == "COMPLETED" else "job_failed",
-            job_id,
-            json.dumps({"error": error} if error else {}, ensure_ascii=False),
-        ),
+    details = {"job_type": job_type} if job_type else {}
+    if error:
+        details["error"] = error
+    events.log(
+        conn,
+        "system",
+        "job_completed" if state == "COMPLETED" else "job_failed",
+        entity="jobs",
+        entity_id=job_id,
+        details=details,
     )
     conn.commit()
 
@@ -173,6 +185,7 @@ async def _process(job: dict) -> None:
                 job["id"],
                 "FAILED",
                 f"no handler registered for job type '{job['type']}'",
+                job_type=job["type"],
             )
         finally:
             conn.close()
@@ -182,7 +195,7 @@ async def _process(job: dict) -> None:
         await handler(payload)
         conn = db.connect()
         try:
-            _finish(conn, job["id"], "COMPLETED")
+            _finish(conn, job["id"], "COMPLETED", job_type=job["type"])
         finally:
             conn.close()
     except Exception as exc:  # noqa: BLE001 — the worker never dies without marking the job
@@ -203,6 +216,20 @@ async def _process(job: dict) -> None:
                            WHERE id = ?""",
                         (hits, retry_at, str(exc), _now(), job["id"]),
                     )
+                    events.log(
+                        conn,
+                        "system",
+                        "job_rate_limited",
+                        entity="jobs",
+                        entity_id=job["id"],
+                        details={
+                            "job_type": job["type"],
+                            "hit": hits,
+                            "max_hits": config.QUEUE_RATE_LIMIT_MAX_HITS,
+                            "wait_s": round(delay),
+                            "retry_at": retry_at,
+                        },
+                    )
                     conn.commit()
                     log.warning(
                         "job %s rate limit hit %s/%s; retry in %.0fs",
@@ -212,7 +239,9 @@ async def _process(job: dict) -> None:
                         delay,
                     )
                 else:
-                    _finish(conn, job["id"], "FAILED", str(exc))
+                    _finish(
+                        conn, job["id"], "FAILED", str(exc), job_type=job["type"]
+                    )
                     _mark_post_failed(job, str(exc))
                 return
             transient = isinstance(exc, (TimeoutError, ConnectionError, OSError)) and not isinstance(
@@ -231,7 +260,9 @@ async def _process(job: dict) -> None:
                     "job %s transient failure, retry scheduled: %s", job["id"], exc
                 )
             else:
-                _finish(conn, job["id"], "FAILED", str(exc))
+                _finish(
+                    conn, job["id"], "FAILED", str(exc), job_type=job["type"]
+                )
                 if not isinstance(exc, PermanentJobError):
                     _mark_post_failed(job, str(exc))
         finally:

@@ -15,6 +15,9 @@ import type {
   Health,
   LlmModelsResponse,
   LlmStatus,
+  LogCategory,
+  LogList,
+  LogWindow,
   Product,
   ProductImage,
   ProductIn,
@@ -199,6 +202,25 @@ export const listBroadcastPosts = (id: number) =>
 
 export const getBroadcastStrategy = () =>
   request<BroadcastStrategy>("/api/settings/broadcast");
+
+// ------------------------------------------------------------------------ logs
+
+export const listLogs = (
+  params: {
+    category?: LogCategory;
+    search?: string;
+    window?: LogWindow;
+    limit?: number;
+    offset?: number;
+  } = {},
+) => {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== "") qs.set(k, String(v));
+  }
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return request<LogList>(`/api/logs${suffix}`);
+};
 
 export const setBroadcastStrategy = (body: BroadcastStrategyIn) =>
   request<BroadcastStrategy & { groups?: number }>(

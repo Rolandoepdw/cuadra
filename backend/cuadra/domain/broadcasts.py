@@ -271,14 +271,18 @@ def create_group(conn, data: dict) -> dict:
         "broadcast_group_created",
         entity="broadcast_groups",
         entity_id=cur.lastrowid,
-        details={"target": fields["target"], "sender": fields.get("sender", "userbot")},
+        details={
+            "name": fields["name"],
+            "target": fields["target"],
+            "sender": fields.get("sender", "userbot"),
+        },
     )
     conn.commit()
     return get_group(conn, cur.lastrowid)
 
 
 def update_group(conn, group_id: int, data: dict) -> dict:
-    get_group(conn, group_id)
+    group = get_group(conn, group_id)
     fields = _validate_group(conn, data, partial=True)
     category_ids = (
         _validate_categories(conn, data.get("category_ids"))
@@ -311,7 +315,7 @@ def update_group(conn, group_id: int, data: dict) -> dict:
         "broadcast_group_updated",
         entity="broadcast_groups",
         entity_id=group_id,
-        details={"fields": sorted(data)},
+        details={"name": group["name"], "fields": sorted(data)},
     )
     conn.commit()
     return get_group(conn, group_id)
@@ -344,7 +348,7 @@ def apply_strategy_to_all(conn, data: dict) -> dict:
 
 
 def delete_group(conn, group_id: int) -> dict:
-    get_group(conn, group_id)
+    group = get_group(conn, group_id)
     used = conn.execute(
         "SELECT COUNT(*) FROM broadcast_posts WHERE group_id = ?", (group_id,)
     ).fetchone()[0]
@@ -359,6 +363,7 @@ def delete_group(conn, group_id: int) -> dict:
         "broadcast_group_deleted",
         entity="broadcast_groups",
         entity_id=group_id,
+        details={"name": group["name"]},
     )
     conn.commit()
     return {"ok": True, "id": group_id, "deleted": True}
@@ -561,9 +566,17 @@ def update_broadcast(conn, broadcast_id: int, data: dict) -> dict:
 
 
 def delete_broadcast(conn, broadcast_id: int) -> dict:
-    get_broadcast(conn, broadcast_id)
+    broadcast = get_broadcast(conn, broadcast_id)
     conn.execute("DELETE FROM broadcast_group_links WHERE broadcast_id = ?", (broadcast_id,))
     conn.execute("DELETE FROM broadcasts WHERE id = ?", (broadcast_id,))
+    events.log(
+        conn,
+        "dashboard",
+        "broadcast_deleted",
+        entity="broadcasts",
+        entity_id=broadcast_id,
+        details={"channel": broadcast["channel"], "groups": broadcast["group_count"]},
+    )
     conn.commit()
     return {"ok": True, "id": broadcast_id, "deleted": True}
 
@@ -883,6 +896,7 @@ def schedule_next(conn, broadcast: dict) -> str:
         details={
             "post_id": post_id,
             "group_id": group["id"],
+            "group_name": group["name"],
             "sender": group["sender"],
             "next_send_at": next_at.strftime("%Y-%m-%d %H:%M:%S"),
             "window_start": window_start,
@@ -913,7 +927,11 @@ def record_result(conn, post_id: int, status: str, error: str | None = None) -> 
     """Record the outcome of a queued post without creating a duplicate row."""
     _require(status in ("SENT", "FAILED"), "invalid post status")
     row = conn.execute(
-        "SELECT broadcast_id, group_id FROM broadcast_posts WHERE id = ?", (post_id,)
+        """SELECT p.broadcast_id, p.group_id, g.name AS group_name
+           FROM broadcast_posts p
+           LEFT JOIN broadcast_groups g ON g.id = p.group_id
+           WHERE p.id = ?""",
+        (post_id,),
     ).fetchone()
     _require(row is not None, f"broadcast post {post_id} not found")
     conn.execute(
@@ -931,6 +949,7 @@ def record_result(conn, post_id: int, status: str, error: str | None = None) -> 
         details={
             "post_id": post_id,
             "group_id": row["group_id"],
+            "group_name": row["group_name"],
             "status": status,
             "error": error,
         },

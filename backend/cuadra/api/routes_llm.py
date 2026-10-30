@@ -14,8 +14,10 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from cuadra import db
 from cuadra.ai import llm_server
 from cuadra.api.auth import require_pin
+from cuadra.domain import events
 
 log = logging.getLogger("cuadra.llm_api")
 
@@ -45,6 +47,15 @@ async def _run(func, *args):
         raise _fail(exc) from exc
 
 
+def _log(event_type: str, details: dict | None = None) -> None:
+    """Record a manual LLM action in the audit trail (system window)."""
+    conn = db.connect()
+    try:
+        events.log(conn, "system", event_type, entity="llm", details=details)
+    finally:
+        conn.close()
+
+
 @router.get("/status")
 async def llm_status() -> dict:
     return llm_server.status()
@@ -65,12 +76,16 @@ async def llm_start(choice: ModelChoice | None = None) -> dict:
             llm_server.reset_ctx()
         return llm_server.start(choice.model if choice else None)
 
-    return await _run(_start)
+    result = await _run(_start)
+    _log("llm_started", {"model": result.get("model")})
+    return result
 
 
 @router.post("/stop")
 async def llm_stop() -> dict:
-    return await _run(llm_server.stop)
+    result = await _run(llm_server.stop)
+    _log("llm_stopped")
+    return result
 
 
 @router.post("/restart")
@@ -80,7 +95,9 @@ async def llm_restart(choice: ModelChoice | None = None) -> dict:
         llm_server.reset_ctx()
         return llm_server.restart(choice.model if choice else None)
 
-    return await _run(_restart)
+    result = await _run(_restart)
+    _log("llm_restarted", {"model": result.get("model")})
+    return result
 
 
 @router.post("/model")
@@ -103,7 +120,9 @@ async def llm_set_model(choice: ModelChoice) -> dict:
         llm_server.set_active_model(choice.model)
         return llm_server.status()
 
-    return await _run(_switch)
+    result = await _run(_switch)
+    _log("llm_model_changed", {"model": choice.model})
+    return result
 
 
 @router.post("/ctx")
@@ -133,4 +152,6 @@ async def llm_set_ctx(choice: CtxChoice) -> dict:
             return llm_server.restart()
         return llm_server.status()
 
-    return await _run(_apply)
+    result = await _run(_apply)
+    _log("llm_ctx_changed", {"ctx": ctx})
+    return result
