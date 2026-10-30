@@ -71,7 +71,12 @@ export const getHealth = () => request<Health>("/api/health");
 
 // ------------------------------------------------------------------ categories
 
-export const listCategories = () => request<Category[]>("/api/categories");
+export const listCategories = (params?: { active?: boolean }) => {
+  const qs = new URLSearchParams();
+  if (params?.active) qs.set("active", "true");
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return request<Category[]>(`/api/categories${suffix}`);
+};
 export const createCategory = (body: CategoryIn) =>
   request<Category>("/api/categories", { method: "POST", body: JSON.stringify(body) });
 export const updateCategory = (id: number, body: CategoryPatch) =>

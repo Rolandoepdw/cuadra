@@ -48,7 +48,10 @@ export function GroupsPanel() {
     queryKey: ["broadcast-groups"],
     queryFn: () => listBroadcastGroups(),
   });
-  const { data: categories = [] } = useQuery({ queryKey: ["categories"], queryFn: listCategories });
+  const { data: categories = [] } = useQuery({
+    queryKey: ["categories"],
+    queryFn: () => listCategories({ active: true }),
+  });
   const { data: zones = [] } = useQuery({ queryKey: ["zones"], queryFn: listZones });
   const { data: strategy } = useQuery({
     queryKey: ["broadcast-strategy"],

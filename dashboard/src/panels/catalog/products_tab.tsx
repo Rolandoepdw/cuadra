@@ -35,7 +35,10 @@ export function ProductsTab() {
   const qc = useQueryClient();
   const { data = [], isLoading } = useQuery({ queryKey: ["products"], queryFn: () => listProducts() });
   const { data: suppliers = [] } = useQuery({ queryKey: ["suppliers"], queryFn: listSuppliers });
-  const { data: categories = [] } = useQuery({ queryKey: ["categories"], queryFn: listCategories });
+  const { data: categories = [] } = useQuery({
+    queryKey: ["categories"],
+    queryFn: () => listCategories({ active: true }),
+  });
 
   const [editing, setEditing] = useState<Product | null>(null);
   const [creating, setCreating] = useState(false);

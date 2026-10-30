@@ -20,7 +20,7 @@ import {
 
 export function CategoriesTab() {
   const qc = useQueryClient();
-  const { data = [], isLoading } = useQuery({ queryKey: ["categories"], queryFn: listCategories });
+  const { data = [], isLoading } = useQuery({ queryKey: ["categories"], queryFn: () => listCategories() });
   const [editing, setEditing] = useState<Category | null>(null);
   const [creating, setCreating] = useState(false);
   const [toDelete, setToDelete] = useState<Category | null>(null);

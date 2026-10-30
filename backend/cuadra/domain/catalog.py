@@ -109,14 +109,23 @@ def delete_category(conn, category_id: int) -> dict:
     used = conn.execute(
         "SELECT COUNT(*) FROM products WHERE category_id = ?", (category_id,)
     ).fetchone()[0]
-    _require(
-        used == 0,
-        f"category is referenced by {used} product(s); deactivate it instead",
+    group_links = conn.execute(
+        "SELECT group_id FROM group_categories WHERE category_id = ? ORDER BY group_id",
+        (category_id,),
+    ).fetchall()
+    conn.execute(
+        "UPDATE products SET category_id = NULL WHERE category_id = ?",
+        (category_id,),
     )
     conn.execute("DELETE FROM group_categories WHERE category_id = ?", (category_id,))
     conn.execute("DELETE FROM categories WHERE id = ?", (category_id,))
     conn.commit()
-    return {"ok": True, "id": category_id, "deleted": True}
+    return {
+        "ok": True,
+        "id": category_id,
+        "deleted": True,
+        "unlinked": {"products": used, "groups": len(group_links)},
+    }
 
 
 # --------------------------------------------------------------------- zones
