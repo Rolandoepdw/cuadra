@@ -575,13 +575,15 @@ def _product_context(conn, product_id: int | None) -> tuple[dict, dict | None]:
             "SELECT name FROM categories WHERE id = ?", (product["category_id"],)
         ).fetchone()
     price = product["price"]
+    supplier_zones = catalog.get_supplier_delivery_zones(conn, product["supplier_id"])
+    delivery_zone = ", ".join(z["name"] for z in supplier_zones) if supplier_zones else "Todas"
     return (
         {
             "id": str(product["id"]),
             "producto": product["name"],
             "precio": f"{price:.2f}".rstrip("0").rstrip("."),
             "moneda": product["currency"],
-            "zona": supplier.get("delivery_zone") or "",
+            "zona": delivery_zone,
             "proveedor": supplier.get("business_alias") or supplier["name"],
             "categoria": category["name"] if category else "",
         },

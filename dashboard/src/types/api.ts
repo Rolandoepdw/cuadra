@@ -22,6 +22,7 @@ export interface Supplier {
   whatsapp_phone: string | null;
   telegram_id: string | null;
   delivery_zone: string | null;
+  delivery_zone_ids: number[];
   payment_terms: string | null;
   priority: number;
   notes: string | null;
@@ -168,6 +169,7 @@ export interface SupplierIn {
   whatsapp_phone?: string | null;
   telegram_id?: string | null;
   delivery_zone?: string | null;
+  delivery_zone_ids: number[];
   payment_terms?: string | null;
   priority?: number;
   notes?: string | null;

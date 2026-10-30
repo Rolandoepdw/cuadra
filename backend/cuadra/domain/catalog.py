@@ -184,11 +184,32 @@ def list_suppliers(
         args += [like, like, like]
     if where:
         sql += " WHERE " + " AND ".join(where)
-    return [dict(r) for r in conn.execute(sql + " ORDER BY priority, name", args)]
+    rows = [dict(r) for r in conn.execute(sql + " ORDER BY priority, name", args)]
+    if rows:
+        ids = [int(r["id"]) for r in rows]
+        placeholders = ",".join("?" * len(ids))
+        zones: dict[int, list[int]] = {supplier_id: [] for supplier_id in ids}
+        for link in conn.execute(
+            "SELECT supplier_id, zone_id FROM supplier_delivery_zones"
+            f" WHERE supplier_id IN ({placeholders}) ORDER BY zone_id",
+            ids,
+        ):
+            zones[int(link["supplier_id"])].append(int(link["zone_id"]))
+        for row in rows:
+            row["delivery_zone_ids"] = zones[int(row["id"])]
+    return rows
 
 
 def get_supplier(conn, supplier_id: int) -> dict:
-    return _get(conn, "suppliers", supplier_id, "supplier")
+    supplier = _get(conn, "suppliers", supplier_id, "supplier")
+    supplier["delivery_zone_ids"] = [
+        int(r["zone_id"])
+        for r in conn.execute(
+            "SELECT zone_id FROM supplier_delivery_zones WHERE supplier_id = ? ORDER BY zone_id",
+            (supplier_id,),
+        )
+    ]
+    return supplier
 
 
 def create_supplier(conn, data: dict) -> dict:
@@ -210,8 +231,13 @@ def create_supplier(conn, data: dict) -> dict:
             int(data.get("active", True)),
         ),
     )
+    delivery_zone_ids = sorted({int(v) for v in (data.get("delivery_zone_ids") or [])})
+    for zone_id in delivery_zone_ids:
+        if conn.execute("SELECT 1 FROM zones WHERE id = ?", (zone_id,)).fetchone() is None:
+            raise Invalid(f"unknown zone id: {zone_id}")
+    set_supplier_zones(conn, cur.lastrowid, delivery_zone_ids)
     conn.commit()
-    return _get(conn, "suppliers", cur.lastrowid, "supplier")
+    return get_supplier(conn, cur.lastrowid)
 
 
 _SUPPLIER_FIELDS = (
@@ -230,6 +256,7 @@ _SUPPLIER_FIELDS = (
 def update_supplier(conn, supplier_id: int, data: dict) -> dict:
     _get(conn, "suppliers", supplier_id, "supplier")
     fields: dict = {}
+    delivery_zone_ids: list[int] | None = None
     for key in _SUPPLIER_FIELDS:
         if key not in data:
             continue
@@ -241,19 +268,55 @@ def update_supplier(conn, supplier_id: int, data: dict) -> dict:
             fields["active"] = int(bool(data["active"]))
         else:
             fields[key] = data[key]
-    _require(bool(fields), "nothing to update")
+    if "delivery_zone_ids" in data:
+        delivery_zone_ids = sorted({int(v) for v in (data.get("delivery_zone_ids") or [])})
+        for zone_id in delivery_zone_ids:
+            if conn.execute("SELECT 1 FROM zones WHERE id = ?", (zone_id,)).fetchone() is None:
+                raise Invalid(f"unknown zone id: {zone_id}")
+    _require(bool(fields) or delivery_zone_ids is not None, "nothing to update")
     clause, values = _set_clause(fields)
-    conn.execute(
-        f"UPDATE suppliers SET {clause}, updated_at = ? WHERE id = ?",
-        (*values, _now(), supplier_id),
-    )
+    if fields:
+        conn.execute(
+            f"UPDATE suppliers SET {clause}, updated_at = ? WHERE id = ?",
+            (*values, _now(), supplier_id),
+        )
+    if delivery_zone_ids is not None:
+        set_supplier_zones(conn, supplier_id, delivery_zone_ids)
     conn.commit()
-    return _get(conn, "suppliers", supplier_id, "supplier")
+    return get_supplier(conn, supplier_id)
 
 
 def delete_supplier(conn, supplier_id: int) -> dict:
     """Soft delete: sales and history reference this row."""
     return update_supplier(conn, supplier_id, {"active": False})
+
+
+def list_supplier_zones(conn, supplier_id: int) -> list[dict]:
+    return [
+        dict(r)
+        for r in conn.execute(
+            """SELECT z.* FROM supplier_delivery_zones sz
+               JOIN zones z ON z.id = sz.zone_id
+               WHERE sz.supplier_id = ? ORDER BY z.name""",
+            (supplier_id,),
+        )
+    ]
+
+
+def get_supplier_delivery_zones(conn, supplier_id: int) -> list[dict]:
+    """Zone rows assigned to a supplier (used to render the `{zona}` token)."""
+    return list_supplier_zones(conn, supplier_id)
+
+
+def set_supplier_zones(conn, supplier_id: int, zone_ids: list[int]) -> list[int]:
+    ids = sorted({int(v) for v in (zone_ids or [])})
+    conn.execute("DELETE FROM supplier_delivery_zones WHERE supplier_id = ?", (supplier_id,))
+    for zone_id in ids:
+        conn.execute(
+            "INSERT INTO supplier_delivery_zones (supplier_id, zone_id) VALUES (?, ?)",
+            (supplier_id, zone_id),
+        )
+    return ids
 
 
 def find_supplier_by_telegram_id(conn, telegram_id: str) -> dict | None:

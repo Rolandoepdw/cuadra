@@ -50,6 +50,7 @@ Verbatim en `backend/migrations/001_init.sql`. Resumen de referencia:
 | `group_categories` | Categorías permitidas por grupo (M:N) | — |
 | `zones` | Catálogo de zonas de mensajería | `name` único, `active` |
 | `group_zones` | Zonas asignadas por grupo (M:N) | — |
+| `supplier_delivery_zones` | Zonas de entrega asignadas a cada TCP (M:N) | — |
 | `broadcasts` | Campañas (plantilla con spintax) | `status`: `SCHEDULED`, `SENDING`, `FAILED`, `CANCELLED` (recurrentes: `SCHEDULED` se reprograma cada ciclo; `COMPLETED` quedó obsoleto) |
 | `broadcast_group_links` | Selección manual opcional de grupos | — |
 | `broadcast_posts` | Log auditable de cada publicación (una fila por intento) | `status`: `QUEUED`/`SENT`/`FAILED`; `image_path`, `attempts`, `error`, `window_start` |
@@ -58,7 +59,7 @@ Verbatim en `backend/migrations/001_init.sql`. Resumen de referencia:
 | `settings` | Configuración mutable por clave | Defaults de difusión en `broadcast.default_*`; recurrencia en `broadcast.repeat_*` |
 | `schema_migrations` | Runner de migraciones (creada por `db.py`) | — |
 
-> **El esquema ejecutable manda:** la fuente de verdad son las migraciones de `backend/migrations/` aplicadas en orden (`001` base, `002` settings, `003` sender/imágenes, `004` userbot/zona/estrategia, `005` identidad de conversación, `006` ciclos de difusión, `007` zonas). Este documento es el resumen de referencia; si divergen, se corrige el documento.
+> **El esquema ejecutable manda:** la fuente de verdad son las migraciones de `backend/migrations/` aplicadas en orden (`001` base, `002` settings, `003` sender/imágenes, `004` userbot/zona/estrategia, `005` identidad de conversación, `006` ciclos de difusión, `007` zonas, `008` zonas por TCP). Este documento es el resumen de referencia; si divergen, se corrige el documento.
 
 ## 3. Notas de implementación
 
