@@ -2,7 +2,7 @@
 tipo: setup
 proyecto: Cuadra
 estado: operativo
-actualizado: 2026-10-21
+actualizado: 2026-10-26
 tags: [telegram, userbot, telethon, setup]
 ---
 
@@ -131,18 +131,51 @@ transcribe audio/imagen y responde por la misma cuenta:
 2. Reinicia el core.
 3. Opcional: ejecuta `scripts/telegram_logout.py`.
 
-## 8. Errores
+## 8. Límites de Telegram (anti-flood)
+
+Los `FloodWait` los impone Telegram por cuenta. Cuadra los respeta en lugar de
+insistir:
+
+- `FloodWaitError.seconds` es el tiempo real de espera. La cola aparca el job
+  hasta que expire (más un jitter) y **no consume intentos** (`attempts`).
+- El cooldown es de la cuenta (`sender_state`): un castigo en un grupo detiene
+  **todos** los envíos del userbot, no solo el job que falló.
+- Después de cada envío se guarda `last_action_at`; hay un gap global de 8 s
+  (`CUADRA_USERBOT_MIN_SEND_GAP_S`) entre envíos, además del intervalo del grupo.
+- `PeerFloodError` bloquea la cuenta 1 h (`CUADRA_TELEGRAM_PEER_FLOOD_COOLDOWN_S`).
+- La primera resolución de un grupo guarda su `peer_id` en `broadcast_groups`:
+  los envíos siguientes no vuelven a llamar `ImportChatInviteRequest`.
+- Si un job de difusión muere, su post queda `FAILED`, nunca `QUEUED` para
+  siempre.
+
+Variables de entorno:
+
+| Variable | Default | Uso |
+| --- | --- | --- |
+| `CUADRA_USERBOT_MIN_SEND_GAP_S` | `8` | Gap global entre envíos |
+| `CUADRA_TELEGRAM_PEER_FLOOD_COOLDOWN_S` | `3600` | Bloqueo tras `PeerFloodError` |
+| `CUADRA_QUEUE_RATE_LIMIT_MAX_WAIT_S` | `86400` | Espera máxima que se respeta |
+| `CUADRA_QUEUE_RATE_LIMIT_MAX_HITS` | `20` | Rate limits antes de rendirse |
+| `CUADRA_QUEUE_RATE_LIMIT_JITTER_S` | `30` | Jitter máximo al reprogramar |
+
+Para ver el cooldown actual:
+
+```sql
+SELECT * FROM sender_state WHERE sender = 'userbot';
+```
+
+## 9. Errores
 
 | Síntoma | Solución |
 | --- | --- |
 | `database is locked` | Detén el core antes del login |
 | `authorized False` | Repite el login y completa código/2FA |
 | `No se pudo abrir la sesion` | El core sigue usando el archivo |
-| `FloodWait` | Baja frecuencia/topes; el worker reintenta |
+| `FloodWait` | Normal: se respeta solo (sección 8). Si se repite, baja frecuencia/topes |
 | `ChatWriteForbiddenError` | Revisa permisos, slow mode o expulsión |
 | Badge desconectado | Revisa `.env`, repite login y mira el log |
 
-## 9. Checklist
+## 10. Checklist
 
 - [ ] App de API creada con la cuenta secundaria.
 - [ ] `CUADRA_TELETHON_*` configurado en `backend/.env`.

@@ -11,13 +11,18 @@ with `python scripts/telegram_login.py` while cuadra-core is stopped.
 import asyncio
 import logging
 import re
+import sqlite3
 import uuid
 from pathlib import Path
 
-from cuadra import config
+from cuadra import config, db
 from cuadra.ai import ingest
+from cuadra.channels import rate_limit
 
 log = logging.getLogger("cuadra.telegram_user")
+
+_USERBOT_SENDER = "userbot"
+_entity_cache: dict[str, object] = {}
 
 _client = None
 _me = None
@@ -147,6 +152,9 @@ async def start() -> None:
         str(config.TELETHON_SESSION),
         config.TELETHON_API_ID,
         config.TELETHON_API_HASH,
+        # Never let Telethon silently sleep on a flood wait: the queue needs to
+        # see the error to park every userbot job for the same account.
+        flood_sleep_threshold=0,
     )
     try:
         await client.connect()
@@ -191,6 +199,7 @@ async def stop() -> None:
             log.debug("userbot disconnect failed", exc_info=True)
         _client = None
     _me = None
+    _entity_cache.clear()
     _status.update(
         {"connected": False, "username": None, "user_id": None}
     )
@@ -207,27 +216,109 @@ def _require_client():
     return _client
 
 
+def _lookup_peer(target: str) -> int | None:
+    """Canonical Telethon peer id already stored for this target, if any."""
+    raw = (target or "").strip()
+    if not raw:
+        return None
+    conn = db.connect()
+    try:
+        row = conn.execute(
+            """SELECT peer_id FROM broadcast_groups
+               WHERE target = ? AND peer_id IS NOT NULL LIMIT 1""",
+            (raw,),
+        ).fetchone()
+        return int(row["peer_id"]) if row is not None else None
+    except sqlite3.Error:
+        # Migration 009 may not be applied yet; resolving still works.
+        log.debug("peer_id lookup failed for %s", raw, exc_info=True)
+        return None
+    finally:
+        conn.close()
+
+
+def _remember_entity(target: str, entity) -> None:
+    """Cache an entity in memory and persist its peer id for future sends.
+
+    The second step is what stops `ImportChatInviteRequest` from running on
+    every single message, which is what triggered Telegram's flood waits.
+    """
+    raw = (target or "").strip()
+    if not raw:
+        return
+    _entity_cache[raw] = entity
+    try:
+        from telethon.utils import get_peer_id
+
+        peer_id = int(get_peer_id(entity))
+    except Exception:  # noqa: BLE001 - cache is best-effort
+        log.debug("could not compute peer id for %s", raw, exc_info=True)
+        return
+    _entity_cache[str(peer_id)] = entity
+    conn = db.connect()
+    try:
+        conn.execute(
+            """UPDATE broadcast_groups SET peer_id = ?
+               WHERE target = ? AND (peer_id IS NULL OR peer_id != ?)""",
+            (peer_id, raw, peer_id),
+        )
+        conn.commit()
+    except sqlite3.Error:
+        log.debug("could not persist peer id for %s", raw, exc_info=True)
+    finally:
+        conn.close()
+
+
 async def _resolve(client, target: str):
-    """Resolve @username, numeric id or invite link to a Telethon entity."""
+    """Resolve @username, numeric id or invite link to a Telethon entity.
+
+    Resolution is cached because joining by invite link on every send is an
+    account-level flood signal. A cached peer id is tried first; the invite is
+    imported only when the group has never been resolved before.
+    """
     raw = (target or "").strip()
     if not raw:
         from cuadra.ai.queue import PermanentJobError
 
         raise PermanentJobError("empty group target")
 
+    cached = _entity_cache.get(raw)
+    if cached is not None:
+        return cached
+
+    peer_id = _lookup_peer(raw)
+    if peer_id is not None:
+        cached = _entity_cache.get(str(peer_id))
+        if cached is not None:
+            _entity_cache[raw] = cached
+            return cached
+        try:
+            entity = await client.get_entity(peer_id)
+        except (ValueError, TypeError):
+            log.debug("cached peer %s for %s is stale; resolving again", peer_id, raw)
+        else:
+            _remember_entity(raw, entity)
+            return entity
+
     if _NUMERIC_RE.fullmatch(raw):
-        return await client.get_entity(int(raw))
+        entity = await client.get_entity(int(raw))
+        _remember_entity(raw, entity)
+        return entity
 
     invite = _INVITE_RE.search(raw)
     if invite is not None:
-        return await _resolve_invite(client, invite.group(1))
+        entity = await _resolve_invite(client, invite.group(1))
+        _remember_entity(raw, entity)
+        return entity
 
     try:
-        return await client.get_entity(raw)
+        entity = await client.get_entity(raw)
     except ValueError:
         if raw.startswith("@"):
             raise
-        return await client.get_entity(f"@{raw}")
+        entity = await client.get_entity(f"@{raw}")
+    _remember_entity(raw, entity)
+    return entity
 
 
 async def _resolve_invite(client, invite_hash: str):
@@ -242,6 +333,17 @@ async def _resolve_invite(client, invite_hash: str):
     )
 
     from cuadra.ai.queue import PermanentJobError
+
+    try:
+        info = await client(CheckChatInviteRequest(invite_hash))
+    except (InviteHashExpiredError, InviteHashInvalidError) as exc:
+        raise PermanentJobError(f"invite link is no longer valid: {exc}") from exc
+
+    # ChatInviteAlready carries the chat when the account is a member: never
+    # join again in that case, joining is the action Telegram watches most.
+    chat = getattr(info, "chat", None)
+    if chat is not None:
+        return chat
 
     try:
         updates = await client(ImportChatInviteRequest(invite_hash))
@@ -274,13 +376,22 @@ def _map_error(exc: Exception) -> Exception:
         UserBannedInChannelError,
     )
 
-    from cuadra.ai.queue import PermanentJobError
+    from cuadra.ai.queue import PermanentJobError, RateLimited
 
-    if isinstance(exc, (FloodWaitError, SlowModeWaitError)):
+    if isinstance(exc, FloodWaitError):
         seconds = getattr(exc, "seconds", 0) or 0
-        return TimeoutError(f"telegram rate limit: wait {seconds}s")
+        return RateLimited(seconds, f"telegram rate limit: wait {seconds}s")
+    if isinstance(exc, SlowModeWaitError):
+        seconds = getattr(exc, "seconds", 0) or 0
+        # Slow mode is per chat; the account itself is not in trouble.
+        return RateLimited(
+            seconds, f"telegram slow mode: wait {seconds}s", account=False
+        )
     if isinstance(exc, PeerFloodError):
-        return TimeoutError("telegram peer flood limit; the account needs a cooldown")
+        seconds = config.TELEGRAM_PEER_FLOOD_COOLDOWN_S
+        return RateLimited(
+            seconds, f"telegram peer flood limit: cooling down {seconds:.0f}s"
+        )
     if isinstance(
         exc,
         (
@@ -298,13 +409,41 @@ def _map_error(exc: Exception) -> Exception:
     return exc
 
 
+def _guard_account() -> None:
+    """Refuse to touch Telegram while the account is cooling down."""
+    wait = rate_limit.remaining(_USERBOT_SENDER)
+    if wait > 0:
+        from cuadra.ai.queue import RateLimited
+
+        raise RateLimited(
+            wait, f"telegram userbot cooldown: wait {wait:.0f}s", account=False
+        )
+
+
+def _map_or_cool_down(exc: Exception) -> Exception:
+    """Map a Telethon error and persist any account-wide punishment."""
+    from cuadra.ai.queue import RateLimited
+
+    mapped = _map_error(exc)
+    if isinstance(mapped, RateLimited) and mapped.account:
+        rate_limit.set_cooldown(
+            _USERBOT_SENDER, mapped.retry_after, str(mapped)
+        )
+    return mapped
+
+
 async def send_text(target: str, text: str) -> None:
     client = _require_client()
+    _guard_account()
     try:
         entity = await _resolve(client, target)
         await client.send_message(entity, text, link_preview=False)
     except Exception as exc:  # noqa: BLE001 - mapped below
-        raise _map_error(exc) from exc
+        mapped = _map_or_cool_down(exc)
+        if mapped is exc:
+            raise
+        raise mapped from exc
+    rate_limit.mark_action(_USERBOT_SENDER)
 
 
 async def send_image(target: str, path: str, caption: str | None = None) -> None:
@@ -314,6 +453,7 @@ async def send_image(target: str, path: str, caption: str | None = None) -> None
         from cuadra.ai.queue import PermanentJobError
 
         raise PermanentJobError(f"image not found: {path}")
+    _guard_account()
     try:
         entity = await _resolve(client, target)
         await client.send_file(
@@ -323,7 +463,11 @@ async def send_image(target: str, path: str, caption: str | None = None) -> None
             force_document=False,
         )
     except Exception as exc:  # noqa: BLE001 - mapped below
-        raise _map_error(exc) from exc
+        mapped = _map_or_cool_down(exc)
+        if mapped is exc:
+            raise
+        raise mapped from exc
+    rate_limit.mark_action(_USERBOT_SENDER)
 
 
 async def send_audio(target: str, path: str) -> None:
@@ -333,16 +477,24 @@ async def send_audio(target: str, path: str) -> None:
         from cuadra.ai.queue import PermanentJobError
 
         raise PermanentJobError(f"audio not found: {path}")
+    _guard_account()
     try:
         entity = await _resolve(client, target)
         await client.send_file(entity, str(abs_path), voice_note=True)
     except Exception as exc:  # noqa: BLE001 - mapped below
-        raise _map_error(exc) from exc
+        mapped = _map_or_cool_down(exc)
+        if mapped is exc:
+            raise
+        raise mapped from exc
+    rate_limit.mark_action(_USERBOT_SENDER)
 
 
 async def typing(target: str) -> None:
     client = _client
     if client is None:
+        return
+    if rate_limit.remaining(_USERBOT_SENDER) > 0:
+        # Cosmetic only; never touch Telegram during a cooldown.
         return
     try:
         entity = await _resolve(client, target)

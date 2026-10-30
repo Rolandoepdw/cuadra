@@ -69,6 +69,13 @@ TELETHON_SESSION = Path(
     os.environ.get("CUADRA_TELETHON_SESSION", DATA_DIR / "telegram_user")
 )
 
+# Userbot anti-flood safety. Telegram rate limits are per account: after a
+# FloodWait every userbot action must wait, not just the failing job.
+USERBOT_MIN_SEND_GAP_S = float(os.environ.get("CUADRA_USERBOT_MIN_SEND_GAP_S", "8"))
+TELEGRAM_PEER_FLOOD_COOLDOWN_S = float(
+    os.environ.get("CUADRA_TELEGRAM_PEER_FLOOD_COOLDOWN_S", "3600")
+)
+
 # LLM transport. "openai" = any OpenAI-compatible endpoint (Cuadra's own
 # llama.cpp server by default, also LM Studio/vLLM); "ollama" = native /api/chat.
 # For "openai" the base URL ends in /v1; for "ollama" it is the server root.
@@ -112,6 +119,15 @@ WHISPER_LANGUAGE = os.environ.get("CUADRA_WHISPER_LANGUAGE", "")
 # Job queue backoff / priorities (lower number runs first)
 QUEUE_BACKOFF_BASE_S = float(os.environ.get("CUADRA_QUEUE_BACKOFF_BASE_S", "5"))
 QUEUE_BACKOFF_MAX_S = float(os.environ.get("CUADRA_QUEUE_BACKOFF_MAX_S", "300"))
+# Rate limits are not ordinary failures: park the job for the time Telegram
+# asks for, do not consume attempts, and give up only after repeated hits.
+QUEUE_RATE_LIMIT_MAX_WAIT_S = float(
+    os.environ.get("CUADRA_QUEUE_RATE_LIMIT_MAX_WAIT_S", "86400")
+)
+QUEUE_RATE_LIMIT_MAX_HITS = int(os.environ.get("CUADRA_QUEUE_RATE_LIMIT_MAX_HITS", "20"))
+QUEUE_RATE_LIMIT_JITTER_S = float(
+    os.environ.get("CUADRA_QUEUE_RATE_LIMIT_JITTER_S", "30")
+)
 PRIORITY_CUSTOMER = 10
 PRIORITY_TCP = 50
 PRIORITY_BROADCAST = 100

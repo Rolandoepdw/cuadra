@@ -8,6 +8,7 @@ exponential backoff; permanent failures are marked FAILED with an audit event.
 import asyncio
 import json
 import logging
+import random
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
@@ -29,6 +30,20 @@ class PermanentJobError(Exception):
     (e.g. Telegram 'chat not found'). The job is marked FAILED immediately."""
 
 
+class RateLimited(TimeoutError):
+    """Telegram asked us to wait before the next action.
+
+    `retry_after` is Telegram's own FloodWait seconds. When `account` is true
+    the cooldown applies to the whole sender (every group), not just this job.
+    Subclasses TimeoutError so existing handlers keep treating it as transient.
+    """
+
+    def __init__(self, retry_after: float, message: str, *, account: bool = True):
+        super().__init__(message)
+        self.retry_after = max(1.0, float(retry_after or 0))
+        self.account = bool(account)
+
+
 def register_handler(job_type: str, handler: Handler) -> None:
     _handlers[job_type] = handler
 
@@ -40,6 +55,34 @@ def _now() -> str:
 def _retry_at(attempts: int) -> str:
     delay = min(config.QUEUE_BACKOFF_MAX_S, config.QUEUE_BACKOFF_BASE_S * (2**attempts))
     return (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat()
+
+
+def _rate_limit_retry_at(exc: RateLimited) -> tuple[str, float]:
+    """Park a rate-limited job for Telegram's wait plus a little jitter."""
+    wait = min(exc.retry_after, config.QUEUE_RATE_LIMIT_MAX_WAIT_S)
+    jitter = min(config.QUEUE_RATE_LIMIT_JITTER_S, max(0.0, wait * 0.1))
+    delay = max(1.0, wait + random.uniform(0.0, jitter))
+    return (datetime.now(timezone.utc) + timedelta(seconds=delay)).isoformat(), delay
+
+
+def _mark_post_failed(job: dict, error: str) -> None:
+    """When a broadcast job dies, do not leave its post stuck in QUEUED."""
+    if job.get("type") != "send_broadcast":
+        return
+    try:
+        payload = json.loads(job["payload_json"])
+        post_id = payload.get("post_id")
+        if post_id is None:
+            return
+        from cuadra.domain import broadcasts
+
+        conn = db.connect()
+        try:
+            broadcasts.record_result(conn, int(post_id), "FAILED", str(error)[:500])
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - bookkeeping must never kill the worker
+        log.exception("could not mark post for failed job %s", job.get("id"))
 
 
 def enqueue(job_type: str, payload: dict, *, priority: int = 100) -> int:
@@ -143,9 +186,35 @@ async def _process(job: dict) -> None:
         finally:
             conn.close()
     except Exception as exc:  # noqa: BLE001 — the worker never dies without marking the job
-        log.exception("job %s failed", job["id"])
+        if isinstance(exc, RateLimited):
+            log.warning("job %s rate limited: %s", job["id"], exc)
+        else:
+            log.exception("job %s failed", job["id"])
         conn = db.connect()
         try:
+            if isinstance(exc, RateLimited):
+                hits = int(job.get("rate_limit_hits") or 0) + 1
+                if hits < config.QUEUE_RATE_LIMIT_MAX_HITS:
+                    retry_at, delay = _rate_limit_retry_at(exc)
+                    conn.execute(
+                        """UPDATE jobs
+                           SET status = 'PENDING', rate_limit_hits = ?,
+                               next_retry_at = ?, last_error = ?, updated_at = ?
+                           WHERE id = ?""",
+                        (hits, retry_at, str(exc), _now(), job["id"]),
+                    )
+                    conn.commit()
+                    log.warning(
+                        "job %s rate limit hit %s/%s; retry in %.0fs",
+                        job["id"],
+                        hits,
+                        config.QUEUE_RATE_LIMIT_MAX_HITS,
+                        delay,
+                    )
+                else:
+                    _finish(conn, job["id"], "FAILED", str(exc))
+                    _mark_post_failed(job, str(exc))
+                return
             transient = isinstance(exc, (TimeoutError, ConnectionError, OSError)) and not isinstance(
                 exc, PermanentJobError
             )
@@ -163,6 +232,8 @@ async def _process(job: dict) -> None:
                 )
             else:
                 _finish(conn, job["id"], "FAILED", str(exc))
+                if not isinstance(exc, PermanentJobError):
+                    _mark_post_failed(job, str(exc))
         finally:
             conn.close()
 

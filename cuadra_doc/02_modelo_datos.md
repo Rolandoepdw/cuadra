@@ -46,7 +46,7 @@ Verbatim en `backend/migrations/001_init.sql`. Resumen de referencia:
 | `messages` | Historial completo (contexto del LLM y auditoría) | `direction`: `INBOUND`/`OUTBOUND`; `author`: `customer`/`bot`/`tcp`/`operator`; `type`: `text`/`audio`/`image`/`document` |
 | `escalations` | Bucle crítico de consulta al TCP | `status`: `PENDING`, `ANSWERED`, `RESOLVED`, `CANCELLED`, `TIMEOUT` |
 | `sales` | Ventas y comisiones | `status`: `DRAFT` → `PENDING_APPROVAL` → `CONFIRMED` → `PAID` \| `CANCELLED`; `source`: `bot`/`operator`; `commission_type`: `FIXED`/`PERCENT` |
-| `broadcast_groups` | Grupos de difusión (canal-agnósticos) | `status`: `ACTIVE`, `PAUSED`, `BLOCKED`; `sender`: `bot`/`userbot` (default `userbot`); topes `max_posts_per_day`, `min/max_interval_s` (segundos) |
+| `broadcast_groups` | Grupos de difusión (canal-agnósticos) | `status`: `ACTIVE`, `PAUSED`, `BLOCKED`; `sender`: `bot`/`userbot` (default `userbot`); topes `max_posts_per_day`, `min/max_interval_s` (segundos); `peer_id` cachea el id de Telethon ya resuelto |
 | `group_categories` | Categorías permitidas por grupo (M:N) | — |
 | `zones` | Catálogo de zonas de mensajería | `name` único, `active` |
 | `group_zones` | Zonas asignadas por grupo (M:N) | — |
@@ -54,12 +54,13 @@ Verbatim en `backend/migrations/001_init.sql`. Resumen de referencia:
 | `broadcasts` | Campañas (plantilla con spintax) | `status`: `SCHEDULED`, `SENDING`, `FAILED`, `CANCELLED` (recurrentes: `SCHEDULED` se reprograma cada ciclo; `COMPLETED` quedó obsoleto) |
 | `broadcast_group_links` | Selección manual opcional de grupos | — |
 | `broadcast_posts` | Log auditable de cada publicación (una fila por intento) | `status`: `QUEUED`/`SENT`/`FAILED`; `image_path`, `attempts`, `error`, `window_start` |
-| `jobs` | Cola persistente (sobrevive apagones) | `status`: `PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED` |
+| `jobs` | Cola persistente (sobrevive apagones) | `status`: `PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED`; `rate_limit_hits` cuenta aparte los `FloodWait` |
+| `sender_state` | Cooldown global por cuenta de envío y último envío | `sender` (`userbot`), `blocked_until`, `last_action_at`, `reason` |
 | `events` | Auditoría del sistema | `source`: `system`/`bot`/`dashboard`/`scheduler`/`llm`/`stt` |
 | `settings` | Configuración mutable por clave | Defaults de difusión en `broadcast.default_*`; recurrencia en `broadcast.repeat_*` |
 | `schema_migrations` | Runner de migraciones (creada por `db.py`) | — |
 
-> **El esquema ejecutable manda:** la fuente de verdad son las migraciones de `backend/migrations/` aplicadas en orden (`001` base, `002` settings, `003` sender/imágenes, `004` userbot/zona/estrategia, `005` identidad de conversación, `006` ciclos de difusión, `007` zonas, `008` zonas por TCP). Este documento es el resumen de referencia; si divergen, se corrige el documento.
+> **El esquema ejecutable manda:** la fuente de verdad son las migraciones de `backend/migrations/` aplicadas en orden (`001` base, `002` settings, `003` sender/imágenes, `004` userbot/zona/estrategia, `005` identidad de conversación, `006` ciclos de difusión, `007` zonas, `008` zonas por TCP, `009` rate limits de Telegram). Este documento es el resumen de referencia; si divergen, se corrige el documento.
 
 ## 3. Notas de implementación
 

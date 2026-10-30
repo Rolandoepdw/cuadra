@@ -21,6 +21,23 @@ def register() -> None:
     queue.register_handler("send_broadcast", send_broadcast)
 
 
+def _respect_userbot_gap(sender) -> None:
+    """Park the job while the userbot is inside its global human-like gap.
+
+    Kept at the handler (not inside send_text/send_image) so a multi-part
+    broadcast checks once and a retry never re-sends the image by accident.
+    """
+    from cuadra.channels import rate_limit, telegram_user
+
+    if sender is not telegram_user:
+        return
+    wait = rate_limit.remaining("userbot", config.USERBOT_MIN_SEND_GAP_S)
+    if wait > 0:
+        raise queue.RateLimited(
+            wait, f"userbot send gap: wait {wait:.0f}s", account=False
+        )
+
+
 async def generate_reply(payload: dict) -> None:
     """Inbound message (text or transcribed audio) -> reply stored + queued to send."""
     conversation_id = payload["conversation_id"]
@@ -175,6 +192,7 @@ async def send_message(payload: dict) -> None:
         return
 
     delay = _human_delay()
+    _respect_userbot_gap(adapter)
     await adapter.typing(target)
     await asyncio.sleep(delay)
 
@@ -249,6 +267,7 @@ async def send_escalation(payload: dict) -> None:
         producto=(product["name"] if product else "un producto del catálogo"),
         pregunta=escalation["question"],
     )
+    _respect_userbot_gap(adapter)
     await adapter.typing(target)
     await asyncio.sleep(_human_delay())
     await adapter.send_text(target, text)
@@ -387,6 +406,8 @@ async def send_broadcast(payload: dict) -> None:
     if sender is None:
         raise queue.PermanentJobError(f"unknown sender '{group['sender']}'")
 
+    _respect_userbot_gap(sender)
+
     abs_image = None
     if image_path:
         candidate = config.DATA_DIR / image_path
@@ -407,10 +428,19 @@ async def send_broadcast(payload: dict) -> None:
             await sender.send_text(group["target"], text)
     except Exception as exc:  # noqa: BLE001 - classified below
         permanent = isinstance(exc, queue.PermanentJobError)
+        rate_limited = isinstance(exc, queue.RateLimited)
         conn = db.connect()
         try:
             if permanent:
                 broadcasts_domain.record_result(conn, post_id, "FAILED", str(exc)[:500])
+            elif rate_limited:
+                # Telegram asked us to wait: keep the post QUEUED and do not
+                # burn its attempts. The queue will retry after the cooldown.
+                conn.execute(
+                    "UPDATE broadcast_posts SET error = ? WHERE id = ?",
+                    (str(exc)[:500], post_id),
+                )
+                conn.commit()
             else:
                 conn.execute(
                     """UPDATE broadcast_posts
@@ -420,7 +450,7 @@ async def send_broadcast(payload: dict) -> None:
                 conn.commit()
         finally:
             conn.close()
-        if permanent:
+        if permanent or rate_limited:
             raise
         if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
             raise
