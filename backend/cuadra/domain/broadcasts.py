@@ -502,6 +502,72 @@ def send_now(conn, broadcast_id: int) -> dict:
     return get_broadcast(conn, broadcast_id)
 
 
+def update_broadcast(conn, broadcast_id: int, data: dict) -> dict:
+    broadcast = get_broadcast(conn, broadcast_id)
+    fields: dict = {}
+    if "template" in data:
+        fields["template"] = _clean_text(data["template"], "template")
+    if "product_id" in data:
+        if data["product_id"] is None:
+            fields["product_id"] = None
+        else:
+            product_id = int(data["product_id"])
+            catalog.get_product(conn, product_id)
+            fields["product_id"] = product_id
+    if "channel" in data and data["channel"] is not None:
+        _require(data["channel"] in CHANNELS, f"'channel' must be one of {CHANNELS}")
+        fields["channel"] = data["channel"]
+    if fields:
+        clause = ", ".join(f"{k} = ?" for k in fields)
+        conn.execute(
+            f"UPDATE broadcasts SET {clause}, updated_at = ? WHERE id = ?",
+            (*fields.values(), _now(), broadcast_id),
+        )
+    group_ids: list[int] = []
+    if "group_ids" in data:
+        group_ids = [int(v) for v in (data.get("group_ids") or [])]
+        if group_ids:
+            placeholders = ", ".join("?" for _ in group_ids)
+            rows = conn.execute(
+                f"SELECT id, channel FROM broadcast_groups WHERE id IN ({placeholders})",
+                group_ids,
+            ).fetchall()
+            found = {r["id"]: r["channel"] for r in rows}
+            missing = [v for v in group_ids if v not in found]
+            _require(not missing, f"unknown group id(s): {missing}")
+            wrong = [v for v in group_ids if found[v] != (broadcast.get("channel") or "telegram")]
+            _require(
+                not wrong,
+                f"group(s) {wrong} do not belong to channel '{broadcast.get('channel') or 'telegram'}'",
+            )
+        conn.execute(
+            "DELETE FROM broadcast_group_links WHERE broadcast_id = ?",
+            (broadcast_id,),
+        )
+        conn.executemany(
+            "INSERT INTO broadcast_group_links (broadcast_id, group_id) VALUES (?, ?)",
+            [(broadcast_id, gid) for gid in group_ids],
+        )
+    events.log(
+        conn,
+        "dashboard",
+        "broadcast_updated",
+        entity="broadcasts",
+        entity_id=broadcast_id,
+        details={"fields": sorted(data), "group_ids": len(group_ids)},
+    )
+    conn.commit()
+    return get_broadcast(conn, broadcast_id)
+
+
+def delete_broadcast(conn, broadcast_id: int) -> dict:
+    get_broadcast(conn, broadcast_id)
+    conn.execute("DELETE FROM broadcast_group_links WHERE broadcast_id = ?", (broadcast_id,))
+    conn.execute("DELETE FROM broadcasts WHERE id = ?", (broadcast_id,))
+    conn.commit()
+    return {"ok": True, "id": broadcast_id, "deleted": True}
+
+
 def reevaluate_all(conn) -> dict:
     """Re-check every active campaign ignoring the `next_send_at` gate.
 

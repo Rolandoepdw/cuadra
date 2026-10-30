@@ -178,6 +178,20 @@ export const cancelBroadcast = (id: number) =>
   });
 export const sendBroadcastNow = (id: number) =>
   request<Broadcast>(`/api/broadcasts/${id}/send-now`, { method: "POST" });
+export const updateBroadcast = (id: number, body: BroadcastIn) => {
+  const payload: BroadcastIn = {
+    channel: body.channel,
+    template: body.template,
+    product_id: body.product_id ?? null,
+    group_ids: body.group_ids ?? [],
+  };
+  return request<Broadcast>(`/api/broadcasts/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+};
+export const deleteBroadcast = (id: number) =>
+  request<{ ok: boolean }>(`/api/broadcasts/${id}`, { method: "DELETE" });
 export const reevaluateBroadcasts = () =>
   request<BroadcastReevaluate>("/api/broadcasts/reevaluate", { method: "POST" });
 export const listBroadcastPosts = (id: number) =>

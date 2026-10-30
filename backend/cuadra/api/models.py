@@ -129,5 +129,11 @@ class BroadcastIn(BaseModel):
 
 
 class BroadcastPatch(BaseModel):
-    status: Literal["CANCELLED"]
+    # Only CANCELLED triggers a state change; the other values are accepted so a
+    # client echoing a full broadcast back does not get a 422.
+    status: Literal["SCHEDULED", "SENDING", "COMPLETED", "FAILED", "CANCELLED"] | None = None
+    template: str | None = Field(default=None, min_length=1, max_length=4096)
+    product_id: int | None = None
+    group_ids: list[int] = Field(default_factory=list)
+    channel: Literal["telegram", "whatsapp"] | None = None
 

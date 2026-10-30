@@ -1,16 +1,18 @@
-﻿import { useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Plus, Eye, Send, Ban, RefreshCw } from "lucide-react";
+import { Plus, Eye, Send, Ban, RefreshCw, Pencil, Trash2 } from "lucide-react";
 import {
   cancelBroadcast,
   createBroadcast,
+  deleteBroadcast,
   listBroadcastGroups,
   listBroadcastPosts,
   listBroadcasts,
   listProducts,
   reevaluateBroadcasts,
   sendBroadcastNow,
+  updateBroadcast,
 } from "@/lib/api";
 import type {
   Broadcast,
@@ -59,12 +61,15 @@ export function BroadcastsPanel() {
   const [creating, setCreating] = useState(false);
   const [logFor, setLogFor] = useState<Broadcast | null>(null);
   const [toCancel, setToCancel] = useState<Broadcast | null>(null);
+  const [toDelete, setToDelete] = useState<Broadcast | null>(null);
+  const [editingBroadcast, setEditingBroadcast] = useState<Broadcast | null>(null);
   const [reevalMsg, setReevalMsg] = useState<string | null>(null);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["broadcasts"] });
     setCreating(false);
     setToCancel(null);
+    setEditingBroadcast(null);
   };
 
   const save = useMutation({
@@ -87,6 +92,17 @@ export function BroadcastsPanel() {
         `Reevaluadas ${res.checked}: ${res.queued} encoladas, ${res.waiting} siguen en espera, ${res.failed} sin destino.`,
       );
     },
+  });
+  const update = useMutation({
+    mutationFn: ({ id, value }: { id: number; value: BroadcastIn }) => updateBroadcast(id, value),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["broadcasts"] });
+      setEditingBroadcast(null);
+    },
+  });
+  const remove = useMutation({
+    mutationFn: (id: number) => deleteBroadcast(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["broadcasts"] }),
   });
 
   const productName = (id: number | null) =>
@@ -163,6 +179,24 @@ export function BroadcastsPanel() {
             >
               <Ban className="text-destructive" />
             </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              title="Editar"
+              disabled={broadcast.status === "CANCELLED"}
+              onClick={() => setEditingBroadcast(broadcast)}
+            >
+              <Pencil />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              title="Eliminar"
+              disabled={broadcast.status === "CANCELLED"}
+              onClick={() => setToDelete(broadcast)}
+            >
+              <Trash2 className="text-destructive" />
+            </Button>
           </div>
         );
       },
@@ -205,6 +239,8 @@ export function BroadcastsPanel() {
       {save.error && <p className="text-sm text-destructive">{(save.error as Error).message}</p>}
       {sendNow.error && <p className="text-sm text-destructive">{(sendNow.error as Error).message}</p>}
       {cancel.error && <p className="text-sm text-destructive">{(cancel.error as Error).message}</p>}
+      {update.error && <p className="text-sm text-destructive">{(update.error as Error).message}</p>}
+      {remove.error && <p className="text-sm text-destructive">{(remove.error as Error).message}</p>}
 
       {isLoading ? (
         <p className="text-muted-foreground">Cargando…</p>
@@ -225,6 +261,17 @@ export function BroadcastsPanel() {
         onSave={(value) => save.mutate(value)}
       />
 
+      <BroadcastForm
+        key={editingBroadcast?.id ?? "new"}
+        open={editingBroadcast !== null}
+        products={products}
+        groups={groups}
+        loading={update.isPending}
+        initial={editingBroadcast ?? undefined}
+        onClose={() => setEditingBroadcast(null)}
+        onSave={(value) => editingBroadcast && update.mutate({ id: editingBroadcast.id, value })}
+      />
+
       {logFor && (
         <BroadcastLog broadcast={logFor} open={logFor !== null} onClose={() => setLogFor(null)} />
       )}
@@ -239,6 +286,17 @@ export function BroadcastsPanel() {
         loading={cancel.isPending}
         onConfirm={() => toCancel && cancel.mutate(toCancel.id)}
       />
+
+      <ConfirmDialog
+        open={toDelete !== null}
+        onOpenChange={(open) => !open && setToDelete(null)}
+        title="Eliminar difusión"
+        description="Se eliminará la campaña y sus asociaciones con grupos; los posts ya publicados se conservan en el log."
+        confirmLabel="Eliminar"
+        destructive
+        loading={remove.isPending}
+        onConfirm={() => toDelete && remove.mutate(toDelete.id)}
+      />
     </div>
   );
 }
@@ -250,6 +308,7 @@ function BroadcastForm({
   loading,
   onClose,
   onSave,
+  initial,
 }: {
   open: boolean;
   products: { id: number; name: string }[];
@@ -257,13 +316,16 @@ function BroadcastForm({
   loading: boolean;
   onClose: () => void;
   onSave: (value: BroadcastIn) => void;
+  initial?: BroadcastIn | null;
 }) {
   const empty: BroadcastIn = { channel: "telegram", template: "", product_id: null, group_ids: [] };
-  const [form, setForm] = useState<BroadcastIn>(empty);
+  const [form, setForm] = useState<BroadcastIn>(
+    initial ? { ...initial, group_ids: initial.group_ids ?? [] } : empty,
+  );
   const [initialized, setInitialized] = useState(false);
 
   if (open && !initialized) {
-    setForm(empty);
+    setForm(initial ? { ...initial, group_ids: initial.group_ids ?? [] } : empty);
     setInitialized(true);
   }
   if (!open && initialized) setInitialized(false);
@@ -280,7 +342,7 @@ function BroadcastForm({
     <Dialog open={open} onOpenChange={(value) => !value && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Nueva difusión</DialogTitle>
+          <DialogTitle>{initial ? "Editar difusión" : "Nueva difusión"}</DialogTitle>
           <DialogDescription>
             El primer envío se programa de inmediato. Luego avanza un grupo por tick según los
             intervalos del grupo.
@@ -353,7 +415,7 @@ function BroadcastForm({
             Cancelar
           </Button>
           <Button onClick={() => onSave(form)} disabled={!form.template.trim() || loading}>
-            {loading ? "..." : "Crear difusión"}
+            {loading ? "..." : initial ? "Guardar cambios" : "Crear difusión"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -455,4 +517,3 @@ function Field({
     </div>
   );
 }
-

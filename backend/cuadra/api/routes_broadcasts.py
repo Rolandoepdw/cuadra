@@ -85,7 +85,11 @@ def get_broadcast(broadcast_id: int) -> dict:
 def update_broadcast(broadcast_id: int, payload: BroadcastPatch) -> dict:
     if payload.status == "CANCELLED":
         return _run(broadcasts.cancel_broadcast, broadcast_id)
-    raise HTTPException(status.HTTP_400_BAD_REQUEST, "unsupported status change")
+    data = payload.model_dump(exclude_unset=True)
+    data.pop("status", None)
+    if not data:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "nothing to update")
+    return _run(broadcasts.update_broadcast, broadcast_id, data)
 
 
 @router.post("/broadcasts/reevaluate")
@@ -96,6 +100,11 @@ def reevaluate_broadcasts() -> dict:
 @router.post("/broadcasts/{broadcast_id}/send-now")
 def send_now(broadcast_id: int) -> dict:
     return _run(broadcasts.send_now, broadcast_id)
+
+
+@router.delete("/broadcasts/{broadcast_id}")
+def delete_broadcast(broadcast_id: int) -> dict:
+    return _run(broadcasts.delete_broadcast, broadcast_id)
 
 
 @router.get("/broadcasts/{broadcast_id}/posts")
