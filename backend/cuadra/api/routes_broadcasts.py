@@ -9,6 +9,7 @@ from cuadra.api.models import (
     BroadcastGroupPatch,
     BroadcastIn,
     BroadcastPatch,
+    BroadcastPublishingIn,
 )
 from cuadra.domain import broadcasts
 from cuadra.domain.errors import DomainError, NotFound
@@ -76,6 +77,16 @@ def create_broadcast(payload: BroadcastIn) -> dict:
     return _run(broadcasts.create_broadcast, payload.model_dump())
 
 
+@router.get("/broadcasts/publishing")
+def get_publishing() -> dict:
+    return _run(broadcasts.publishing_status)
+
+
+@router.put("/broadcasts/publishing")
+def set_publishing(payload: BroadcastPublishingIn) -> dict:
+    return _run(broadcasts.set_publishing, payload.publishing)
+
+
 @router.get("/broadcasts/{broadcast_id}")
 def get_broadcast(broadcast_id: int) -> dict:
     return _run(broadcasts.get_broadcast, broadcast_id)
@@ -83,12 +94,12 @@ def get_broadcast(broadcast_id: int) -> dict:
 
 @router.patch("/broadcasts/{broadcast_id}")
 def update_broadcast(broadcast_id: int, payload: BroadcastPatch) -> dict:
-    if payload.status == "CANCELLED":
-        return _run(broadcasts.cancel_broadcast, broadcast_id)
     data = payload.model_dump(exclude_unset=True)
-    data.pop("status", None)
+    enabled = data.pop("enabled", None)
+    if enabled is not None:
+        _run(broadcasts.set_broadcast_enabled, broadcast_id, bool(enabled))
     if not data:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "nothing to update")
+        return _run(broadcasts.get_broadcast, broadcast_id)
     return _run(broadcasts.update_broadcast, broadcast_id, data)
 
 

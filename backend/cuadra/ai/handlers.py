@@ -397,10 +397,10 @@ async def send_broadcast(payload: dict) -> None:
     finally:
         conn.close()
 
-    if broadcast["status"] == "CANCELLED":
+    if not broadcast.get("enabled", 1):
         conn = db.connect()
         try:
-            broadcasts_domain.record_result(conn, post_id, "FAILED", "broadcast cancelled")
+            broadcasts_domain.record_result(conn, post_id, "FAILED", "broadcast disabled")
         finally:
             conn.close()
         return

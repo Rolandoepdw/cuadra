@@ -733,7 +733,7 @@ DEMO_BROADCASTS = [
     },
 ]
 
-CANCELLED_BROADCASTS = [
+DISABLED_BROADCASTS = [
     {"product": "Mouse Inalámbrico"},
 ]
 
@@ -927,7 +927,14 @@ def _next_send_at(mode: str, index: int) -> str | None:
 
 
 def ensure_broadcast(
-    conn, spec: dict, status: str, mode: str, index: int, dry_run: bool
+    conn,
+    spec: dict,
+    status: str,
+    mode: str,
+    index: int,
+    dry_run: bool,
+    *,
+    enabled: int = 1,
 ) -> tuple[int | None, bool, int]:
     template = spec.get("template") or _template_for(spec["product"])
     row = conn.execute("SELECT id FROM broadcasts WHERE template = ?", (template,)).fetchone()
@@ -954,12 +961,14 @@ def ensure_broadcast(
         broadcast_id = -index - 1
         created = True
     else:
-        next_send_at = _next_send_at(mode, index) if status == "SCHEDULED" else None
+        next_send_at = (
+            _next_send_at(mode, index) if status == "SCHEDULED" and enabled else None
+        )
         cur = conn.execute(
             """INSERT INTO broadcasts
-                   (channel, template, product_id, status, next_send_at)
-               VALUES ('telegram', ?, ?, ?, ?)""",
-            (template, product_id, status, next_send_at),
+                   (channel, template, product_id, status, enabled, next_send_at)
+               VALUES ('telegram', ?, ?, ?, ?, ?)""",
+            (template, product_id, status, enabled, next_send_at),
         )
         broadcast_id = cur.lastrowid
         created = True
@@ -983,7 +992,7 @@ def ensure_broadcast(
         )
         print(
             f"  + broadcast {spec['product']} "
-            f"(status={status}, groups={mode_label})"
+            f"(status={status}, enabled={enabled}, groups={mode_label})"
         )
     return broadcast_id, created, links
 
@@ -1219,9 +1228,9 @@ def main() -> int:
             counts["broadcast_group_links"] += links
             index += 1
 
-        for spec in CANCELLED_BROADCASTS:
+        for spec in DISABLED_BROADCASTS:
             _, created, links = ensure_broadcast(
-                conn, spec, "CANCELLED", mode, index, args.dry_run
+                conn, spec, "SCHEDULED", mode, index, args.dry_run, enabled=0
             )
             counts["broadcasts"] += int(created)
             counts["broadcast_group_links"] += links

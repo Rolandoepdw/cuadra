@@ -99,6 +99,7 @@ Los **adaptadores de canal** se diseñan desde Fase 1 con la interfaz pensada pa
 - **Estrategia configurable:** el panel Estrategia edita tope diario e intervalos por defecto. Se aplican a grupos nuevos; con `apply_to_groups` se sobrescriben todos. Cada grupo puede seguir sobrescribiéndolos. Defaults provisionales: 20 posts/día, 5–20 min.
 - **ID de producto en la publicación:** el texto incluye `ID: <products.id>` para que el cliente lo cite. Si la plantilla no usa `{id}`, el backend lo agrega al final. El pipeline resuelve un ID explícito (`ID 42`, `#42` o un número solo) **antes** de usar nombre, imagen o NLU. Si el ID no existe, no se reutiliza el producto del contexto.
 - **Bot vs userbot vs humano:** `bot`/`userbot` son identidades de envío y de atención (`conversations.identity`); `operator` es autor humano. Un futuro takeover humano debe pausar la automatización de esa conversación, no cambiar el `sender` de difusiones.
+- **Controles de publicación:** pausa global persistente (`broadcast.publishing`) y toggle por campaña (`broadcasts.enabled`), ambos reversibles. La pausa global detiene el scheduler y retira los posts `QUEUED`; «Enviar ahora» la ignora (acción consciente) y «Reevaluar» reanuda y reevalúa. Eliminar es destructivo; `CANCELLED` desaparece del modelo.
 
 ## 8. Restricciones de ingeniería
 

@@ -6,6 +6,7 @@ import type {
   BroadcastGroupPatch,
   BroadcastIn,
   BroadcastPost,
+  BroadcastPublishing,
   BroadcastReevaluate,
   BroadcastStrategy,
   BroadcastStrategyIn,
@@ -174,10 +175,17 @@ export const deleteBroadcastGroup = (id: number) =>
 export const listBroadcasts = () => request<Broadcast[]>("/api/broadcasts");
 export const createBroadcast = (body: BroadcastIn) =>
   request<Broadcast>("/api/broadcasts", { method: "POST", body: JSON.stringify(body) });
-export const cancelBroadcast = (id: number) =>
+export const setBroadcastEnabled = (id: number, enabled: boolean) =>
   request<Broadcast>(`/api/broadcasts/${id}`, {
     method: "PATCH",
-    body: JSON.stringify({ status: "CANCELLED" }),
+    body: JSON.stringify({ enabled }),
+  });
+export const getBroadcastPublishing = () =>
+  request<BroadcastPublishing>("/api/broadcasts/publishing");
+export const setBroadcastPublishing = (publishing: boolean) =>
+  request<BroadcastPublishing>("/api/broadcasts/publishing", {
+    method: "PUT",
+    body: JSON.stringify({ publishing }),
   });
 export const sendBroadcastNow = (id: number) =>
   request<Broadcast>(`/api/broadcasts/${id}/send-now`, { method: "POST" });

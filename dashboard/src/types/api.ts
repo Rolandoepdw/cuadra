@@ -211,7 +211,7 @@ export type ProductPatch = Partial<Omit<ProductIn, "supplier_id">>;
 export type BroadcastChannel = "telegram" | "whatsapp";
 export type GroupStatus = "ACTIVE" | "PAUSED" | "BLOCKED";
 export type Sender = "bot" | "userbot";
-export type BroadcastStatus = "SCHEDULED" | "SENDING" | "COMPLETED" | "FAILED" | "CANCELLED";
+export type BroadcastStatus = "SCHEDULED" | "SENDING" | "COMPLETED" | "FAILED";
 
 export interface BroadcastGroup {
   id: number;
@@ -246,6 +246,12 @@ export interface BroadcastReevaluate {
   waiting: number;
   failed: number;
   skipped: number;
+  resumed: boolean;
+}
+
+export interface BroadcastPublishing {
+  publishing: boolean;
+  queued_dropped?: number;
 }
 
 export interface Broadcast {
@@ -254,6 +260,7 @@ export interface Broadcast {
   template: string;
   product_id: number | null;
   status: BroadcastStatus;
+  enabled: boolean;
   next_send_at: string | null;
   posts_sent: number;
   posts_failed: number;

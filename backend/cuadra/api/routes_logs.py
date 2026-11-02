@@ -36,6 +36,10 @@ LABELS = {
     "broadcast_cycle_complete": "Ciclo de campaña completado",
     "broadcast_send_now": "Envío inmediato solicitado",
     "broadcasts_reevaluated": "Campañas reevaluadas",
+    "broadcast_publishing_paused": "Publicaciones pausadas",
+    "broadcast_publishing_resumed": "Publicaciones reanudadas",
+    "broadcast_enabled": "Campaña habilitada",
+    "broadcast_disabled": "Campaña deshabilitada",
     # conversations
     "reply_generated": "Respuesta generada",
     "message_sent": "Mensaje enviado",
@@ -70,7 +74,6 @@ LABELS = {
     "broadcast_group_deleted": "Grupo eliminado",
     "broadcast_created": "Campaña creada",
     "broadcast_updated": "Campaña actualizada",
-    "broadcast_cancelled": "Campaña cancelada",
     "broadcast_deleted": "Campaña eliminada",
     "broadcast_strategy_saved": "Estrategia guardada",
     "broadcast_strategy_applied": "Estrategia aplicada",
@@ -90,11 +93,14 @@ LABELS = {
 SEVERITIES = {
     "broadcast_posted": "success",
     "broadcast_cycle_complete": "success",
+    "broadcast_publishing_resumed": "success",
     "message_sent": "success",
     "escalation_resolved": "success",
     "job_completed": "success",
     "broadcast_post_failed": "error",
     "job_failed": "error",
+    "broadcast_publishing_paused": "warning",
+    "broadcast_disabled": "warning",
     "broadcast_no_targets": "warning",
     "escalation_retry": "warning",
     "escalation_timeout": "warning",
@@ -236,6 +242,18 @@ class Presenter:
             return f"Campaña #{eid} · {tail}"
         if event_type == "broadcast_send_now":
             return f"Campaña #{eid} · envío inmediato solicitado"
+        if event_type in ("broadcast_publishing_paused", "broadcast_publishing_resumed"):
+            paused = event_type.endswith("_paused")
+            headline = "Publicaciones pausadas" if paused else "Publicaciones reanudadas"
+            dropped = d.get("queued_dropped") or 0
+            return f"{headline} · {dropped} envío(s) retirados" if dropped else headline
+        if event_type in ("broadcast_enabled", "broadcast_disabled"):
+            state = (
+                "habilitada para publicar"
+                if event_type.endswith("_enabled")
+                else "deshabilitada"
+            )
+            return f"Campaña #{eid} · {state}"
         if event_type == "broadcasts_reevaluated":
             return (
                 f"{d.get('checked', 0)} campañas revisadas · "
@@ -390,10 +408,11 @@ class Presenter:
             if _fields(d):
                 parts.append(_fields(d))
             return " · ".join(parts)
-        if event_type == "broadcast_cancelled":
-            return f"Campaña #{eid} cancelada"
         if event_type == "broadcast_deleted":
-            return f"Campaña #{eid} eliminada · {d.get('groups', 0)} grupo(s)"
+            return (
+                f"Campaña #{eid} eliminada · {d.get('groups', 0)} grupo(s) · "
+                f"{d.get('posts', 0)} envío(s)"
+            )
         if event_type in ("broadcast_strategy_saved", "broadcast_strategy_applied"):
             values = d.get("values") or d
             parts = []

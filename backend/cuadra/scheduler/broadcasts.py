@@ -12,7 +12,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from cuadra import config, db
 from cuadra.ai import queue
 from cuadra.channels import rate_limit
-from cuadra.domain import broadcasts
+from cuadra.domain import broadcasts, settings
 from cuadra.scheduler import maintenance
 
 log = logging.getLogger("cuadra.scheduler")
@@ -39,6 +39,9 @@ def _admission_open(conn) -> tuple[bool, str]:
 def tick() -> None:
     conn = db.connect()
     try:
+        if not settings.broadcast_publishing_enabled(conn):
+            log.debug("scheduler tick skipped: publishing paused")
+            return
         allowed, reason = _admission_open(conn)
         if not allowed:
             log.debug("scheduler tick skipped: %s", reason)

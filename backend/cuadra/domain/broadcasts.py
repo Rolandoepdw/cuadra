@@ -11,6 +11,7 @@ Key rules (docs 02 and 04, Hito 7):
   `repeat_passes` times per target group, subject to the group limits.
 """
 
+import json
 import logging
 import random
 import re
@@ -385,6 +386,8 @@ _BROADCAST_SELECT = """
 
 def _broadcast_out(conn, row) -> dict:
     broadcast = dict(row)
+    # SQLite stores the toggle as 0/1; the API exposes it as a boolean.
+    broadcast["enabled"] = bool(broadcast.get("enabled", 1))
     broadcast["group_ids"] = [
         r["group_id"]
         for r in conn.execute(
@@ -456,22 +459,86 @@ def create_broadcast(conn, data: dict) -> dict:
     return get_broadcast(conn, broadcast_id)
 
 
-def cancel_broadcast(conn, broadcast_id: int) -> dict:
-    broadcast = get_broadcast(conn, broadcast_id)
-    _require(
-        broadcast["status"] in ("SCHEDULED", "SENDING"),
-        f"cannot cancel a {broadcast['status']} broadcast",
-    )
+def _withdraw_broadcast_jobs(conn, post_ids: set[int]) -> int:
+    """Fail pending queue jobs that belong to withdrawn posts.
+
+    Jobs already IN_PROGRESS are left alone: at most one broadcast job is in
+    flight, and its handler re-reads the post. If the post was deleted it will
+    fail cleanly; if it already left, no pause can recall it.
+    """
+    if not post_ids:
+        return 0
+    rows = conn.execute(
+        """SELECT id, payload_json FROM jobs
+           WHERE type = 'send_broadcast' AND status = 'PENDING'"""
+    ).fetchall()
+    cancelled = 0
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"])
+            post_id = int(payload.get("post_id"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if post_id not in post_ids:
+            continue
+        conn.execute(
+            """UPDATE jobs
+               SET status = 'FAILED', last_error = ?, next_retry_at = NULL, updated_at = ?
+               WHERE id = ?""",
+            ("withdrawn: broadcast post will not be sent", _now(), row["id"]),
+        )
+        cancelled += 1
+    return cancelled
+
+
+def _drop_queued_posts(conn, broadcast_id: int | None = None) -> int:
+    """Remove QUEUED posts (and their jobs) so no phantom send survives a pause.
+
+    Deleting instead of marking FAILED keeps `_cycle_counts` honest: a withdrawn
+    pass must not count against the repeat quota.
+    """
+    sql = "SELECT id FROM broadcast_posts WHERE status = 'QUEUED'"
+    args: list = []
+    if broadcast_id is not None:
+        sql += " AND broadcast_id = ?"
+        args.append(broadcast_id)
+    post_ids = {row["id"] for row in conn.execute(sql, args).fetchall()}
+    if not post_ids:
+        return 0
+    _withdraw_broadcast_jobs(conn, post_ids)
+    placeholders = ", ".join("?" for _ in post_ids)
     conn.execute(
-        """UPDATE broadcasts
-           SET status = 'CANCELLED', next_send_at = NULL, updated_at = ?
-           WHERE id = ?""",
-        (_now(), broadcast_id),
+        f"DELETE FROM broadcast_posts WHERE id IN ({placeholders})", list(post_ids)
     )
+    return len(post_ids)
+
+
+def set_broadcast_enabled(conn, broadcast_id: int, enabled: bool) -> dict:
+    """Toggle whether a campaign is eligible for publishing (reversible)."""
+    broadcast = get_broadcast(conn, broadcast_id)
+    if broadcast["enabled"] == enabled:
+        return broadcast
+    now = _now()
+    if enabled:
+        conn.execute(
+            """UPDATE broadcasts
+               SET enabled = 1,
+                   status = CASE WHEN status = 'FAILED' THEN 'SCHEDULED' ELSE status END,
+                   next_send_at = ?,
+                   updated_at = ?
+               WHERE id = ?""",
+            (now, now, broadcast_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE broadcasts SET enabled = 0, updated_at = ? WHERE id = ?",
+            (now, broadcast_id),
+        )
+        _drop_queued_posts(conn, broadcast_id)
     events.log(
         conn,
         "dashboard",
-        "broadcast_cancelled",
+        "broadcast_enabled" if enabled else "broadcast_disabled",
         entity="broadcasts",
         entity_id=broadcast_id,
     )
@@ -479,8 +546,49 @@ def cancel_broadcast(conn, broadcast_id: int) -> dict:
     return get_broadcast(conn, broadcast_id)
 
 
+def publishing_status(conn) -> dict:
+    return {"publishing": settings.broadcast_publishing_enabled(conn)}
+
+
+def pause_all(conn) -> dict:
+    """Global pause: stop producing posts and withdraw the ones already queued."""
+    if not settings.broadcast_publishing_enabled(conn):
+        return {"publishing": False, "queued_dropped": 0}
+    settings.set_broadcast_publishing(conn, False)
+    dropped = _drop_queued_posts(conn)
+    events.log(
+        conn,
+        "dashboard",
+        "broadcast_publishing_paused",
+        entity="settings",
+        details={"queued_dropped": dropped},
+    )
+    conn.commit()
+    return {"publishing": False, "queued_dropped": dropped}
+
+
+def resume_all(conn) -> dict:
+    """Global play: campaigns keep their own schedule and continue from there."""
+    if settings.broadcast_publishing_enabled(conn):
+        return {"publishing": True, "queued_dropped": 0}
+    settings.set_broadcast_publishing(conn, True)
+    events.log(
+        conn,
+        "dashboard",
+        "broadcast_publishing_resumed",
+        entity="settings",
+    )
+    conn.commit()
+    return {"publishing": True, "queued_dropped": 0}
+
+
+def set_publishing(conn, enabled: bool) -> dict:
+    return resume_all(conn) if enabled else pause_all(conn)
+
+
 def send_now(conn, broadcast_id: int) -> dict:
     broadcast = get_broadcast(conn, broadcast_id)
+    _require(broadcast["enabled"], "broadcast is disabled for publishing")
     _require(
         broadcast["status"] in ("SCHEDULED", "SENDING", "FAILED"),
         f"cannot resend a {broadcast['status']} broadcast",
@@ -504,6 +612,14 @@ def send_now(conn, broadcast_id: int) -> dict:
         entity_id=broadcast_id,
     )
     conn.commit()
+    # A manual send is an explicit operator action: it bypasses the global
+    # pause, but it still respects the campaign toggle (checked above) and the
+    # group caps/intervals enforced by `schedule_next`. Keep the MVP rule of one
+    # broadcast job in flight so a double click cannot queue a duplicate post.
+    from cuadra.ai import queue
+
+    if not queue.has_pending("send_broadcast", conn):
+        schedule_next(conn, get_broadcast(conn, broadcast_id))
     return get_broadcast(conn, broadcast_id)
 
 
@@ -567,6 +683,14 @@ def update_broadcast(conn, broadcast_id: int, data: dict) -> dict:
 
 def delete_broadcast(conn, broadcast_id: int) -> dict:
     broadcast = get_broadcast(conn, broadcast_id)
+    post_ids = {
+        row["id"]
+        for row in conn.execute(
+            "SELECT id FROM broadcast_posts WHERE broadcast_id = ?", (broadcast_id,)
+        ).fetchall()
+    }
+    _withdraw_broadcast_jobs(conn, post_ids)
+    conn.execute("DELETE FROM broadcast_posts WHERE broadcast_id = ?", (broadcast_id,))
     conn.execute("DELETE FROM broadcast_group_links WHERE broadcast_id = ?", (broadcast_id,))
     conn.execute("DELETE FROM broadcasts WHERE id = ?", (broadcast_id,))
     events.log(
@@ -575,24 +699,43 @@ def delete_broadcast(conn, broadcast_id: int) -> dict:
         "broadcast_deleted",
         entity="broadcasts",
         entity_id=broadcast_id,
-        details={"channel": broadcast["channel"], "groups": broadcast["group_count"]},
+        details={
+            "channel": broadcast["channel"],
+            "groups": broadcast["group_count"],
+            "posts": len(post_ids),
+        },
     )
     conn.commit()
     return {"ok": True, "id": broadcast_id, "deleted": True}
 
 
 def reevaluate_all(conn) -> dict:
-    """Re-check every active campaign ignoring the `next_send_at` gate.
+    """Re-check every enabled campaign ignoring the `next_send_at` gate.
 
     Used by the dashboard "Reevaluar" action: after the strategy changes (for
     example raising `repeat_passes`) campaigns parked until the end of the cycle
     are re-examined immediately, so an available slot is published now instead of
     waiting for the window to reset. Campaigns with no capacity are re-parked.
+
+    It is an explicit operator action, so when publishing is paused it resumes
+    first (`resumed: true` in the summary) instead of doing nothing.
     """
-    summary = {"checked": 0, "queued": 0, "waiting": 0, "failed": 0, "skipped": 0}
+    resumed = False
+    if not settings.broadcast_publishing_enabled(conn):
+        resume_all(conn)
+        resumed = True
+    summary = {
+        "checked": 0,
+        "queued": 0,
+        "waiting": 0,
+        "failed": 0,
+        "skipped": 0,
+        "resumed": resumed,
+    }
     rows = conn.execute(
         """SELECT * FROM broadcasts
            WHERE status IN ('SCHEDULED', 'SENDING')
+             AND enabled = 1
            ORDER BY id"""
     ).fetchall()
     for row in rows:
@@ -779,6 +922,8 @@ def _retry_at(seconds: int = 60) -> str:
 def schedule_next(conn, broadcast: dict) -> str:
     """Queue one post for a due campaign inside the current recurrence cycle."""
     broadcast_id = broadcast["id"]
+    if not broadcast.get("enabled", 1):
+        return "skipped"
     if broadcast["status"] not in ("SCHEDULED", "SENDING"):
         return "skipped"
 
@@ -963,6 +1108,7 @@ def due_broadcasts(conn) -> list[dict]:
         for r in conn.execute(
             """SELECT * FROM broadcasts
                WHERE status IN ('SCHEDULED', 'SENDING')
+                 AND enabled = 1
                  AND (next_send_at IS NULL OR next_send_at <= ?)
                ORDER BY id""",
             (_now(),),

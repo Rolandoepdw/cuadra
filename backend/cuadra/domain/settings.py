@@ -15,6 +15,7 @@ BROADCAST_DEFAULT_MIN_INTERVAL = "broadcast.default_min_interval_s"
 BROADCAST_DEFAULT_MAX_INTERVAL = "broadcast.default_max_interval_s"
 BROADCAST_REPEAT_PASSES = "broadcast.repeat_passes"
 BROADCAST_REPEAT_WINDOW_DAYS = "broadcast.repeat_window_days"
+BROADCAST_PUBLISHING = "broadcast.publishing"
 
 BROADCAST_DEFAULTS = {
     BROADCAST_DEFAULT_MAX_POSTS: 20,
@@ -66,6 +67,19 @@ def broadcast_defaults(conn) -> dict[str, int]:
         key: _as_int(get(conn, key, str(default)), default)
         for key, default in BROADCAST_DEFAULTS.items()
     }
+
+
+def broadcast_publishing_enabled(conn) -> bool:
+    """Global play/pause switch for campaign publishing.
+
+    Stored in `settings` so a pause survives restarts and power cuts. One-to-one
+    conversations are never affected.
+    """
+    return _as_int(get(conn, BROADCAST_PUBLISHING, "1"), 1) != 0
+
+
+def set_broadcast_publishing(conn, enabled: bool) -> None:
+    set(conn, BROADCAST_PUBLISHING, "1" if enabled else "0")
 
 
 def set_broadcast_defaults(conn, data: dict) -> dict[str, int]:

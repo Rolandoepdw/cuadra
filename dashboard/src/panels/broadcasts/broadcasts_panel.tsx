@@ -1,17 +1,19 @@
 import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Plus, Eye, Send, Ban, RefreshCw, Pencil, Trash2 } from "lucide-react";
+import { Plus, Eye, Send, RefreshCw, Pencil, Trash2, Pause, Play } from "lucide-react";
 import {
-  cancelBroadcast,
   createBroadcast,
   deleteBroadcast,
+  getBroadcastPublishing,
   listBroadcastGroups,
   listBroadcastPosts,
   listBroadcasts,
   listProducts,
   reevaluateBroadcasts,
   sendBroadcastNow,
+  setBroadcastEnabled,
+  setBroadcastPublishing,
   updateBroadcast,
 } from "@/lib/api";
 import type {
@@ -46,7 +48,6 @@ const STATUS_VARIANTS: Record<
   SENDING: "default",
   COMPLETED: "success",
   FAILED: "destructive",
-  CANCELLED: "secondary",
 };
 
 export function BroadcastsPanel() {
@@ -57,18 +58,22 @@ export function BroadcastsPanel() {
     queryKey: ["broadcast-groups"],
     queryFn: () => listBroadcastGroups(),
   });
+  const { data: publishing } = useQuery({
+    queryKey: ["broadcast-publishing"],
+    queryFn: getBroadcastPublishing,
+  });
+  const paused = publishing?.publishing === false;
 
   const [creating, setCreating] = useState(false);
   const [logFor, setLogFor] = useState<Broadcast | null>(null);
-  const [toCancel, setToCancel] = useState<Broadcast | null>(null);
   const [toDelete, setToDelete] = useState<Broadcast | null>(null);
   const [editingBroadcast, setEditingBroadcast] = useState<Broadcast | null>(null);
   const [reevalMsg, setReevalMsg] = useState<string | null>(null);
+  const [confirmReevaluate, setConfirmReevaluate] = useState(false);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["broadcasts"] });
     setCreating(false);
-    setToCancel(null);
     setEditingBroadcast(null);
   };
 
@@ -76,9 +81,18 @@ export function BroadcastsPanel() {
     mutationFn: (value: BroadcastIn) => createBroadcast(value),
     onSuccess: invalidate,
   });
-  const cancel = useMutation({
-    mutationFn: (id: number) => cancelBroadcast(id),
-    onSuccess: invalidate,
+  const togglePublishing = useMutation({
+    mutationFn: (value: boolean) => setBroadcastPublishing(value),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["broadcast-publishing"] });
+      qc.invalidateQueries({ queryKey: ["broadcasts"] });
+      setReevalMsg(null);
+    },
+  });
+  const toggleEnabled = useMutation({
+    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
+      setBroadcastEnabled(id, enabled),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["broadcasts"] }),
   });
   const sendNow = useMutation({
     mutationFn: (id: number) => sendBroadcastNow(id),
@@ -88,11 +102,17 @@ export function BroadcastsPanel() {
     mutationFn: () => reevaluateBroadcasts(),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["broadcasts"] });
+      qc.invalidateQueries({ queryKey: ["broadcast-publishing"] });
+      const resumed = res.resumed ? "Publicaciones reanudadas. " : "";
       setReevalMsg(
-        `Reevaluadas ${res.checked}: ${res.queued} encoladas, ${res.waiting} siguen en espera, ${res.failed} sin destino.`,
+        `${resumed}Reevaluadas ${res.checked}: ${res.queued} encoladas, ${res.waiting} siguen en espera, ${res.failed} sin destino.`,
       );
     },
   });
+  const runReevaluate = () => {
+    setReevalMsg(null);
+    reevaluate.mutate();
+  };
   const update = useMutation({
     mutationFn: ({ id, value }: { id: number; value: BroadcastIn }) => updateBroadcast(id, value),
     onSuccess: () => {
@@ -102,7 +122,10 @@ export function BroadcastsPanel() {
   });
   const remove = useMutation({
     mutationFn: (id: number) => deleteBroadcast(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["broadcasts"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["broadcasts"] });
+      setToDelete(null);
+    },
   });
 
   const productName = (id: number | null) =>
@@ -124,6 +147,27 @@ export function BroadcastsPanel() {
       ),
     },
     { id: "product", header: "Producto", cell: (c) => productName(c.row.original.product_id) },
+    {
+      id: "enabled",
+      header: "Publicar",
+      cell: (c) => {
+        const broadcast = c.row.original;
+        return (
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={broadcast.enabled}
+              disabled={toggleEnabled.isPending}
+              title="Habilitar o deshabilitar las publicaciones de esta campaña"
+              onChange={(e) => toggleEnabled.mutate({ id: broadcast.id, enabled: e.target.checked })}
+            />
+            <span className={broadcast.enabled ? "text-foreground" : "text-muted-foreground"}>
+              {broadcast.enabled ? "Habilitada" : "Deshabilitada"}
+            </span>
+          </label>
+        );
+      },
+    },
     {
       accessorKey: "status",
       header: "Estado",
@@ -164,8 +208,8 @@ export function BroadcastsPanel() {
             <Button
               variant="ghost"
               size="icon"
-              title="Programar ahora"
-              disabled={!active && broadcast.status !== "FAILED"}
+              title="Enviar ahora (no respeta la pausa global)"
+              disabled={!broadcast.enabled || (!active && broadcast.status !== "FAILED")}
               onClick={() => sendNow.mutate(broadcast.id)}
             >
               <Send />
@@ -173,17 +217,7 @@ export function BroadcastsPanel() {
             <Button
               variant="ghost"
               size="icon"
-              title="Cancelar"
-              disabled={!active}
-              onClick={() => setToCancel(broadcast)}
-            >
-              <Ban className="text-destructive" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
               title="Editar"
-              disabled={broadcast.status === "CANCELLED"}
               onClick={() => setEditingBroadcast(broadcast)}
             >
               <Pencil />
@@ -192,7 +226,6 @@ export function BroadcastsPanel() {
               variant="ghost"
               size="icon"
               title="Eliminar"
-              disabled={broadcast.status === "CANCELLED"}
               onClick={() => setToDelete(broadcast)}
             >
               <Trash2 className="text-destructive" />
@@ -207,19 +240,46 @@ export function BroadcastsPanel() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Difusiones</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight">Difusiones</h1>
+            <Badge variant={paused ? "warning" : "success"}>
+              {paused ? "Pausadas" : "Publicando"}
+            </Badge>
+          </div>
           <p className="text-sm text-muted-foreground">
             Campañas con spintax, filtro por categoría y log por grupo.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button
+            variant={paused ? "default" : "outline"}
+            disabled={togglePublishing.isPending}
+            title={
+              paused
+                ? "Reanuda las publicaciones; cada campaña continúa donde se quedó."
+                : "Detiene la programación de todas las campañas. No afecta a los chats 1:1."
+            }
+            onClick={() => togglePublishing.mutate(paused)}
+          >
+            {paused ? <Play /> : <Pause />}
+            {togglePublishing.isPending
+              ? "..."
+              : paused
+                ? "Reanudar publicaciones"
+                : "Pausar publicaciones"}
+          </Button>
+          <Button
             variant="outline"
             disabled={reevaluate.isPending}
-            title="Vuelve a evaluar las difusiones activas ahora, sin esperar la fecha programada."
+            title={
+              paused
+                ? "Reanuda las publicaciones y vuelve a evaluar las campañas habilitadas."
+                : "Vuelve a evaluar las campañas habilitadas ahora, sin esperar la fecha programada."
+            }
             onClick={() => {
               setReevalMsg(null);
-              reevaluate.mutate();
+              if (paused) setConfirmReevaluate(true);
+              else runReevaluate();
             }}
           >
             <RefreshCw />
@@ -236,9 +296,14 @@ export function BroadcastsPanel() {
       {reevaluate.error && (
         <p className="text-sm text-destructive">{(reevaluate.error as Error).message}</p>
       )}
+      {togglePublishing.error && (
+        <p className="text-sm text-destructive">{(togglePublishing.error as Error).message}</p>
+      )}
       {save.error && <p className="text-sm text-destructive">{(save.error as Error).message}</p>}
       {sendNow.error && <p className="text-sm text-destructive">{(sendNow.error as Error).message}</p>}
-      {cancel.error && <p className="text-sm text-destructive">{(cancel.error as Error).message}</p>}
+      {toggleEnabled.error && (
+        <p className="text-sm text-destructive">{(toggleEnabled.error as Error).message}</p>
+      )}
       {update.error && <p className="text-sm text-destructive">{(update.error as Error).message}</p>}
       {remove.error && <p className="text-sm text-destructive">{(remove.error as Error).message}</p>}
 
@@ -277,22 +342,24 @@ export function BroadcastsPanel() {
       )}
 
       <ConfirmDialog
-        open={toCancel !== null}
-        onOpenChange={(open) => !open && setToCancel(null)}
-        title="Cancelar difusión"
-        description="Se dejan de programar envíos; los posts ya publicados se conservan en el log."
-        confirmLabel="Cancelar difusión"
-        destructive
-        loading={cancel.isPending}
-        onConfirm={() => toCancel && cancel.mutate(toCancel.id)}
+        open={confirmReevaluate}
+        onOpenChange={(open) => !open && setConfirmReevaluate(false)}
+        title="Reanudar y reevaluar"
+        description="Las publicaciones están pausadas. Reevaluar reanuda la publicación global y vuelve a evaluar de inmediato las campañas habilitadas."
+        confirmLabel="Reanudar y reevaluar"
+        loading={reevaluate.isPending}
+        onConfirm={() => {
+          setConfirmReevaluate(false);
+          runReevaluate();
+        }}
       />
 
       <ConfirmDialog
         open={toDelete !== null}
         onOpenChange={(open) => !open && setToDelete(null)}
         title="Eliminar difusión"
-        description="Se eliminará la campaña y sus asociaciones con grupos; los posts ya publicados se conservan en el log."
-        confirmLabel="Eliminar"
+        description="Se eliminará la campaña junto con todo su historial de envíos. Esta acción no se puede deshacer; para dejar de publicar sin perder el historial, deshabilita la campaña."
+        confirmLabel="Eliminar definitivamente"
         destructive
         loading={remove.isPending}
         onConfirm={() => toDelete && remove.mutate(toDelete.id)}

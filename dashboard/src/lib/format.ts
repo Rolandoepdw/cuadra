@@ -65,5 +65,4 @@ export const BROADCAST_STATUS_LABELS = {
   SENDING: "Enviando",
   COMPLETED: "Completada",
   FAILED: "Fallida",
-  CANCELLED: "Cancelada",
 } as const;

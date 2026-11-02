@@ -116,7 +116,7 @@ New-Item -ItemType Directory -Path $env:CUADRA_DATA_DIR -Force | Out-Null
 | `group_zones` | 68 mapeos grupo → zona |
 | `supplier_delivery_zones` | 20 mapeos TCP → zona |
 | `products` | 32 productos fake (31 `ACTIVE` + 1 `OUT_OF_STOCK`) |
-| `broadcasts` | 25 difusiones (24 `SCHEDULED` + 1 `CANCELLED`) |
+| `broadcasts` | 25 difusiones (24 `SCHEDULED` habilitadas + 1 deshabilitada) |
 | `broadcast_group_links` | 16 selecciones manuales de grupos |
 
 Los productos y difusiones propios del usuario **no** se siembran: el seed solo trae su catálogo demo. La data real que sí se respeta es la de canales, grupos, TCP y zonas.
@@ -138,7 +138,7 @@ Las difusiones no son solo “muchas”: cada una cubre una rama de la lógica d
 | `Moto Eléctrica Delivery` | Manual, solo un grupo `PAUSED` | Sin destinos → la campaña queda `FAILED` |
 | `Laptop Gamer RTX 3050` | Auto + plantilla con spintax, `{zona}` e `{id}` | Render de spintax, zonas del TCP y que no se añada el sufijo `ID` |
 | `Moto Combustión Zontes 250` | Manual, categoría que el grupo no permite | La selección manual ignora la categoría del grupo |
-| `Mouse Inalámbrico` | `CANCELLED` | Estado terminal y exclusión del scheduler |
+| `Mouse Inalámbrico` | `enabled = 0` | Toggle de publicación deshabilitado: sigue visible y editable, pero el scheduler la ignora |
 
 Las campañas sin destinos se crean como `SCHEDULED`; el scheduler las pasa a `FAILED` en su primera evaluación (`broadcast_no_targets`). Eso permite probar también el panel de logs y el filtro por estado.
 
@@ -160,7 +160,7 @@ Una segunda ejecución reporta `0` filas creadas en todas las tablas. Se puede c
 - Si la tabla está vacía, las difusiones quedan vencidas de inmediato (`next_send_at = NULL`), listas para que el scheduler las publique.
 - Si ya hay difusiones, se escalonan 4 horas hacia el futuro (`+4h`, `+5h`, ...) para que un scheduler en marcha no publique mientras se siembra.
 
-`--schedule now` fuerza siempre “vencida ahora”; `--schedule future` fuerza siempre el escalonado futuro. Las difusiones `CANCELLED` nunca reciben `next_send_at`.
+`--schedule now` fuerza siempre “vencida ahora”; `--schedule future` fuerza siempre el escalonado futuro. Las difusiones deshabilitadas nunca reciben `next_send_at`.
 
 ## 8. Zonas de grupos (caso de prueba)
 
