@@ -23,7 +23,7 @@ import type {
   BroadcastPost,
   BroadcastStatus,
 } from "@/types/api";
-import { BROADCAST_STATUS_LABELS, formatDateTime } from "@/lib/format";
+import { BROADCAST_STATUS_LABELS, GROUP_STATUS_LABELS, formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
@@ -467,7 +467,12 @@ function BroadcastForm({
                   />
                   <span>{group.name}</span>
                   <Badge variant="secondary">{group.sender === "userbot" ? "Userbot" : "Bot"}</Badge>
-                  {group.status !== "ACTIVE" && <Badge variant="warning">{group.status}</Badge>}
+                  {group.status !== "ACTIVE" && (
+                    <Badge variant="warning">
+                      {GROUP_STATUS_LABELS[group.status as keyof typeof GROUP_STATUS_LABELS] ??
+                        group.status}
+                    </Badge>
+                  )}
                 </label>
               ))}
               <p className="mt-2 text-xs text-muted-foreground">

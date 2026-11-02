@@ -4,7 +4,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { Plus, Pencil, Trash2 } from "lucide-react";
 import {
   createBroadcastGroup,
-  deleteBroadcastGroup,
+  deactivateBroadcastGroup,
   getBroadcastStrategy,
   listBroadcastGroups,
   listCategories,
@@ -60,13 +60,13 @@ export function GroupsPanel() {
 
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<BroadcastGroup | null>(null);
-  const [toDelete, setToDelete] = useState<BroadcastGroup | null>(null);
+  const [toDeactivate, setToDeactivate] = useState<BroadcastGroup | null>(null);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["broadcast-groups"] });
     setCreating(false);
     setEditing(null);
-    setToDelete(null);
+    setToDeactivate(null);
   };
 
   const save = useMutation({
@@ -74,8 +74,8 @@ export function GroupsPanel() {
       editing ? updateBroadcastGroup(editing.id, value) : createBroadcastGroup(value),
     onSuccess: invalidate,
   });
-  const remove = useMutation({
-    mutationFn: (id: number) => deleteBroadcastGroup(id),
+  const deactivate = useMutation({
+    mutationFn: (id: number) => deactivateBroadcastGroup(id),
     onSuccess: invalidate,
   });
 
@@ -134,7 +134,7 @@ export function GroupsPanel() {
           <Button variant="ghost" size="icon" onClick={() => setEditing(c.row.original)}>
             <Pencil />
           </Button>
-          <Button variant="ghost" size="icon" onClick={() => setToDelete(c.row.original)}>
+          <Button variant="ghost" size="icon" onClick={() => setToDeactivate(c.row.original)}>
             <Trash2 className="text-destructive" />
           </Button>
         </div>
@@ -158,7 +158,9 @@ export function GroupsPanel() {
       </div>
 
       {save.error && <p className="text-sm text-destructive">{(save.error as Error).message}</p>}
-      {remove.error && <p className="text-sm text-destructive">{(remove.error as Error).message}</p>}
+      {deactivate.error && (
+        <p className="text-sm text-destructive">{(deactivate.error as Error).message}</p>
+      )}
 
       {isLoading ? (
         <p className="text-muted-foreground">Cargando…</p>
@@ -185,14 +187,14 @@ export function GroupsPanel() {
       />
 
       <ConfirmDialog
-        open={toDelete !== null}
-        onOpenChange={(open) => !open && setToDelete(null)}
-        title="Eliminar grupo"
-        description={`¿Eliminar "${toDelete?.name}"? Si tiene envíos, el sistema pedirá bloquearlo en su lugar.`}
-        confirmLabel="Eliminar"
+        open={toDeactivate !== null}
+        onOpenChange={(open) => !open && setToDeactivate(null)}
+        title="Desactivar grupo"
+        description={`¿Desactivar "${toDeactivate?.name}"? Dejará de recibir publicaciones; su historial se conserva.`}
+        confirmLabel="Desactivar"
         destructive
-        loading={remove.isPending}
-        onConfirm={() => toDelete && remove.mutate(toDelete.id)}
+        loading={deactivate.isPending}
+        onConfirm={() => toDeactivate && deactivate.mutate(toDeactivate.id)}
       />
     </div>
   );
@@ -333,15 +335,6 @@ function GroupForm({
               <option value="bot">Bot (Bot API, inactivo)</option>
             </Select>
           </Field>
-          <Field label="Estado">
-            <Select value={form.status} onChange={(e) => set("status", e.target.value as GroupStatus)}>
-              {(Object.keys(GROUP_STATUS_LABELS) as GroupStatus[]).map((value) => (
-                <option key={value} value={value}>
-                  {GROUP_STATUS_LABELS[value]}
-                </option>
-              ))}
-            </Select>
-          </Field>
           <Field label="Máximo por día">
             <Input
               type="number"
@@ -390,6 +383,19 @@ function GroupForm({
           <Field label="Notas" className="sm:col-span-2">
             <Textarea value={form.notes ?? ""} onChange={(e) => set("notes", e.target.value)} />
           </Field>
+          <label className="flex items-center gap-2 text-sm sm:col-span-2">
+            <input
+              type="checkbox"
+              checked={form.status === "ACTIVE"}
+              onChange={(e) => set("status", e.target.checked ? "ACTIVE" : "PAUSED")}
+            />
+            Activo
+          </label>
+          {form.status === "BLOCKED" && (
+            <p className="text-xs text-muted-foreground sm:col-span-2">
+              Este grupo está en la lista negra (bloqueado). Marca «Activo» para reactivarlo.
+            </p>
+          )}
         </div>
         {invalidIntervals && (
           <p className="mt-3 text-sm text-destructive">

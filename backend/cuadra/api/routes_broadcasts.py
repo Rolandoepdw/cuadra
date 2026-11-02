@@ -60,8 +60,9 @@ def update_group(group_id: int, payload: BroadcastGroupPatch) -> dict:
 
 
 @router.delete("/broadcast-groups/{group_id}")
-def delete_group(group_id: int) -> dict:
-    return _run(broadcasts.delete_group, group_id)
+def deactivate_group(group_id: int) -> dict:
+    """Deactivate (never delete): history and campaign links are preserved."""
+    return _run(broadcasts.deactivate_group, group_id)
 
 
 # --------------------------------------------------------------- campaigns

@@ -56,7 +56,7 @@ export function formatDateTime(value: string | null | undefined): string {
 
 export const GROUP_STATUS_LABELS = {
   ACTIVE: "Activo",
-  PAUSED: "Pausado",
+  PAUSED: "Inactivo",
   BLOCKED: "Bloqueado",
 } as const;
 

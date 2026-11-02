@@ -111,7 +111,7 @@ New-Item -ItemType Directory -Path $env:CUADRA_DATA_DIR -Force | Out-Null
 | `zones` | 16 municipios de La Habana (`UCI` inactiva) |
 | `categories` | 8 categorías: `tecnología`, `computación`, `accesorios`, `hogar`, `snacks`, `motos_eléctricas`, `motos_combustión`, `alimentos` |
 | `suppliers` | 4 TCP reales |
-| `broadcast_groups` | 9 grupos: 7 activos y 2 en `PAUSED` |
+| `broadcast_groups` | 9 grupos: 7 activos y 2 desactivados (`PAUSED`) |
 | `group_categories` | 8 mapeos grupo → categoría |
 | `group_zones` | 68 mapeos grupo → zona |
 | `supplier_delivery_zones` | 20 mapeos TCP → zona |
@@ -121,7 +121,7 @@ New-Item -ItemType Directory -Path $env:CUADRA_DATA_DIR -Force | Out-Null
 
 Los productos y difusiones propios del usuario **no** se siembran: el seed solo trae su catálogo demo. La data real que sí se respeta es la de canales, grupos, TCP y zonas.
 
-Los dos grupos deshabilitados se guardan como `PAUSED` para que el scheduler los ignore, pero siguen existiendo para probar filtros.
+Los dos grupos desactivados se guardan como `PAUSED` para que el scheduler los ignore, pero siguen existiendo (con su historial) para probar filtros.
 
 ### 5.1 Escenarios cubiertos a propósito
 

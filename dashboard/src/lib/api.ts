@@ -169,8 +169,8 @@ export const updateBroadcastGroup = (id: number, body: BroadcastGroupPatch) =>
     method: "PATCH",
     body: JSON.stringify(body),
   });
-export const deleteBroadcastGroup = (id: number) =>
-  request<{ ok: boolean }>(`/api/broadcast-groups/${id}`, { method: "DELETE" });
+export const deactivateBroadcastGroup = (id: number) =>
+  request<BroadcastGroup>(`/api/broadcast-groups/${id}`, { method: "DELETE" });
 
 export const listBroadcasts = () => request<Broadcast[]>("/api/broadcasts");
 export const createBroadcast = (body: BroadcastIn) =>

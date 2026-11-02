@@ -348,26 +348,28 @@ def apply_strategy_to_all(conn, data: dict) -> dict:
     return {"groups": cur.rowcount, **values}
 
 
-def delete_group(conn, group_id: int) -> dict:
+def deactivate_group(conn, group_id: int) -> dict:
+    """Deactivate a group without deleting it (same behavior as TCPs).
+
+    Groups own campaign links and post history, so they are never removed.
+    `PAUSED` is the "inactive" state; `BLOCKED` (blacklist) is preserved.
+    """
     group = get_group(conn, group_id)
-    used = conn.execute(
-        "SELECT COUNT(*) FROM broadcast_posts WHERE group_id = ?", (group_id,)
-    ).fetchone()[0]
-    _require(
-        used == 0,
-        f"group has {used} post(s); keep the history and set status BLOCKED instead",
-    )
-    conn.execute("DELETE FROM broadcast_groups WHERE id = ?", (group_id,))
-    events.log(
-        conn,
-        "dashboard",
-        "broadcast_group_deleted",
-        entity="broadcast_groups",
-        entity_id=group_id,
-        details={"name": group["name"]},
-    )
-    conn.commit()
-    return {"ok": True, "id": group_id, "deleted": True}
+    if group["status"] == "ACTIVE":
+        conn.execute(
+            "UPDATE broadcast_groups SET status = 'PAUSED', updated_at = ? WHERE id = ?",
+            (_now(), group_id),
+        )
+        events.log(
+            conn,
+            "dashboard",
+            "broadcast_group_deactivated",
+            entity="broadcast_groups",
+            entity_id=group_id,
+            details={"name": group["name"]},
+        )
+        conn.commit()
+    return get_group(conn, group_id)
 
 
 # ---------------------------------------------------------------- broadcasts

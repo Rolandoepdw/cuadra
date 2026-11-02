@@ -71,6 +71,7 @@ LABELS = {
     "product_image_deleted": "Imagen eliminada",
     "broadcast_group_created": "Grupo creado",
     "broadcast_group_updated": "Grupo actualizado",
+    "broadcast_group_deactivated": "Grupo desactivado",
     "broadcast_group_deleted": "Grupo eliminado",
     "broadcast_created": "Campaña creada",
     "broadcast_updated": "Campaña actualizada",
@@ -389,10 +390,16 @@ class Presenter:
             if sender:
                 parts.append(f"remitente {sender}")
             return " · ".join(parts)
-        if event_type in ("broadcast_group_updated", "broadcast_group_deleted"):
+        if event_type in (
+            "broadcast_group_updated",
+            "broadcast_group_deactivated",
+            "broadcast_group_deleted",
+        ):
             parts = [f"Grupo {_quote(name) if name else f'#{eid}'}"]
             if event_type.endswith("_updated") and _fields(d):
                 parts.append(_fields(d))
+            if event_type.endswith("_deactivated"):
+                parts.append("desactivado")
             if event_type.endswith("_deleted"):
                 parts.append("eliminado")
             return " · ".join(parts)

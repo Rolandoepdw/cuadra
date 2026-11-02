@@ -50,8 +50,15 @@ CONVERSATION_EVENTS = frozenset(
 )
 
 # CRUD and configuration changes. Suffixes cover new `*_created`, `*_updated`,
-# `*_deleted`, `*_applied` and `*_saved` events automatically.
-ENTITY_SUFFIXES = ("_created", "_updated", "_deleted", "_applied", "_saved")
+# `*_deleted`, `*_deactivated`, `*_applied` and `*_saved` events automatically.
+ENTITY_SUFFIXES = (
+    "_created",
+    "_updated",
+    "_deleted",
+    "_deactivated",
+    "_applied",
+    "_saved",
+)
 
 
 def category_for(source: str, event_type: str, entity: str | None = None) -> str:
