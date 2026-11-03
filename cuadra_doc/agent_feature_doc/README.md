@@ -1,0 +1,113 @@
+---
+tipo: indice
+proyecto: Cuadra
+modulo: agent_feature_doc
+estado: DISEÑO APROBADO — listo para implementar
+revisado: 2026-11-03
+aprobado: 2026-11-03
+tags: [indice, agente-ia, diseno-aprobado, revision]
+---
+
+# Documentación del agente autónomo (diseño aprobado)
+
+Esta carpeta contiene el diseño de evolución del agente de Cuadra: memoria, retrieval,
+ventas, finanzas, bucle TCP y mutación de catálogo. **Todavía no es código
+implementado:** es la especificación aprobada que guía la implementación por fases.
+
+> **Empieza por `05_VIABILIDAD_Y_CAMBIOS_REQUERIDOS.md`.**
+> Ese documento resume las discordancias con el código real, el veredicto de
+> viabilidad, las decisiones aprobadas (D1–D10) y el orden de implementación.
+
+---
+
+## 1. Estado
+
+| Aspecto | Estado |
+|---|---|
+| Código de producción | Sin tocar. |
+| Migraciones | No creadas. Solo diseñadas (`012`–`015`). |
+| Dependencias | No instaladas. |
+| Modelos | Dos candidatos locales; el dueño añadirá más para el bake-off. |
+| Base de datos real | Sin cambios. |
+| Commit | Solo documentación. |
+| Aprobación | Aprobada por el dueño el 2026-11-03. |
+
+La propuesta original llegó marcada como `DISENO_APROBADO`; tras la revisión pasó a
+`PROPUESTA REVISADA` porque contenía supuestos que no coinciden con el esquema real
+(estados de venta, columnas inexistentes, migraciones duplicadas, modelo no instalado
+y audio TCP que hoy no se transcribe).
+
+El dueño revisó la propuesta corregida y aprobó D1–D10 el **2026-11-03**. Desde
+entonces esta carpeta es el diseño de referencia para implementar, empezando por la
+Fase 0 (medición). El código de producción sigue intacto.
+
+---
+
+## 2. Orden de lectura
+
+| Orden | Documento | Qué responde |
+|---|---|---|
+| 1 | `05_VIABILIDAD_Y_CAMBIOS_REQUERIDOS.md` | ¿Es viable? ¿Qué estaba mal? ¿Qué se decidió y en qué orden se implementa? |
+| 2 | `00_ARQUITECTURA_Y_MODELO_AUTONOMO.md` | Arquitectura, modos de autonomía, estados y guardrails. |
+| 3 | `01_MEMORIA_RETRIEVAL_Y_CATALOGO.md` | Turnos, memoria, FTS5, embeddings y presupuesto de contexto. |
+| 4 | `02_MAQUINA_ESTADOS_VENTAS_Y_FINANZAS.md` | Venta, stock reservado, ledger, API y dashboard. |
+| 5 | `03_BUCLE_TCP_MUTACION_CATALOGO_Y_ROLLBACK.md` | Triage TCP, audio, mutaciones y undo. |
+| 6 | `04_PLAN_IMPLEMENTACION_Y_PROMPTS_MAESTROS.md` | Fases, contratos, prompts y pruebas. |
+| — | `../10_contexto_agente_ia.md` | Brief original que alimentó la propuesta. |
+
+---
+
+## 3. Leyenda
+
+| Marca | Significado |
+|---|---|
+| **CORREGIDO** | Ya ajustado en los documentos tras comparar con el código real. |
+| **DECISIÓN** | Punto que requería respuesta del dueño (`D1`–`D10`). Resueltas en `05`, sección 4. |
+| **BLOQUEANTE** | Si se implementa tal cual, falla o corrompe datos. |
+| **ALTA** | Funciona mal o genera deuda peligrosa. |
+| **MEDIA** | Fricción o inconsistencia, no impide avanzar. |
+| **DIFERIDO** | Se reconoce, pero no se implementa en esta fase. |
+
+---
+
+## 4. Decisiones aprobadas
+
+Están detalladas en `05`, sección 4. Resumen:
+
+| ID | Tema | Decisión aprobada |
+|---|---|---|
+| D1 | Modo de autonomía inicial | `assisted` ahora; `autonomous` al cumplir métricas |
+| D2 | Mutación automática de precio | Auto con límites (±50 %, confianza ≥ 0.85) |
+| D3 | Zonas | CRUD `zones`; cualquier zona activa es válida |
+| D4 | Moneda de comisión | Cruzada; `supplier_payout` nulo y “requiere conversión” |
+| D5 | Venta multi-producto | Diferida; una venta = un producto |
+| D6 | Notificación al operador | Solo dashboard |
+| D7 | Trazas y privacidad | Redactadas (`redacted=1`, 30 días) |
+| D8 | Modelo | Bake-off en Fase 0 con los modelos del dueño |
+| D9 | Prompts | Mantener `prompts.py` |
+| D10 | Tests | Mantener `unittest` |
+
+---
+
+## 5. Reglas que no cambian
+
+- Windows, offline, $0, 4 GB de VRAM, 32 GB de RAM, SQLite, un proceso Python.
+- El operador cierra el pago y cobra la comisión.
+- El LLM nunca escribe SQL ni recibe datos internos (comisión, margen, costo).
+- El bot nunca inventa precio, stock, garantía ni zona.
+- Los grupos de difusión no se borran: se desactivan.
+- No se hace commit sin pedido explícito del dueño.
+
+---
+
+## 6. Próximo paso
+
+Implementar la **Fase 0** de `05` / `04`:
+
+1. Migración `012`: `llm_calls` con trazas redactadas.
+2. Golden set anonimizado de 50–100 turnos.
+3. Medición del agente actual (intención, slot F1, latencia, fugas).
+4. Bake-off de modelos instalados y elección justificada.
+
+La operación real no se toca en Fase 0. Cualquier cambio de comportamiento se habilita
+con settings (`sales.mode`, `catalog.autoapply.*`), no reescribiendo el flujo.
