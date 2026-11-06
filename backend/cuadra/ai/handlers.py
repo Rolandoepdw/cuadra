@@ -7,7 +7,7 @@ import random
 from datetime import datetime, timedelta, timezone
 
 from cuadra import channels, config, db
-from cuadra.ai import assembler, pipeline, prompts, queue, stt
+from cuadra.ai import assembler, memory, pipeline, prompts, queue, retrieval, stt
 from cuadra.domain import (
     broadcasts as broadcasts_domain,
     catalog,
@@ -28,6 +28,8 @@ def register() -> None:
     queue.register_handler("send_escalation", send_escalation)
     queue.register_handler("tcp_reply", tcp_reply)
     queue.register_handler("send_broadcast", send_broadcast)
+    queue.register_handler("reindex_product", reindex_product)
+    queue.register_handler("reindex_all_products", reindex_all_products)
 
 
 def _respect_userbot_gap(sender) -> None:
@@ -266,11 +268,13 @@ async def process_turn(payload: dict) -> None:
                     "supplier_id": result["supplier_id"],
                 },
             )
+        turns.mark_done(conn, turn_id)
         try:
-            await pipeline.maybe_summarize(conn, conversation)
+            # After mark_done: the current turn is no longer PROCESSING, so the
+            # summary can safely advance over older messages.
+            await memory.maybe_summarize(conn, conversation)
         except Exception:  # noqa: BLE001 - summarising must never block delivery
             log.exception("summary failed for conversation %s", turn["conversation_id"])
-        turns.mark_done(conn, turn_id)
     except Exception:
         # Never leave the turn stuck in PROCESSING: a queue retry must be able
         # to claim it again. A crash is recovered by turns.recover_open().
@@ -348,7 +352,10 @@ async def generate_reply(payload: dict) -> None:
                 entity_id=escalation_id,
                 details={"product_id": result["product_id"], "supplier_id": result["supplier_id"]},
             )
-        await pipeline.maybe_summarize(conn, conversation)
+        try:
+            await memory.maybe_summarize(conn, conversation)
+        except Exception:  # noqa: BLE001 - summarising must never block delivery
+            log.exception("summary failed for conversation %s", conversation_id)
     finally:
         conn.close()
     if escalation_id is not None:
@@ -610,6 +617,9 @@ async def tcp_reply(payload: dict) -> None:
         finally:
             conn.close()
 
+    if escalation["product_id"]:
+        retrieval.queue_reindex(escalation["product_id"])
+
     client_conversation_id = escalation["conversation_id"]
     reply = prompts.TEMPLATES["escalation_resolved"].format(
         producto=product_name, respuesta=answer
@@ -635,6 +645,48 @@ async def tcp_reply(payload: dict) -> None:
         {"conversation_id": client_conversation_id, "message_id": outbound["id"]},
         priority=config.PRIORITY_CUSTOMER,
     )
+
+
+def _index_one(product_id: int) -> bool:
+    conn = db.connect()
+    try:
+        return retrieval.index_product(conn, product_id)
+    finally:
+        conn.close()
+
+
+def _index_all() -> dict:
+    conn = db.connect()
+    try:
+        return retrieval.reindex_all(conn)
+    finally:
+        conn.close()
+
+
+async def reindex_product(payload: dict) -> None:
+    """Recompute one product embedding after a catalog mutation.
+
+    Runs in a worker thread: ONNX inference must not block the event loop (and
+    therefore customer replies). Missing model/library is a no-op by design.
+    """
+    product_id = payload.get("product_id")
+    if product_id is None:
+        raise queue.PermanentJobError("reindex_product job has no product_id")
+    changed = await asyncio.to_thread(_index_one, int(product_id))
+    log.debug("reindex_product %s changed=%s", product_id, changed)
+
+
+async def reindex_all_products(payload: dict) -> None:
+    """Low-priority full reindex; safe to enqueue when the model is missing."""
+    stats = await asyncio.to_thread(_index_all)
+    if stats["available"]:
+        log.info(
+            "reindex_all_products: %s indexed, %s skipped",
+            stats["indexed"],
+            stats["skipped"],
+        )
+    else:
+        log.info("reindex_all_products skipped: embeddings unavailable")
 
 
 async def send_broadcast(payload: dict) -> None:

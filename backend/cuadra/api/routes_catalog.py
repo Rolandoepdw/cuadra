@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
 from cuadra import db
+from cuadra.ai import retrieval
 from cuadra.api.auth import require_pin
 from cuadra.api.models import (
     CategoryIn,
@@ -104,7 +105,8 @@ def update_zone(zone_id: int, payload: ZonePatch) -> dict:
 
 @router.delete("/zones/{zone_id}")
 def delete_zone(zone_id: int) -> dict:
-    return _run(catalog.delete_zone, zone_id)
+    """Soft delete: sets active=false (zones and their history are preserved)."""
+    return _out(_run(catalog.delete_zone, zone_id))
 
 
 # ----------------------------------------------------------------- suppliers
@@ -163,7 +165,9 @@ def list_products(
 
 @router.post("/products", status_code=status.HTTP_201_CREATED)
 def create_product(payload: ProductIn) -> dict:
-    return _out(_run(catalog.create_product, payload.model_dump()))
+    product = _out(_run(catalog.create_product, payload.model_dump()))
+    retrieval.queue_reindex(product["id"])
+    return product
 
 
 @router.get("/products/{product_id}")
@@ -176,13 +180,16 @@ def get_product(product_id: int) -> dict:
 def update_product(product_id: int, payload: ProductPatch) -> dict:
     data = payload.model_dump(exclude_unset=True)
     product = _run(catalog.update_product, product_id, data)
+    retrieval.queue_reindex(product_id)
     return _out({**product, "images": [_out(i) for i in product["images"]]})
 
 
 @router.delete("/products/{product_id}")
 def delete_product(product_id: int) -> dict:
     """Soft delete: sets status='REMOVED' (sales reference the product)."""
-    return _run(catalog.delete_product, product_id)
+    result = _run(catalog.delete_product, product_id)
+    retrieval.queue_reindex(product_id)
+    return result
 
 
 # ------------------------------------------------------------------- images

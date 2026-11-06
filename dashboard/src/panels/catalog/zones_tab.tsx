@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Plus, Pencil, Trash2 } from "lucide-react";
-import { createZone, deleteZone, listZones, updateZone } from "@/lib/api";
+import { Plus, Pencil, Power } from "lucide-react";
+import { createZone, deactivateZone, listZones, updateZone } from "@/lib/api";
 import type { Zone } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,14 +23,14 @@ export function ZonesTab() {
   const { data = [], isLoading } = useQuery({ queryKey: ["zones"], queryFn: listZones });
   const [editing, setEditing] = useState<Zone | null>(null);
   const [creating, setCreating] = useState(false);
-  const [toDelete, setToDelete] = useState<Zone | null>(null);
+  const [toDeactivate, setToDeactivate] = useState<Zone | null>(null);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["zones"] });
     qc.invalidateQueries({ queryKey: ["broadcast-groups"] });
     setEditing(null);
     setCreating(false);
-    setToDelete(null);
+    setToDeactivate(null);
   };
 
   const save = useMutation({
@@ -38,7 +38,10 @@ export function ZonesTab() {
       editing ? updateZone(editing.id, v) : createZone(v),
     onSuccess: invalidate,
   });
-  const remove = useMutation({ mutationFn: (id: number) => deleteZone(id), onSuccess: invalidate });
+  const deactivate = useMutation({
+    mutationFn: (id: number) => deactivateZone(id),
+    onSuccess: invalidate,
+  });
 
   const columns: ColumnDef<Zone, unknown>[] = [
     { accessorKey: "id", header: "ID", cell: (c) => <span className="tabular-nums text-muted-foreground">{c.row.original.id}</span> },
@@ -60,8 +63,14 @@ export function ZonesTab() {
           <Button variant="ghost" size="icon" onClick={() => setEditing(c.row.original)}>
             <Pencil />
           </Button>
-          <Button variant="ghost" size="icon" onClick={() => setToDelete(c.row.original)}>
-            <Trash2 className="text-destructive" />
+          <Button
+            variant="ghost"
+            size="icon"
+            title="Desactivar zona"
+            disabled={!c.row.original.active}
+            onClick={() => setToDeactivate(c.row.original)}
+          >
+            <Power className="text-destructive" />
           </Button>
         </div>
       ),
@@ -90,14 +99,14 @@ export function ZonesTab() {
       />
 
       <ConfirmDialog
-        open={toDelete !== null}
-        onOpenChange={(o) => !o && setToDelete(null)}
-        title="Eliminar zona"
-        description={`¿Eliminar "${toDelete?.name}"? Los grupos asociados quedarán sin esa zona.`}
-        confirmLabel="Eliminar"
+        open={toDeactivate !== null}
+        onOpenChange={(o) => !o && setToDeactivate(null)}
+        title="Desactivar zona"
+        description={`¿Desactivar "${toDeactivate?.name}"? Dejará de ofrecerse a los clientes; el historial y los grupos se conservan.`}
+        confirmLabel="Desactivar"
         destructive
-        loading={remove.isPending}
-        onConfirm={() => toDelete && remove.mutate(toDelete.id)}
+        loading={deactivate.isPending}
+        onConfirm={() => toDeactivate && deactivate.mutate(toDeactivate.id)}
       />
     </div>
   );

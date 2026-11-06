@@ -9,6 +9,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
+from cuadra import config
 from cuadra.domain.errors import NotFound
 
 OPEN_STATUSES = ("ACTIVE", "WAITING_TCP")
@@ -106,6 +107,44 @@ def set_context(conn, conversation_id: int, context: dict) -> None:
         (json.dumps(context, ensure_ascii=False, separators=(",", ":")), _now(), conversation_id),
     )
     conn.commit()
+
+
+def close_idle(conn, hours: float | None = None) -> int:
+    """Close conversations with no messages for `hours` (default 72).
+
+    A returning customer gets a new conversation, while `customers` and the
+    profile survive. Open turns are cancelled first so an old debounce job can
+    never answer after the conversation was closed.
+    """
+    idle_hours = config.CONVERSATION_IDLE_HOURS if hours is None else float(hours)
+    modifier = f"-{idle_hours:g} hours"
+    ids = [
+        int(row["id"])
+        for row in conn.execute(
+            """SELECT id FROM conversations
+               WHERE status IN ('ACTIVE', 'WAITING_TCP')
+                 AND datetime(updated_at) < datetime('now', ?)""",
+            (modifier,),
+        )
+    ]
+    if not ids:
+        return 0
+    placeholders = ", ".join("?" for _ in ids)
+    conn.execute(
+        f"""UPDATE conversations
+            SET status = 'CLOSED', closed_at = datetime('now'),
+                updated_at = datetime('now')
+            WHERE id IN ({placeholders})""",
+        ids,
+    )
+    conn.execute(
+        f"""UPDATE turns
+            SET status = 'CANCELLED', updated_at = datetime('now')
+            WHERE status = 'OPEN' AND conversation_id IN ({placeholders})""",
+        ids,
+    )
+    conn.commit()
+    return len(ids)
 
 
 def add_message(

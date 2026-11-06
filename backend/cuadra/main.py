@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from cuadra import config, db, instance
-from cuadra.ai import assembler, handlers, llm_server, queue
+from cuadra.ai import assembler, handlers, llm_server, queue, retrieval
 from cuadra.api import (
     routes_broadcasts,
     routes_catalog,
@@ -73,6 +73,17 @@ async def lifespan(app: FastAPI):
         log.warning("re-armed %s abandoned customer turn(s)", recovered_turns)
     handlers.register()
     queue.start()
+    # If the embedding model is vendored and some products lack a vector, queue
+    # one low-priority reindex. Without the model this is skipped and search
+    # stays on FTS5 + fuzzy (never downloads at startup).
+    try:
+        if retrieval.embeddings_available() and retrieval.needs_reindex():
+            queue.enqueue(
+                "reindex_all_products", {}, priority=config.PRIORITY_MAINTENANCE
+            )
+            log.info("queued initial product embedding reindex")
+    except Exception:  # noqa: BLE001 - retrieval must never block startup
+        log.exception("could not queue the initial product reindex")
     scheduler_broadcasts.start()
     await telegram_channel.start()
     await telegram_user.start()

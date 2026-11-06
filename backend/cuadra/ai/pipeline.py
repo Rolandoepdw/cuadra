@@ -12,7 +12,7 @@ import re
 import time
 
 from cuadra import config
-from cuadra.ai import guardrails, llm, prompts
+from cuadra.ai import guardrails, llm, memory, prompts, retrieval
 from cuadra.ai.context import ContextBuilder
 from cuadra.domain import catalog, conversations, events, turns
 
@@ -50,6 +50,19 @@ def product_id_from_text(text: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _retrieve_candidates(conn, query: str, *, limit: int = 4) -> list[dict]:
+    """Hybrid retrieval (FTS/embeddings/RRF, fuzzy fallback) as real product rows."""
+    products: list[dict] = []
+    for product_id in retrieval.search_ids(conn, query, top_k=limit):
+        try:
+            product = catalog.get_product(conn, product_id)
+        except catalog.NotFound:
+            continue
+        if product["status"] in ("ACTIVE", "OUT_OF_STOCK"):
+            products.append(product)
+    return products
+
+
 def _resolve_product(
     conn, intent, context: dict, text: str = ""
 ) -> dict | None:
@@ -61,9 +74,14 @@ def _resolve_product(
             if _ID_PREFIXED.search(text):
                 return None
     if intent.producto:
+        # Fuzzy first: it is precise for the exact names the NLU usually emits.
         product = catalog.find_product(conn, intent.producto)
         if product is not None:
             return product
+        # Semantic/lexical fallback for paraphrases the fuzzy matcher misses.
+        candidates = _retrieve_candidates(conn, intent.producto, limit=1)
+        if candidates:
+            return candidates[0]
     if context.get("product_id"):
         try:
             return catalog.get_product(conn, context["product_id"])
@@ -207,7 +225,7 @@ async def _decide(
     # comparar / queja / otro / low confidence -> careful free generation
     candidates = None
     if intent.intencion == "comparar":
-        candidates = catalog.search_products(conn, intent.producto or text, limit=4)
+        candidates = _retrieve_candidates(conn, intent.producto or text, limit=4)
     messages, prompt_text = _build_base_messages(
         conn,
         conversation,
@@ -320,6 +338,15 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
     current_product = _resolve_product(
         conn, llm.Intent(intencion="otro"), context, text
     )
+    # Deterministic facts are written before the prompt is built so a zone,
+    # budget or name mentioned now survives even if the summary is not due yet.
+    memory.capture_facts(
+        conn,
+        conversation,
+        text,
+        product=current_product,
+        source_message_id=last_message_id,
+    )
     nlu_messages, prompt_text = _build_base_messages(
         conn,
         conversation,
@@ -338,6 +365,13 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
         if intent.intencion == "otro":
             intent.intencion = "consulta_precio"
             intent.confianza = max(intent.confianza, 0.9)
+    memory.capture_facts(
+        conn,
+        conversation,
+        text,
+        product=product,
+        source_message_id=last_message_id,
+    )
 
     reply, escalate, generator, escalation_question = await _decide(
         conn,
@@ -382,28 +416,6 @@ async def handle_incoming(conn, conversation, inbound: dict) -> dict:
     return await handle_turn(conn, conversation, turn)
 
 
-async def maybe_summarize(conn, conversation) -> None:
-    """Compress old history into the rolling summary every SUMMARY_EVERY messages."""
-    count = conversations.message_count(conn, conversation["id"])
-    context = conversations.get_context(conn, conversation["id"])
-    through = int(context.get("summary_through") or 0)
-    if count - through < config.SUMMARY_EVERY or count < config.HISTORY_WINDOW:
-        return
-    old = conversations.messages_before_window(conn, conversation["id"], config.HISTORY_WINDOW)
-    if not old:
-        return
-    try:
-        summary = await llm.summarize(
-            context.get("summary"), old, conversation_id=conversation["id"]
-        )
-    except (llm.LLMUnavailable, llm.LLMInvalidOutput):
-        return  # summary is an optimization: never break the reply because of it
-    conversations.set_summary(conn, conversation["id"], summary)
-    events.log(
-        conn,
-        "llm",
-        "summary_updated",
-        entity="conversations",
-        entity_id=conversation["id"],
-        details={"messages": count},
-    )
+async def maybe_summarize(conn, conversation) -> bool:
+    """Backwards-compatible wrapper around the phase 2 memory module."""
+    return await memory.maybe_summarize(conn, conversation)

@@ -116,6 +116,27 @@ LLM_CONTEXT_SAFETY_TOKENS = int(
 HISTORY_WINDOW = int(os.environ.get("CUADRA_HISTORY_WINDOW", "12"))
 SUMMARY_EVERY = int(os.environ.get("CUADRA_SUMMARY_EVERY", "10"))
 
+# Memory/retrieval (doc 01 §3-4). Embeddings are optional: when `fastembed` or
+# the vendored model is missing, retrieval degrades to FTS5 + fuzzy and the
+# service still boots. The model is never downloaded at startup.
+EMBEDDING_MODEL = os.environ.get(
+    "CUADRA_EMBEDDING_MODEL",
+    "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+)
+EMBEDDING_CACHE_DIR = Path(
+    os.environ.get("CUADRA_FASTEMBED_DIR", BASE_DIR / "models" / "fastembed")
+)
+EMBEDDING_THREADS = int(os.environ.get("CUADRA_EMBEDDING_THREADS", "4"))
+RETRIEVAL_CANDIDATES = int(os.environ.get("CUADRA_RETRIEVAL_CANDIDATES", "20"))
+RETRIEVAL_TOP_K = int(os.environ.get("CUADRA_RETRIEVAL_TOP_K", "4"))
+RRF_K = int(os.environ.get("CUADRA_RRF_K", "60"))
+
+# Conversations without messages for this many hours are closed by the daily
+# scheduler; a returning customer gets a fresh conversation (profile survives).
+CONVERSATION_IDLE_HOURS = float(
+    os.environ.get("CUADRA_CONVERSATION_IDLE_HOURS", "72")
+)
+
 # Turn assembly: one reply per burst. The debounce is re-armed by every new
 # message; max_wait prevents an endless wait while the customer keeps typing.
 TURN_DEBOUNCE_S = float(os.environ.get("CUADRA_TURN_DEBOUNCE_S", "2.5"))
@@ -141,6 +162,7 @@ QUEUE_RATE_LIMIT_JITTER_S = float(
 PRIORITY_CUSTOMER = 10
 PRIORITY_TCP = 50
 PRIORITY_BROADCAST = 100
+PRIORITY_MAINTENANCE = 200
 
 # Broadcast scheduler (Hito 7): how often due campaigns are dispatched.
 BROADCAST_TICK_S = int(os.environ.get("CUADRA_BROADCAST_TICK_S", "5"))
@@ -162,6 +184,14 @@ ESCALATION_MAX_RETRIES = int(os.environ.get("CUADRA_ESCALATION_MAX_RETRIES", "1"
 
 
 def ensure_dirs() -> None:
-    for d in (DATA_DIR, PHOTOS_DIR, AUDIOS_DIR, IMAGES_DIR, LOGS_DIR, LLM_MODELS_DIR):
+    for d in (
+        DATA_DIR,
+        PHOTOS_DIR,
+        AUDIOS_DIR,
+        IMAGES_DIR,
+        LOGS_DIR,
+        LLM_MODELS_DIR,
+        EMBEDDING_CACHE_DIR,
+    ):
         d.mkdir(parents=True, exist_ok=True)
 

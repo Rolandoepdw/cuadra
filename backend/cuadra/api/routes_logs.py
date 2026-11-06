@@ -59,7 +59,7 @@ LABELS = {
     "category_deleted": "Categoría eliminada",
     "zone_created": "Zona creada",
     "zone_updated": "Zona actualizada",
-    "zone_deleted": "Zona eliminada",
+    "zone_deactivated": "Zona desactivada",
     "supplier_created": "TCP creado",
     "supplier_updated": "TCP actualizado",
     "supplier_deleted": "TCP desactivado",
@@ -363,8 +363,8 @@ class Presenter:
             )
         if event_type == "zone_created":
             return f"Zona {_quote(name)}"
-        if event_type == "zone_deleted":
-            return f"Zona {_quote(name)} eliminada"
+        if event_type == "zone_deactivated":
+            return f"Zona {_quote(name)} desactivada"
         if event_type == "supplier_created":
             zones = d.get("zones") or []
             return f"TCP {_quote(name)} · {len(zones)} zona(s)"

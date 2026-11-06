@@ -8,6 +8,7 @@ Images are compressed on upload (max 1280 px edge, JPEG ~82) and stored under
 import difflib
 import io
 import json
+import re
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
@@ -212,19 +213,115 @@ def update_zone(conn, zone_id: int, data: dict) -> dict:
 
 
 def delete_zone(conn, zone_id: int) -> dict:
+    """Soft delete: zones are never removed, only deactivated (D3).
+
+    Group links and aliases stay in place so reactivating the zone restores the
+    previous configuration. `resolve_zone` only considers active zones, so an
+    inactive zone is never offered to a customer.
+    """
     zone = _get(conn, "zones", zone_id, "zone")
-    conn.execute("DELETE FROM group_zones WHERE zone_id = ?", (zone_id,))
-    conn.execute("DELETE FROM zones WHERE id = ?", (zone_id,))
+    conn.execute("UPDATE zones SET active = 0 WHERE id = ?", (zone_id,))
     events.log(
         conn,
         "dashboard",
-        "zone_deleted",
+        "zone_deactivated",
         entity="zones",
         entity_id=zone_id,
-        details={"name": zone["name"]},
+        details={"name": zone["name"], "active": False},
     )
     conn.commit()
-    return {"ok": True, "id": zone_id, "deleted": True}
+    return _get(conn, "zones", zone_id, "zone")
+
+
+def list_zone_aliases(conn, zone_id: int | None = None) -> list[dict]:
+    sql = "SELECT * FROM zone_aliases"
+    args: list = []
+    if zone_id is not None:
+        sql += " WHERE zone_id = ?"
+        args.append(zone_id)
+    return [dict(r) for r in conn.execute(sql + " ORDER BY alias", args)]
+
+
+def add_zone_alias(conn, zone_id: int, alias: str) -> dict:
+    """Register a colloquial name for an existing zone.
+
+    The alias is normalised with `_fold` (lowercase, no accents) so callers can
+    write "San Miguel del Padrón" while the catalog keeps "San Miguel" untouched.
+    """
+    _get(conn, "zones", zone_id, "zone")
+    normalized = _fold(alias).strip()
+    _require(bool(normalized), "'alias' is required")
+    conn.execute(
+        """INSERT INTO zone_aliases (alias, zone_id) VALUES (?, ?)
+           ON CONFLICT(alias) DO UPDATE SET zone_id = excluded.zone_id""",
+        (normalized, zone_id),
+    )
+    events.log(
+        conn,
+        "dashboard",
+        "zone_alias_set",
+        entity="zones",
+        entity_id=zone_id,
+        details={"alias": normalized},
+    )
+    conn.commit()
+    return {"alias": normalized, "zone_id": zone_id}
+
+
+def delete_zone_alias(conn, alias: str) -> dict:
+    normalized = _fold(alias).strip()
+    conn.execute("DELETE FROM zone_aliases WHERE alias = ?", (normalized,))
+    conn.commit()
+    return {"ok": True, "alias": normalized, "deleted": True}
+
+
+# A zone mentioned inside a sentence only counts with delivery context; else
+# common words such as "regla" (a ruler) would be read as the Regla municipality.
+_ZONE_HINT_RE = re.compile(
+    r"\b(vivo|vive|resido|reside|estoy en|entrega|entregar|env[ií]o|enviar|"
+    r"zona|municipio|direcci[oó]n|domicilio|reparto|llevar|mandar)\b",
+    re.IGNORECASE,
+)
+
+
+def resolve_zone(conn, raw: str) -> dict | None:
+    """Map free text to an active zone using canonical names or aliases.
+
+    There is no hardcoded municipality list: the active `zones` catalog is the
+    source of truth. Returns the zone row or None when the text is ambiguous or
+    unknown (the caller must ask instead of guessing).
+    """
+    folded = _fold(raw).strip()
+    if not folded:
+        return None
+    zones = list_zones(conn, active=True)
+    by_id = {int(zone["id"]): zone for zone in zones}
+
+    for zone in zones:
+        if _fold(zone["name"]) == folded:
+            return zone
+    for alias in list_zone_aliases(conn):
+        zone = by_id.get(int(alias["zone_id"]))
+        if zone is not None and _fold(alias["alias"]) == folded:
+            return zone
+
+    # A sentence like "vivo en San Miguel del Padrón" contains the real name.
+    # Longest match wins, with word boundaries to avoid partial-word collisions.
+    if not _ZONE_HINT_RE.search(raw or ""):
+        return None
+    candidates = [(zone["name"], zone) for zone in zones]
+    candidates += [
+        (alias["alias"], by_id[int(alias["zone_id"])])
+        for alias in list_zone_aliases(conn)
+        if int(alias["zone_id"]) in by_id
+    ]
+    for name, zone in sorted(candidates, key=lambda item: -len(item[0])):
+        folded_name = _fold(name)
+        if len(folded_name) >= 4 and re.search(
+            rf"(?<!\w){re.escape(folded_name)}(?!\w)", folded
+        ):
+            return zone
+    return None
 
 
 # ----------------------------------------------------------------- suppliers
@@ -791,6 +888,21 @@ def find_product(conn, query: str, *, min_score: float = 0.45) -> dict | None:
     return None
 
 
+def delivery_zone_names(conn, supplier_id: int) -> list[str]:
+    """Active zones covered by a supplier (N:M `supplier_delivery_zones`)."""
+    names = [
+        row["name"]
+        for row in conn.execute(
+            """SELECT z.name FROM supplier_delivery_zones sdz
+               JOIN zones z ON z.id = sdz.zone_id
+               WHERE sdz.supplier_id = ? AND z.active = 1
+               ORDER BY z.name""",
+            (supplier_id,),
+        )
+    ]
+    return names
+
+
 def llm_product_json(conn, product: dict) -> dict:
     """Customer-safe product payload injected into the LLM context (02 §4, 01 §6.1).
 
@@ -805,6 +917,11 @@ def llm_product_json(conn, product: dict) -> dict:
             (product["supplier_id"],),
         ).fetchone()
         supplier_zone = supplier["delivery_zone"] if supplier else None
+
+    zonas = delivery_zone_names(conn, product["supplier_id"])
+    if not zonas and (supplier_zone or "").strip():
+        zonas = [supplier_zone.strip()]
+
     return {
         "id": product["id"],
         "nombre": product["name"],
@@ -813,7 +930,9 @@ def llm_product_json(conn, product: dict) -> dict:
         "moneda": product["currency"],
         "stock": product.get("stock"),
         "estado": product["status"],
-        "zona_entrega": supplier_zone,
+        # Kept as text for the existing templates; the list is what the LLM uses.
+        "zona_entrega": ", ".join(zonas) or supplier_zone,
+        "zonas_entrega": zonas,
         "especificaciones": json.loads(product.get("specifications_json") or "{}"),
     }
 

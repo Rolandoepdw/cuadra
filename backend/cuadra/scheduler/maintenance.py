@@ -12,7 +12,7 @@ import logging
 
 from cuadra import config, db
 from cuadra.ai import queue, tracing
-from cuadra.domain import escalations, events
+from cuadra.domain import conversations, escalations, events
 
 log = logging.getLogger("cuadra.scheduler")
 
@@ -63,6 +63,34 @@ def check_escalation_timeouts() -> None:
             {"escalation_id": escalation_id},
             priority=config.PRIORITY_TCP,
         )
+
+
+def close_idle_conversations() -> None:
+    """Close conversations with no messages for CONVERSATION_IDLE_HOURS.
+
+    The profile and purchase history survive; a returning customer simply gets
+    a new conversation on their next message.
+    """
+    conn = db.connect()
+    try:
+        closed = conversations.close_idle(conn)
+        if closed:
+            events.log(
+                conn,
+                "system",
+                "conversations_closed_idle",
+                entity="conversations",
+                details={
+                    "count": closed,
+                    "idle_hours": config.CONVERSATION_IDLE_HOURS,
+                },
+            )
+        log.info("closed %s idle conversation(s)", closed)
+    except Exception:  # noqa: BLE001 - maintenance must not stop the scheduler
+        conn.rollback()
+        log.exception("idle conversation closing failed")
+    finally:
+        conn.close()
 
 
 def purge_llm_traces() -> None:

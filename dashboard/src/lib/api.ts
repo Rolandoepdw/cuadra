@@ -95,8 +95,9 @@ export const createZone = (body: ZoneIn) =>
   request<Zone>("/api/zones", { method: "POST", body: JSON.stringify(body) });
 export const updateZone = (id: number, body: ZonePatch) =>
   request<Zone>(`/api/zones/${id}`, { method: "PATCH", body: JSON.stringify(body) });
-export const deleteZone = (id: number) =>
-  request<{ ok: boolean }>(`/api/zones/${id}`, { method: "DELETE" });
+// Zones are never deleted: the endpoint deactivates them (active = false).
+export const deactivateZone = (id: number) =>
+  request<Zone>(`/api/zones/${id}`, { method: "DELETE" });
 
 // ------------------------------------------------------------------- suppliers
 

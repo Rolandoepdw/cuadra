@@ -13,7 +13,7 @@ summary, the conversation state and the task instructions are never dropped.
 import json
 
 from cuadra import config
-from cuadra.ai import llm, prompts
+from cuadra.ai import llm, memory, prompts
 from cuadra.domain import catalog, conversations
 
 # Spanish text is closer to 3.5 chars/token than the optimistic 4.
@@ -59,6 +59,23 @@ class ContextBuilder:
         summary = self.context.get("summary")
         if summary:
             parts.append("RESUMEN DE LA CONVERSACIÓN HASTA AHORA:\n" + summary)
+
+        # Pinned facts and the customer profile are never trimmed: they are the
+        # only memory that survives after the history window rolls over.
+        facts = memory.facts_context(self.conn, self.conversation["id"])
+        if facts:
+            parts.append(
+                "HECHOS FIJADOS DE ESTA CONVERSACIÓN (no los contradigas):\n"
+                + json.dumps(facts, ensure_ascii=False)
+            )
+        customer_id = self.conversation.get("customer_id")
+        if customer_id is not None:
+            profile = memory.profile_context(self.conn, customer_id)
+            if profile:
+                parts.append(
+                    "PERFIL DEL CLIENTE (memoria entre conversaciones):\n"
+                    + json.dumps(profile, ensure_ascii=False)
+                )
 
         state = []
         if self.context.get("last_intent"):

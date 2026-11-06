@@ -6,6 +6,7 @@ eligible group. Spintax, category matching, daily caps and jitter live in
 """
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -76,6 +77,17 @@ def start() -> None:
         id="llm_trace_purge",
         max_instances=1,
         coalesce=True,
+    )
+    # Idle conversations (phase 2). Run shortly after boot and then daily, so a
+    # laptop that restarts every day still closes abandoned conversations.
+    _scheduler.add_job(
+        maintenance.close_idle_conversations,
+        "interval",
+        hours=24,
+        id="conversation_idle_close",
+        max_instances=1,
+        coalesce=True,
+        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
     )
     _scheduler.add_job(
         tick,
