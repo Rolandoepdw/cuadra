@@ -6,6 +6,7 @@ One open conversation per customer+channel; the rolling summary lives in
 """
 
 import json
+import sqlite3
 from datetime import datetime, timezone
 
 from cuadra.domain.errors import NotFound
@@ -117,18 +118,97 @@ def add_message(
     body: str | None = None,
     file_path: str | None = None,
     latency_ms: int | None = None,
+    external_id: str | None = None,
 ) -> dict:
-    cur = conn.execute(
-        """INSERT INTO messages
-           (conversation_id, direction, author, type, body, file_path, latency_ms)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (conversation_id, direction, author, type, body, file_path, latency_ms),
+    message, _ = add_message_with_status(
+        conn,
+        conversation_id,
+        direction,
+        author,
+        type=type,
+        body=body,
+        file_path=file_path,
+        latency_ms=latency_ms,
+        external_id=external_id,
     )
+    return message
+
+
+def add_message_with_status(
+    conn,
+    conversation_id: int,
+    direction: str,
+    author: str,
+    *,
+    type: str = "text",
+    body: str | None = None,
+    file_path: str | None = None,
+    latency_ms: int | None = None,
+    external_id: str | None = None,
+) -> tuple[dict, bool]:
+    """Insert a message and report whether it was new.
+
+    ``external_id`` is the channel's own id (Telegram message id). The partial
+    unique index on ``(conversation_id, external_id)`` makes a duplicated
+    update idempotent: the existing row is returned with ``created=False``.
+    """
+    if external_id is not None:
+        existing = find_message_by_external_id(conn, conversation_id, external_id)
+        if existing is not None:
+            return existing, False
+    try:
+        cur = conn.execute(
+            """INSERT INTO messages
+               (conversation_id, direction, author, type, body, file_path,
+                latency_ms, external_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                conversation_id,
+                direction,
+                author,
+                type,
+                body,
+                file_path,
+                latency_ms,
+                external_id,
+            ),
+        )
+    except sqlite3.IntegrityError:
+        # A concurrent duplicate won the race: return the stored row.
+        conn.rollback()
+        existing = find_message_by_external_id(conn, conversation_id, external_id)
+        if existing is not None:
+            return existing, False
+        raise
     conn.execute(
         "UPDATE conversations SET updated_at = ? WHERE id = ?", (_now(), conversation_id)
     )
     conn.commit()
-    return get_message(conn, cur.lastrowid)
+    return get_message(conn, cur.lastrowid), True
+
+
+def find_message_by_external_id(
+    conn, conversation_id: int, external_id: str
+) -> dict | None:
+    row = conn.execute(
+        """SELECT * FROM messages
+           WHERE conversation_id = ? AND external_id = ?""",
+        (conversation_id, external_id),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def get_messages(conn, message_ids: list[int]) -> list[dict]:
+    """Fetch messages by id, preserving the order of ``message_ids``."""
+    if not message_ids:
+        return []
+    placeholders = ", ".join("?" for _ in message_ids)
+    rows = conn.execute(
+        f"SELECT * FROM messages WHERE id IN ({placeholders})",
+        tuple(message_ids),
+    ).fetchall()
+    by_id = {row["id"]: dict(row) for row in rows}
+    return [by_id[mid] for mid in message_ids if mid in by_id]
 
 
 def get_message(conn, message_id: int) -> dict:

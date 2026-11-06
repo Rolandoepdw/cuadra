@@ -11,8 +11,8 @@ tags: [indice, agente-ia, diseno-aprobado, revision]
 # Documentación del agente autónomo (diseño aprobado)
 
 Esta carpeta contiene el diseño de evolución del agente de Cuadra: memoria, retrieval,
-ventas, finanzas, bucle TCP y mutación de catálogo. **Todavía no es código
-implementado:** es la especificación aprobada que guía la implementación por fases.
+ventas, finanzas, bucle TCP y mutación de catálogo. Las fases 0 y 1 ya están
+implementadas; el resto sigue como especificación aprobada que guía la implementación.
 
 > **Empieza por `05_VIABILIDAD_Y_CAMBIOS_REQUERIDOS.md`.**
 > Ese documento resume las discordancias con el código real, el veredicto de
@@ -24,12 +24,12 @@ implementado:** es la especificación aprobada que guía la implementación por 
 
 | Aspecto | Estado |
 |---|---|
-| Código de producción | **Fase 0 implementada:** trazas `llm_calls`, redacción, retención, golden set y evaluador. |
+| Código de producción | **Fases 0 y 1 implementadas:** trazas `llm_calls`, redacción, golden set, evaluador, turnos persistentes, idempotencia, contexto y guardrails. |
 | Migraciones | `012_observability_and_turns.sql` creada; se aplica al arrancar (aditiva). `013`–`015` solo diseñadas. |
 | Dependencias | Sin cambios. |
 | Modelos | Dos candidatos locales; el dueño añadirá más para el bake-off. |
 | Base de datos real | Sin cambios hasta el próximo arranque. |
-| Commit | Documentación sí; código de Fase 0 pendiente de revisión/commit. |
+| Commit | Fase 0 commiteada; Fase 1 pendiente de revisión/commit. |
 | Aprobación | Aprobada por el dueño el 2026-11-03. |
 
 La propuesta original llegó marcada como `DISENO_APROBADO`; tras la revisión pasó a
@@ -39,7 +39,7 @@ y audio TCP que hoy no se transcribe).
 
 El dueño revisó la propuesta corregida y aprobó D1–D10 el **2026-11-03**. Desde
 entonces esta carpeta es el diseño de referencia para implementar, empezando por la
-Fase 0 (medición). El código de producción sigue intacto.
+Fase 0 (medición). Las fases 0 y 1 ya están en el árbol de trabajo.
 
 ---
 
@@ -54,6 +54,7 @@ Fase 0 (medición). El código de producción sigue intacto.
 | 5 | `03_BUCLE_TCP_MUTACION_CATALOGO_Y_ROLLBACK.md` | Triage TCP, audio, mutaciones y undo. |
 | 6 | `04_PLAN_IMPLEMENTACION_Y_PROMPTS_MAESTROS.md` | Fases, contratos, prompts y pruebas. |
 | 7 | `06_LINEA_BASE_FASE_0.md` | Métricas base del modelo actual y fallos detectados. |
+| 8 | `07_CIERRE_FASE_1.md` | Turnos, idempotencia, contexto y guardrails: qué se implementó y qué falta medir. |
 | — | `../10_contexto_agente_ia.md` | Brief original que alimentó la propuesta. |
 
 ---
@@ -110,6 +111,10 @@ La **Fase 0** está implementada y medida con el modelo actual (ver `06`):
 3. Medición base: 81.8 % de intención, 0 fugas, p95 3.6 s. ✅
 4. Bake-off: falta correr el mismo evaluador con cada modelo que instale el dueño.
 
-Después del bake-off se pasa a Fase 1 (turnos, idempotencia, contexto y guardrails).
+La **Fase 1** está implementada y probada (ver `07`): ráfaga = turno = respuesta,
+deduplicación por `external_id`, recuperación tras caída, presupuesto de contexto y
+guardrails de salida. Queda pendiente medir el p95 real cuando el dueño levante el
+modelo, y revisar el diff antes de cualquier commit.
+
 La operación real no se toca: cualquier cambio de comportamiento se habilita con
 settings (`sales.mode`, `catalog.autoapply.*`), no reescribiendo el flujo.

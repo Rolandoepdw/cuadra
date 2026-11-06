@@ -99,7 +99,13 @@ async def _on_private_message(event) -> None:
         name = _sender_name(sender)
         if message.text:
             log.info("inbound userbot text from %s (%s): %s", identifier, name, message.text)
-            _ingest_userbot(identifier, name, type="text", body=message.text)
+            _ingest_userbot(
+                identifier,
+                name,
+                type="text",
+                body=message.text,
+                external_id=str(message.id),
+            )
         elif message.voice or message.audio:
             media = message.voice or message.audio
             suffix = Path(getattr(media, "file_name", None) or "").suffix
@@ -114,6 +120,7 @@ async def _on_private_message(event) -> None:
                 name,
                 type="audio",
                 file_path=f"audios/{path.name}",
+                external_id=str(message.id),
             )
         elif message.photo:
             config.IMAGES_DIR.mkdir(parents=True, exist_ok=True)
@@ -125,6 +132,7 @@ async def _on_private_message(event) -> None:
                 name,
                 type="image",
                 file_path=f"images/{path.name}",
+                external_id=str(message.id),
             )
     except Exception:  # noqa: BLE001 - never let one bad update kill the userbot
         log.exception("failed to ingest incoming userbot message")

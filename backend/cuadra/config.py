@@ -106,10 +106,20 @@ LLM_EXTRA_ARGS = os.environ.get("CUADRA_LLM_EXTRA_ARGS", "")
 LLM_PID_FILE = DATA_DIR / "llm_server.pid"
 LLM_LOG_FILE = LOGS_DIR / "llm.log"
 
-# Prompt budget (doc 01 §6.1): ~2-2.5K tokens per call
+# Prompt budget (doc 01 §5): derived from the context window and validated
+# against the explicit cap. Generation and safety margins are configurable.
 LLM_MAX_PROMPT_TOKENS = int(os.environ.get("CUADRA_LLM_MAX_PROMPT_TOKENS", "2500"))
+LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("CUADRA_LLM_MAX_OUTPUT_TOKENS", "600"))
+LLM_CONTEXT_SAFETY_TOKENS = int(
+    os.environ.get("CUADRA_LLM_CONTEXT_SAFETY_TOKENS", "400")
+)
 HISTORY_WINDOW = int(os.environ.get("CUADRA_HISTORY_WINDOW", "12"))
 SUMMARY_EVERY = int(os.environ.get("CUADRA_SUMMARY_EVERY", "10"))
+
+# Turn assembly: one reply per burst. The debounce is re-armed by every new
+# message; max_wait prevents an endless wait while the customer keeps typing.
+TURN_DEBOUNCE_S = float(os.environ.get("CUADRA_TURN_DEBOUNCE_S", "2.5"))
+TURN_MAX_WAIT_S = float(os.environ.get("CUADRA_TURN_MAX_WAIT_S", "8"))
 
 # Whisper (speech-to-text). Empty language = auto-detect ("es" in production).
 WHISPER_MODEL = os.environ.get("CUADRA_WHISPER_MODEL", "small")

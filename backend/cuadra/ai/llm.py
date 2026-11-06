@@ -321,6 +321,6 @@ async def summarize(
 
 
 def estimate_tokens(messages: list[dict]) -> int:
-    """Cheap ~4 chars/token estimate to keep the window under budget (01 §6.1)."""
+    """Cheap ~3.5 chars/token estimate for Spanish (doc 01 §5)."""
     chars = sum(len(json.dumps(m, ensure_ascii=False)) for m in messages)
-    return chars // 4
+    return int(chars / 3.5)

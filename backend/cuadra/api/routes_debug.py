@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
 from cuadra import config, db
-from cuadra.ai import ingest, queue, stt
+from cuadra.ai import assembler, ingest, stt
 from cuadra.api.auth import require_pin
 from cuadra.domain import conversations, escalations
 
@@ -29,6 +29,7 @@ class DebugMessageIn(BaseModel):
     identifier: str = Field(default="debug-user", max_length=80)
     channel: Literal["telegram", "whatsapp"] = "telegram"
     customer_name: str | None = None
+    external_id: str | None = Field(default=None, max_length=120)
     wait_s: float = Field(default=60, ge=1, le=180)
 
 
@@ -76,17 +77,29 @@ async def debug_message(payload: DebugMessageIn) -> dict:
         body=payload.text,
         customer_name=payload.customer_name,
         identity="bot",
+        external_id=payload.external_id,
     )
-    reply = await _wait_for_reply(info["job_id"], info["conversation_id"], payload.wait_s)
-    return {
+    base = {
         "conversation_id": info["conversation_id"],
-        "customer_id": info["customer_id"],
-        "job_id": info["job_id"],
+        "customer_id": info.get("customer_id"),
+        "job_id": info.get("job_id"),
+        "turn_id": info.get("turn_id"),
+        "duplicate": info.get("duplicate", False),
         "inbound": payload.text,
-        "reply": reply.get("body"),
-        "reply_message_id": reply.get("id"),
-        "latency_ms": reply.get("latency_ms"),
     }
+    if base["job_id"] is None:
+        base.update({"reply": None, "reply_message_id": None, "latency_ms": None})
+        return base
+
+    reply = await _wait_for_reply(base["job_id"], info["conversation_id"], payload.wait_s)
+    base.update(
+        {
+            "reply": reply.get("body"),
+            "reply_message_id": reply.get("id"),
+            "latency_ms": reply.get("latency_ms"),
+        }
+    )
+    return base
 
 
 @router.post("/audio")
@@ -128,11 +141,8 @@ async def debug_audio(
             body=result["text"],
             file_path=f"audios/{name}",
         )
-        job_id = queue.enqueue(
-            "generate_reply",
-            {"conversation_id": conversation["id"], "message_id": inbound["id"]},
-            priority=config.PRIORITY_CUSTOMER,
-        )
+        turn = assembler.on_inbound(conn, conversation["id"], inbound["id"])
+        job_id = turn["job_id"]
         conversation_id = conversation["id"]
     finally:
         conn.close()

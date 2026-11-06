@@ -105,16 +105,63 @@ def _mark_post_failed(job: dict, error: str) -> None:
         log.exception("could not mark post for failed job %s", job.get("id"))
 
 
-def enqueue(job_type: str, payload: dict, *, priority: int = 100) -> int:
-    """Append a job. Lower priority number runs first (clients < TCP < broadcasts)."""
+def _timestamp(value: datetime | str | None) -> str | None:
+    """Normalize an absolute time for `jobs.next_retry_at`."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat()
+    return str(value)
+
+
+def enqueue(
+    job_type: str,
+    payload: dict,
+    *,
+    priority: int = 100,
+    available_at: datetime | str | None = None,
+) -> int:
+    """Append a job. Lower priority number runs first (clients < TCP < broadcasts).
+
+    ``available_at`` parks the job until that absolute time (``next_retry_at``),
+    which is how persistent turn debouncing survives a restart.
+    """
     conn = db.connect()
     try:
         cur = conn.execute(
-            "INSERT INTO jobs (type, payload_json, priority) VALUES (?, ?, ?)",
-            (job_type, json.dumps(payload, ensure_ascii=False), priority),
+            """INSERT INTO jobs (type, payload_json, priority, next_retry_at)
+               VALUES (?, ?, ?, ?)""",
+            (
+                job_type,
+                json.dumps(payload, ensure_ascii=False),
+                priority,
+                _timestamp(available_at),
+            ),
         )
         conn.commit()
         return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def reschedule(job_id: int, available_at: datetime | str) -> bool:
+    """Move a still-pending job to another absolute time.
+
+    Returns True when the job was pending and actually moved. An IN_PROGRESS
+    job cannot be rescheduled by design: its handler must decide whether to
+    enqueue a follow-up (see `ai/assembler.py`).
+    """
+    conn = db.connect()
+    try:
+        cur = conn.execute(
+            """UPDATE jobs SET next_retry_at = ?, updated_at = ?
+               WHERE id = ? AND status = 'PENDING'""",
+            (_timestamp(available_at), _now(), job_id),
+        )
+        conn.commit()
+        return cur.rowcount == 1
     finally:
         conn.close()
 

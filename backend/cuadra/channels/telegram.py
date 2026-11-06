@@ -43,6 +43,7 @@ async def start() -> None:
             from_user=message.from_user,
             type="text",
             body=message.text,
+            external_id=str(message.message_id),
         )
 
     @_dp.message(F.voice | F.audio)
@@ -57,6 +58,7 @@ async def start() -> None:
             from_user=message.from_user,
             type="audio",
             file_path=f"audios/{path.name}",
+            external_id=str(message.message_id),
         )
 
     @_dp.message(F.photo)
@@ -70,6 +72,7 @@ async def start() -> None:
             from_user=message.from_user,
             type="image",
             file_path=f"images/{path.name}",
+            external_id=str(message.message_id),
         )
 
     # start_polling is a long-running coroutine: it MUST be scheduled as a task,
@@ -87,7 +90,9 @@ def _on_polling_done(task) -> None:
         log.error("telegram polling stopped unexpectedly: %r", exc)
 
 
-async def _handle(bot, *, identifier, from_user, type, body=None, file_path=None) -> None:
+async def _handle(
+    bot, *, identifier, from_user, type, body=None, file_path=None, external_id=None
+) -> None:
     name = from_user.full_name if from_user is not None else None
     log.info("inbound telegram %s from %s (%s): %s", type, identifier, name, (body or file_path))
     try:
@@ -99,6 +104,7 @@ async def _handle(bot, *, identifier, from_user, type, body=None, file_path=None
             file_path=file_path,
             customer_name=name,
             identity="bot",
+            external_id=external_id,
         )
     except Exception:  # noqa: BLE001 — never kill polling on a single bad message
         log.exception("failed to ingest incoming telegram message")

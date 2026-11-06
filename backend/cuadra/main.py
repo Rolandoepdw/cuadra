@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from cuadra import config, db, instance
-from cuadra.ai import handlers, llm_server, queue
+from cuadra.ai import assembler, handlers, llm_server, queue
 from cuadra.api import (
     routes_broadcasts,
     routes_catalog,
@@ -68,6 +68,9 @@ async def lifespan(app: FastAPI):
     recovered = queue.requeue_in_progress()
     if recovered:
         log.warning("requeued %s job(s) interrupted by the last shutdown", recovered)
+    recovered_turns = assembler.recover_open()
+    if recovered_turns:
+        log.warning("re-armed %s abandoned customer turn(s)", recovered_turns)
     handlers.register()
     queue.start()
     scheduler_broadcasts.start()

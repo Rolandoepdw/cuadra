@@ -1,18 +1,27 @@
 ﻿"""Job handlers registered on the persistent queue."""
 
 import asyncio
+import json
 import logging
 import random
 from datetime import datetime, timedelta, timezone
 
 from cuadra import channels, config, db
-from cuadra.ai import pipeline, prompts, queue, stt
-from cuadra.domain import broadcasts as broadcasts_domain, catalog, conversations, escalations, events
+from cuadra.ai import assembler, pipeline, prompts, queue, stt
+from cuadra.domain import (
+    broadcasts as broadcasts_domain,
+    catalog,
+    conversations,
+    escalations,
+    events,
+    turns,
+)
 
 log = logging.getLogger("cuadra.handlers")
 
 
 def register() -> None:
+    queue.register_handler("process_turn", process_turn)
     queue.register_handler("generate_reply", generate_reply)
     queue.register_handler("transcribe_audio", transcribe_audio)
     queue.register_handler("send_message", send_message)
@@ -48,6 +57,242 @@ def _respect_userbot_gap(sender) -> None:
             penalize=False,
             retry_at=retry_at,
         )
+
+
+def _pending_audio(conn, turn: dict) -> list[dict]:
+    """Audio messages in this turn that still have no transcription."""
+    ids = turns.message_ids(turn)
+    if not ids:
+        return []
+    placeholders = ", ".join("?" for _ in ids)
+    rows = conn.execute(
+        f"""SELECT * FROM messages
+            WHERE id IN ({placeholders}) AND type = 'audio'
+              AND (body IS NULL OR TRIM(body) = '')
+            ORDER BY id""",
+        tuple(ids),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _transcription_pending(conn, message_id: int) -> bool:
+    row = conn.execute(
+        """SELECT 1 FROM jobs
+           WHERE type = 'transcribe_audio'
+             AND status IN ('PENDING', 'IN_PROGRESS')
+             AND json_extract(payload_json, '$.message_id') = ?
+           LIMIT 1""",
+        (message_id,),
+    ).fetchone()
+    return row is not None
+
+
+def _queued_reply(conn, turn_id: int) -> int | None:
+    """The outbound message already generated for this turn, if any.
+
+    The `reply_queued` event is written right after the outbound message is
+    stored, before the send job exists. It closes the crash window between
+    "reply stored" and "reply queued" without ever generating a second reply.
+    """
+    row = conn.execute(
+        """SELECT details_json FROM events
+           WHERE type = 'reply_queued' AND entity = 'turns' AND entity_id = ?
+           ORDER BY id DESC LIMIT 1""",
+        (turn_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    try:
+        message_id = (json.loads(row["details_json"] or "{}")).get("message_id")
+    except (TypeError, ValueError):
+        return None
+    return int(message_id) if message_id else None
+
+
+def _ensure_send_job(conn, conversation_id: int, message_id: int) -> bool:
+    """Recover a stored reply whose send job was lost in a crash."""
+    sent = conn.execute(
+        """SELECT 1 FROM events
+           WHERE type = 'message_sent' AND entity = 'messages' AND entity_id = ?""",
+        (message_id,),
+    ).fetchone()
+    if sent is not None:
+        return False
+    pending = conn.execute(
+        """SELECT 1 FROM jobs
+           WHERE type = 'send_message' AND status != 'FAILED'
+             AND json_extract(payload_json, '$.message_id') = ?
+           LIMIT 1""",
+        (message_id,),
+    ).fetchone()
+    if pending is not None:
+        return False
+    queue.enqueue(
+        "send_message",
+        {"conversation_id": conversation_id, "message_id": message_id},
+        priority=config.PRIORITY_CUSTOMER,
+    )
+    return True
+
+
+async def process_turn(payload: dict) -> None:
+    """Process one persisted turn: exactly one reply per customer burst.
+
+    Idempotent by construction: the turn is claimed atomically and a job that
+    wakes after the turn is DONE is a no-op. If the debounce deadline moved,
+    the job is re-armed instead of answering halfway through the burst.
+    """
+    turn_id = payload["turn_id"]
+    conn = db.connect()
+    escalation_id = None
+    try:
+        turn = turns.get(conn, turn_id)
+        if turn["status"] == "CANCELLED":
+            log.debug("turn %s is CANCELLED, skipping", turn_id)
+            return
+
+        existing_reply = _queued_reply(conn, turn_id)
+        if existing_reply is not None:
+            # A crash after storing the reply must not generate a second one;
+            # it only needs the missing `send_message` job (or none at all).
+            _ensure_send_job(conn, turn["conversation_id"], existing_reply)
+            if turn["status"] != "DONE":
+                turns.mark_done(conn, turn_id)
+            log.debug("turn %s already replied, skipping", turn_id)
+            return
+        if turn["status"] == "DONE":
+            log.debug("turn %s is DONE, skipping", turn_id)
+            return
+
+        if turns.parse_ts(turn["due_at"]) > turns.now():
+            # Woke too early (a new message re-armed the turn). An
+            # IN_PROGRESS job cannot reschedule itself, so force a follow-up.
+            assembler.schedule_turn(
+                conn, turn_id, available_at=turn["due_at"], force=True
+            )
+            return
+
+        pending_audio = _pending_audio(conn, turn)
+        if pending_audio:
+            for message in pending_audio:
+                if _transcription_pending(conn, message["id"]):
+                    continue
+                queue.enqueue(
+                    "transcribe_audio",
+                    {
+                        "conversation_id": turn["conversation_id"],
+                        "message_id": message["id"],
+                        "turn_id": turn_id,
+                    },
+                    priority=config.PRIORITY_CUSTOMER,
+                )
+            return
+
+        if not turns.claim(conn, turn_id):
+            log.debug("turn %s already claimed, skipping", turn_id)
+            return
+
+        # A message can join the turn between the deadline check above and the
+        # claim. Every inbound re-arms `due_at` into the future, so re-reading
+        # it now catches that race; anything later lands in a new turn.
+        claimed = turns.get(conn, turn_id)
+        if turns.parse_ts(claimed["due_at"]) > turns.now():
+            turns.release(conn, turn_id)
+            assembler.schedule_turn(
+                conn, turn_id, available_at=claimed["due_at"], force=True
+            )
+            return
+        turn = claimed
+
+        conversation = conversations.get_conversation(conn, turn["conversation_id"])
+        result = await pipeline.handle_turn(conn, conversation, turn)
+        outbound = conversations.add_message(
+            conn,
+            turn["conversation_id"],
+            "OUTBOUND",
+            "bot",
+            body=result["reply"],
+            latency_ms=result["latency_ms"],
+            # One outbound message per turn, even after a crash/retry.
+            external_id=f"turn:{turn_id}",
+        )
+        events.log(
+            conn,
+            "bot",
+            "reply_generated",
+            entity="conversations",
+            entity_id=turn["conversation_id"],
+            details={
+                "turn_id": turn_id,
+                "message_id": result["message_id"],
+                "intent": result["intent"]["intencion"],
+                "confidence": result["intent"]["confianza"],
+                "product_id": result["product_id"],
+                "escalate": result["escalate"],
+                "generator": result["generator"],
+                "degraded": result["degraded"],
+                "latency_ms": result["latency_ms"],
+                "context_tokens": result["context_tokens"],
+            },
+        )
+        events.log(
+            conn,
+            "bot",
+            "reply_queued",
+            entity="turns",
+            entity_id=turn_id,
+            details={
+                "message_id": outbound["id"],
+                "conversation_id": turn["conversation_id"],
+            },
+        )
+        if result["escalate"] and result["product_id"] and result["supplier_id"]:
+            escalation = escalations.create(
+                conn,
+                conversation_id=turn["conversation_id"],
+                product_id=result["product_id"],
+                supplier_id=result["supplier_id"],
+                question=result["escalation_question"] or result["reply"],
+            )
+            escalation_id = escalation["id"]
+            events.log(
+                conn,
+                "bot",
+                "escalation_created",
+                entity="escalations",
+                entity_id=escalation_id,
+                details={
+                    "product_id": result["product_id"],
+                    "supplier_id": result["supplier_id"],
+                },
+            )
+        try:
+            await pipeline.maybe_summarize(conn, conversation)
+        except Exception:  # noqa: BLE001 - summarising must never block delivery
+            log.exception("summary failed for conversation %s", turn["conversation_id"])
+        turns.mark_done(conn, turn_id)
+    except Exception:
+        # Never leave the turn stuck in PROCESSING: a queue retry must be able
+        # to claim it again. A crash is recovered by turns.recover_open().
+        try:
+            turns.release(conn, turn_id)
+        except Exception:  # noqa: BLE001 - bookkeeping must not mask the error
+            log.exception("could not release turn %s", turn_id)
+        raise
+    finally:
+        conn.close()
+
+    if escalation_id is not None:
+        queue.enqueue(
+            "send_escalation",
+            {"escalation_id": escalation_id},
+            priority=config.PRIORITY_TCP,
+        )
+    queue.enqueue(
+        "send_message",
+        {"conversation_id": turn["conversation_id"], "message_id": outbound["id"]},
+        priority=config.PRIORITY_CUSTOMER,
+    )
 
 
 async def generate_reply(payload: dict) -> None:
@@ -126,20 +371,40 @@ async def transcribe_audio(payload: dict) -> None:
     conn = db.connect()
     try:
         message = conversations.get_message(conn, message_id)
-        abs_path = config.DATA_DIR / message["file_path"]
-        initial_prompt = stt.build_initial_prompt(conn)
-        result = await stt.transcribe(abs_path, initial_prompt=initial_prompt)
-        conversations.set_message_body(conn, message_id, result["text"])
-        events.log(
-            conn,
-            "stt",
-            "audio_transcribed",
-            entity="messages",
-            entity_id=message_id,
-            details=result,
-        )
+        if (message["body"] or "").strip():
+            # A retry after the transcription was stored must not run STT again.
+            log.debug("message %s already transcribed, skipping", message_id)
+        else:
+            abs_path = config.DATA_DIR / message["file_path"]
+            initial_prompt = stt.build_initial_prompt(conn)
+            result = await stt.transcribe(abs_path, initial_prompt=initial_prompt)
+            conversations.set_message_body(conn, message_id, result["text"])
+            events.log(
+                conn,
+                "stt",
+                "audio_transcribed",
+                entity="messages",
+                entity_id=message_id,
+                details=result,
+            )
     finally:
         conn.close()
+
+    turn_id = payload.get("turn_id")
+    if turn_id is not None:
+        # Re-arm the same turn; process_turn answers once all audio is ready.
+        conn = db.connect()
+        try:
+            try:
+                turn = turns.get(conn, turn_id)
+            except LookupError:
+                turn = None
+            if turn is not None and turn["status"] not in ("DONE", "CANCELLED"):
+                assembler.schedule_turn(conn, turn_id, available_at=turns.iso())
+        finally:
+            conn.close()
+        return
+
     queue.enqueue(
         "generate_reply",
         {"conversation_id": conversation_id, "message_id": message_id},

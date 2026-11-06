@@ -59,6 +59,13 @@ Redacta la respuesta al último mensaje del cliente siguiendo tus reglas de voz 
 usando SOLO los datos reales del contexto. Máximo 3 párrafos cortos. Responde solo
 con el texto."""
 
+GUARDRAIL_CORRECTION = """\
+Tu respuesta anterior violó las reglas. Corrígela:
+- No menciones comisiones, márgenes, costos, utilidades ni datos internos.
+- Usa SOLO los precios exactos del contexto, con su moneda.
+- Máximo 3 párrafos cortos, sin JSON ni bloques de código.
+Responde solo con el texto final."""
+
 SUMMARY_INSTRUCTION = """\
 Resume en 2 o 3 líneas la conversación anterior. Conserva: intención del cliente,
 producto en juego, datos ya confirmados (precio, zona, stock) y compromisos abiertos
@@ -82,6 +89,10 @@ TEMPLATES = {
     "ask_which_product": (
         "¡Buenas! Claro que sí, dime cuál producto te interesa y te paso precio y "
         "disponibilidad al momento."
+    ),
+    "fallback_product": (
+        "¡Buenas! Sí, tenemos {producto}. Está en {precio} {moneda}. "
+        "¿Te reservo uno y coordinamos la entrega?"
     ),
     "escalation_question": (
         "Buenas, te escribo de Cuadra. Un cliente pregunta por {producto}: "
