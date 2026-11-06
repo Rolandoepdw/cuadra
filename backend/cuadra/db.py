@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 from cuadra import config
 
 
-def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(config.DB_PATH, timeout=30)
+def connect(timeout: float = 30) -> sqlite3.Connection:
+    conn = sqlite3.connect(config.DB_PATH, timeout=timeout)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")

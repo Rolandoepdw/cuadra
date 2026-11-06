@@ -24,12 +24,12 @@ implementado:** es la especificación aprobada que guía la implementación por 
 
 | Aspecto | Estado |
 |---|---|
-| Código de producción | Sin tocar. |
-| Migraciones | No creadas. Solo diseñadas (`012`–`015`). |
-| Dependencias | No instaladas. |
+| Código de producción | **Fase 0 implementada:** trazas `llm_calls`, redacción, retención, golden set y evaluador. |
+| Migraciones | `012_observability_and_turns.sql` creada; se aplica al arrancar (aditiva). `013`–`015` solo diseñadas. |
+| Dependencias | Sin cambios. |
 | Modelos | Dos candidatos locales; el dueño añadirá más para el bake-off. |
-| Base de datos real | Sin cambios. |
-| Commit | Solo documentación. |
+| Base de datos real | Sin cambios hasta el próximo arranque. |
+| Commit | Documentación sí; código de Fase 0 pendiente de revisión/commit. |
 | Aprobación | Aprobada por el dueño el 2026-11-03. |
 
 La propuesta original llegó marcada como `DISENO_APROBADO`; tras la revisión pasó a
@@ -53,6 +53,7 @@ Fase 0 (medición). El código de producción sigue intacto.
 | 4 | `02_MAQUINA_ESTADOS_VENTAS_Y_FINANZAS.md` | Venta, stock reservado, ledger, API y dashboard. |
 | 5 | `03_BUCLE_TCP_MUTACION_CATALOGO_Y_ROLLBACK.md` | Triage TCP, audio, mutaciones y undo. |
 | 6 | `04_PLAN_IMPLEMENTACION_Y_PROMPTS_MAESTROS.md` | Fases, contratos, prompts y pruebas. |
+| 7 | `06_LINEA_BASE_FASE_0.md` | Métricas base del modelo actual y fallos detectados. |
 | — | `../10_contexto_agente_ia.md` | Brief original que alimentó la propuesta. |
 
 ---
@@ -102,12 +103,13 @@ Están detalladas en `05`, sección 4. Resumen:
 
 ## 6. Próximo paso
 
-Implementar la **Fase 0** de `05` / `04`:
+La **Fase 0** está implementada y medida con el modelo actual (ver `06`):
 
-1. Migración `012`: `llm_calls` con trazas redactadas.
-2. Golden set anonimizado de 50–100 turnos.
-3. Medición del agente actual (intención, slot F1, latencia, fugas).
-4. Bake-off de modelos instalados y elección justificada.
+1. Migración `012`: `llm_calls` con trazas redactadas. ✅
+2. Golden set sintético de 55 turnos NLU + 12 de redacción. ✅
+3. Medición base: 81.8 % de intención, 0 fugas, p95 3.6 s. ✅
+4. Bake-off: falta correr el mismo evaluador con cada modelo que instale el dueño.
 
-La operación real no se toca en Fase 0. Cualquier cambio de comportamiento se habilita
-con settings (`sales.mode`, `catalog.autoapply.*`), no reescribiendo el flujo.
+Después del bake-off se pasa a Fase 1 (turnos, idempotencia, contexto y guardrails).
+La operación real no se toca: cualquier cambio de comportamiento se habilita con
+settings (`sales.mode`, `catalog.autoapply.*`), no reescribiendo el flujo.

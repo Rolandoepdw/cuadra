@@ -1,0 +1,35 @@
+{
+  "cargador": {
+    "id": 101,
+    "nombre": "Cargador 20W USB-C",
+    "descripcion": "Cargador de pared 20W con puerto USB-C, carga rapida",
+    "precio": 12.5,
+    "moneda": "USD",
+    "stock": 5,
+    "estado": "ACTIVE",
+    "zona_entrega": "Zona demo A",
+    "especificaciones": {"potencia_w": 20, "conector": "USB-C"}
+  },
+  "cable": {
+    "id": 102,
+    "nombre": "Cable USB-C 1m",
+    "descripcion": "Cable USB-C de 1 metro para carga y datos",
+    "precio": 3.0,
+    "moneda": "USD",
+    "stock": 2,
+    "estado": "ACTIVE",
+    "zona_entrega": "Zona demo A",
+    "especificaciones": {"largo_m": 1, "conector": "USB-C"}
+  },
+  "powerbank": {
+    "id": 103,
+    "nombre": "Power Bank 10000mAh",
+    "descripcion": "Bateria portatil 10000mAh con dos puertos",
+    "precio": 20.0,
+    "moneda": "USD",
+    "stock": 0,
+    "estado": "OUT_OF_STOCK",
+    "zona_entrega": "Zona demo B",
+    "especificaciones": {"capacidad_mah": 10000}
+  }
+}

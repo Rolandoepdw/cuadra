@@ -13,13 +13,14 @@ the pipeline does (doc 01 §6). Here we only talk to the model and validate outp
 
 import json
 import logging
+import time
 from typing import Literal
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from cuadra import config, db
-from cuadra.ai import prompts
+from cuadra.ai import prompts, tracing
 from cuadra.domain import settings
 
 log = logging.getLogger("cuadra.llm")
@@ -95,6 +96,17 @@ def _extract_content(data: dict) -> str:
     return (choices[0].get("message") or {}).get("content", "")
 
 
+def _usage(data: dict) -> tuple[int | None, int | None]:
+    """Token counts from either transport, when the backend reports them."""
+    usage = data.get("usage") or {}
+    prompt = usage.get("prompt_tokens", data.get("prompt_eval_count"))
+    output = usage.get("completion_tokens", data.get("eval_count"))
+    return (
+        prompt if isinstance(prompt, int) else None,
+        output if isinstance(output, int) else None,
+    )
+
+
 async def _post_chat(client: httpx.AsyncClient, payload: dict, structured: bool) -> dict:
     response = await client.post(_chat_url(), json=payload, headers=_headers())
     if response.status_code == 400 and structured:
@@ -121,12 +133,21 @@ async def chat(
     json_object: bool = False,
     temperature: float | None = None,
     timeout: float | None = None,
+    purpose: str = "other",
+    schema_name: str | None = None,
+    conversation_id: int | None = None,
+    job_id: int | None = None,
 ) -> str:
     """Single completion. ``schema`` (OpenAI-style JSON Schema) or ``json_object``
-    request structured output where the backend supports it."""
+    request structured output where the backend supports it.
+
+    Every call is persisted to ``llm_calls`` (redacted) so phase 0 can measure
+    the agent. ``purpose`` labels the call in that table.
+    """
     temp = config.LLM_TEMPERATURE if temperature is None else temperature
+    model = _active_model()
     payload: dict = {
-        "model": _active_model(),
+        "model": model,
         "messages": messages,
         "stream": False,
         "temperature": temp,
@@ -144,19 +165,53 @@ async def chat(
         if schema is not None:
             payload["response_format"] = {
                 "type": "json_schema",
-                "json_schema": {"name": "intent", "strict": True, "schema": schema},
+                "json_schema": {
+                    "name": schema_name or "output",
+                    "strict": True,
+                    "schema": schema,
+                },
             }
             structured = True
         elif json_object:
             payload["response_format"] = {"type": "json_object"}
             structured = True
 
+    started = time.perf_counter()
     try:
         async with httpx.AsyncClient(timeout=timeout or config.LLM_TIMEOUT_S) as client:
             data = await _post_chat(client, payload, structured)
     except Exception as exc:  # noqa: BLE001 — everything here is transient/network
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        tracing.record_call(
+            purpose=purpose,
+            model=model,
+            schema_name=schema_name,
+            conversation_id=conversation_id,
+            job_id=job_id,
+            latency_ms=latency_ms,
+            ok=False,
+            error=f"{type(exc).__name__}: {exc}",
+            messages=messages,
+        )
         raise LLMUnavailable(f"llm request failed ({config.LLM_PROVIDER}): {exc}") from exc
-    return _extract_content(data).strip()
+
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    content = _extract_content(data).strip()
+    prompt_tokens, output_tokens = _usage(data)
+    tracing.record_call(
+        purpose=purpose,
+        model=model,
+        schema_name=schema_name,
+        conversation_id=conversation_id,
+        job_id=job_id,
+        prompt_tokens=prompt_tokens,
+        output_tokens=output_tokens,
+        latency_ms=latency_ms,
+        ok=True,
+        messages=messages,
+        completion=content,
+    )
+    return content
 
 
 async def health() -> dict:
@@ -175,14 +230,26 @@ async def is_available() -> bool:
     return (await health())["status"] == "ok"
 
 
-async def classify(base_messages: list[dict], last_message: str) -> Intent:
+async def classify(
+    base_messages: list[dict],
+    last_message: str,
+    *,
+    conversation_id: int | None = None,
+) -> Intent:
     """NLU with one retry including the validation error (doc 03 §2)."""
     task = {
         "role": "user",
         "content": f"{prompts.NLU_TASK}\n\nMENSAJE DEL CLIENTE:\n{last_message}",
     }
     messages = [*base_messages, task]
-    raw = await chat(messages, schema=INTENT_SCHEMA, temperature=0.0)
+    raw = await chat(
+        messages,
+        schema=INTENT_SCHEMA,
+        schema_name="intent",
+        temperature=0.0,
+        purpose="intent",
+        conversation_id=conversation_id,
+    )
     try:
         return Intent.model_validate_json(raw)
     except ValidationError as first_error:
@@ -196,23 +263,41 @@ async def classify(base_messages: list[dict], last_message: str) -> Intent:
             ),
         }
         retry = [*messages, {"role": "assistant", "content": raw}, correction]
-        raw_retry = await chat(retry, schema=INTENT_SCHEMA, temperature=0.0)
+        raw_retry = await chat(
+            retry,
+            schema=INTENT_SCHEMA,
+            schema_name="intent",
+            temperature=0.0,
+            purpose="intent",
+            conversation_id=conversation_id,
+        )
         try:
             return Intent.model_validate_json(raw_retry)
         except ValidationError as second_error:
             raise LLMInvalidOutput(str(second_error)) from second_error
 
 
-async def compose(base_messages: list[dict], last_message: str, *, extra: str = "") -> str:
+async def compose(
+    base_messages: list[dict],
+    last_message: str,
+    *,
+    extra: str = "",
+    conversation_id: int | None = None,
+) -> str:
     instruction = prompts.COMPOSE_INSTRUCTION + (f"\n{extra}" if extra else "")
     messages = [
         *base_messages,
         {"role": "user", "content": f"{instruction}\n\nMENSAJE DEL CLIENTE:\n{last_message}"},
     ]
-    return await chat(messages)
+    return await chat(messages, purpose="compose", conversation_id=conversation_id)
 
 
-async def summarize(previous_summary: str | None, old_messages: list[dict]) -> str:
+async def summarize(
+    previous_summary: str | None,
+    old_messages: list[dict],
+    *,
+    conversation_id: int | None = None,
+) -> str:
     def line(message: dict) -> str:
         speaker = "Cliente" if message["direction"] == "INBOUND" else "Vendedor"
         body = message["body"] or "[" + message["type"] + "]"
@@ -229,6 +314,8 @@ async def summarize(previous_summary: str | None, old_messages: list[dict]) -> s
             {"role": "user", "content": "\n\n".join(parts)},
         ],
         temperature=0.2,
+        purpose="summary",
+        conversation_id=conversation_id,
     )
     return raw.strip()
 

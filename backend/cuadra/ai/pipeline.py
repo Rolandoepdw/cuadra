@@ -162,7 +162,9 @@ async def _decide(
     extra = ""
     if candidates:
         extra = "El cliente compara productos: usa solo los PRODUCTOS CANDIDATOS que tienes."
-    reply = await llm.compose(messages, last_text, extra=extra)
+    reply = await llm.compose(
+        messages, last_text, extra=extra, conversation_id=conversation["id"]
+    )
     return reply, False, "llm", None
 
 
@@ -195,7 +197,9 @@ async def handle_incoming(conn, conversation, inbound: dict) -> dict:
 
     degraded = False
     try:
-        intent = await llm.classify(nlu_messages, inbound["body"] or "")
+        intent = await llm.classify(
+            nlu_messages, inbound["body"] or "", conversation_id=conversation["id"]
+        )
     except llm.LLMInvalidOutput as exc:
         log.warning("NLU degraded to intent=otro: %s", exc)
         events.log(
@@ -246,7 +250,9 @@ async def maybe_summarize(conn, conversation) -> None:
     if not old:
         return
     try:
-        summary = await llm.summarize(context.get("summary"), old)
+        summary = await llm.summarize(
+            context.get("summary"), old, conversation_id=conversation["id"]
+        )
     except (llm.LLMUnavailable, llm.LLMInvalidOutput):
         return  # summary is an optimization: never break the reply because of it
     conversations.set_summary(conn, conversation["id"], summary)

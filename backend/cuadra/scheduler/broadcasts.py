@@ -68,6 +68,15 @@ def start() -> None:
     _scheduler = AsyncIOScheduler(timezone="America/Havana")
     # Escalation timeouts: check every couple of minutes (Hito 5).
     _scheduler.add_job(maintenance.check_escalation_timeouts, "interval", seconds=120)
+    # LLM traces are pruned once a day (default retention: 30 days).
+    _scheduler.add_job(
+        maintenance.purge_llm_traces,
+        "interval",
+        hours=24,
+        id="llm_trace_purge",
+        max_instances=1,
+        coalesce=True,
+    )
     _scheduler.add_job(
         tick,
         "interval",

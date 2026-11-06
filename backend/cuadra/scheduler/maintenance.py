@@ -1,14 +1,17 @@
-"""Periodic maintenance jobs (APScheduler): escalation timeouts (Hito 5).
+"""Periodic maintenance jobs (APScheduler).
 
-A PENDING escalation left unanswered past `ESCALATION_TIMEOUT_MIN` gets one
-retry; if it is still unanswered after that, it is marked TIMEOUT so the
-operator can pick it up (doc 01 §5 — never leave the client hanging silently).
+- Escalation timeouts (Hito 5): a PENDING escalation left unanswered past
+  `ESCALATION_TIMEOUT_MIN` gets one retry; if it is still unanswered after
+  that, it is marked TIMEOUT so the operator can pick it up (doc 01 §5 —
+  never leave the client hanging silently).
+- LLM trace retention (phase 0): traces older than `llm.trace_retention_days`
+  are deleted so the table does not grow forever.
 """
 
 import logging
 
 from cuadra import config, db
-from cuadra.ai import queue
+from cuadra.ai import queue, tracing
 from cuadra.domain import escalations, events
 
 log = logging.getLogger("cuadra.scheduler")
@@ -60,3 +63,9 @@ def check_escalation_timeouts() -> None:
             {"escalation_id": escalation_id},
             priority=config.PRIORITY_TCP,
         )
+
+
+def purge_llm_traces() -> None:
+    removed = tracing.purge_old()
+    if removed:
+        log.info("purged %s llm trace rows past retention", removed)

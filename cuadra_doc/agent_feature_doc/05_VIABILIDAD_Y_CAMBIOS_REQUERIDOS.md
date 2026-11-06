@@ -353,6 +353,10 @@ solo traduce nombres coloquiales. No se hardcodea ninguna lista geográfica.
 Este documento y los `00`–`04` corregidos fueron **aprobados el 2026-11-03**. A partir
 de aquí son la referencia de implementación, no una propuesta.
 
+> **Actualización posterior:** la Fase 0 ya está implementada en el árbol de trabajo
+> (`012_observability_and_turns.sql`, trazas redactadas, retención, golden set y
+> `scripts/eval_agent.py`). Esos cambios de código todavía no están commiteados.
+
 ---
 
 ## 12. Checklist de aprobación (completado)
