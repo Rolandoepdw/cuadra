@@ -26,10 +26,10 @@ implementadas; el resto sigue como especificación aprobada que guía la impleme
 |---|---|
 | Código de producción | **Fases 0, 1 y 2 implementadas:** trazas, turnos persistentes, contexto, guardrails, hechos, resumen incremental, FTS5, embeddings opcionales, RRF y cierre por inactividad. |
 | Migraciones | `012_observability_and_turns.sql` y `013_memory_retrieval.sql` creadas; se aplican al arrancar (aditivas). `014`–`015` solo diseñadas. |
-| Dependencias | Sin cambios obligatorios. `fastembed` es opcional para el camino semántico. |
+| Dependencias | `fastembed` añadido a `requirements.txt`. El modelo vendorizado sigue siendo opcional: sin él, el bot usa FTS5 + fuzzy. |
 | Modelos | Dos candidatos locales; el dueño añadirá más para el bake-off. |
 | Base de datos real | Sin cambios hasta el próximo arranque. |
-| Commit | Fases 0 y 1 commiteadas; Fase 2 pendiente de revisión/commit. |
+| Commit | Fases 0, 1 y 2 commiteadas (`b3e9def`, `90cdec1`, `19b0e51`). |
 | Aprobación | Aprobada por el dueño el 2026-11-03. |
 
 La propuesta original llegó marcada como `DISENO_APROBADO`; tras la revisión pasó a
@@ -120,9 +120,9 @@ levante el modelo.
 La **Fase 2** está implementada y probada (ver `08`): hechos vigentes, perfil de
 cliente, resumen incremental por id de mensaje, FTS5 con BM25, embeddings opcionales
 con FastEmbed, fusión RRF, fallback fuzzy y cierre de conversaciones inactivas. El
-camino semántico queda desactivado hasta que se instale `fastembed` y se vendorice el
-modelo; mientras tanto el bot responde con FTS5 + fuzzy. Falta medir recall@3 con
-consultas reales y revisar el diff antes de cualquier commit.
+modelo está instalado y vendorizado en `backend/models/fastembed/`; el arranque no
+descarga y la inferencia offline funciona. Falta medir recall@3 con consultas reales;
+si el modelo falta, el bot sigue respondiendo con FTS5 + fuzzy.
 
 La operación real no se toca: cualquier cambio de comportamiento se habilita con
 settings (`sales.mode`, `catalog.autoapply.*`), no reescribiendo el flujo.

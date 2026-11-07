@@ -8,3 +8,5 @@ pillow
 faster-whisper
 av<19
 telethon
+# Optional semantic layer: FTS5 + fuzzy still work when it is absent.
+fastembed

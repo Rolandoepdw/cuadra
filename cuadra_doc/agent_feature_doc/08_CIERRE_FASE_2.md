@@ -32,6 +32,7 @@ tags: [fase-2, memoria, hechos, resumen, fts5, embeddings, retrieval, zonas]
 | `scheduler/maintenance.py` | Job diario `close_idle_conversations`. |
 | `api/routes_catalog.py` | Encola `reindex_product` al crear, editar o borrar un producto. |
 | `main.py` | Reindexado inicial de baja prioridad solo si el modelo está vendorizado. |
+| `requirements.txt` | `fastembed` añadido; el camino semántico sigue siendo opcional. |
 
 Configuración nueva:
 
@@ -129,9 +130,14 @@ cd backend
 
 ## 6. Limitaciones de esta fase
 
-- **Embeddings no instalados**: `fastembed` no está en el venv y el modelo no está
-  descargado. El camino semántico está implementado y probado con dobles, pero la
-  calidad de recall real se medirá cuando el dueño corra `scripts/fetch_embeddings_model.py`.
+- **Embeddings instalados**: `fastembed 0.9.1` está en `backend/.venv` y el modelo
+  `paraphrase-multilingual-MiniLM-L12-v2` está vendorizado en
+  `backend/models/fastembed/` con SHA-256 verificado. La carga offline y la inferencia
+  (384 dimensiones) están comprobadas.
+- **Descarga sin reanudación**: `huggingface_hub 1.33` reinicia el archivo completo si
+  se corta, y en esta red `curl` está bloqueado. Para redes lentas hay que completar
+  `model_optimized.onnx` con `Range` y verificar su SHA-256 antes de dar el modelo por
+  bueno. El arranque nunca descarga.
 - **Recall sin medir**: no hay 50 consultas reales etiquetadas todavía; solo pruebas
   sintéticas de FTS/fuzzy/RRF.
 - **Extracción de hechos determinista**: zona, presupuesto, nombre y teléfono se detectan
@@ -147,7 +153,7 @@ cd backend
 ## 7. Próximo paso
 
 1. Revisar este diff con el dueño; **no se hace commit sin pedido explícito**.
-2. Opcional: instalar `fastembed` y ejecutar `scripts/fetch_embeddings_model.py` para
-   medir recall@3 con consultas reales.
+2. Medir recall@3 con 50 consultas reales etiquetadas usando el modelo ya vendorizado.
+   `scripts/fetch_embeddings_model.py` solo hace falta si hay que reinstalar el modelo.
 3. Pasar a la Fase 3 (ventas y finanzas), manteniendo `sales.mode` y los settings de
    autonomía como interruptores de comportamiento.
