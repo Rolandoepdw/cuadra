@@ -96,6 +96,24 @@ Con LM Studio cerrado, Bonsai-8B entra completo incluso a 16k.
   elegir entre los GGUF presentes en `backend/models/` y reiniciar el servidor local.
 - Cambiar de modelo **no** requiere tocar código (ni el laboratorio).
 
+## Re-medición en Fase 5 (prompt endurecido)
+
+El 2026-11-07 se repitió la comparación con el **golden set completo** (67 turnos)
+y el prompt ya endurecido, en la misma RTX 3050 y con un modelo cargado a la vez.
+Detalle y comandos en `agent_feature_doc/12_CIERRE_FASE_5.md` §1.3.
+
+| Modelo | Intención | Fugas | p50 | p95 | tok/s | VRAM total |
+|---|---|---|---|---|---|---|
+| **Nemotron-3-Nano-4B-Q4_K_M** | 51/55 (92.7 %) | 0 | 2 395 ms | **4 513 ms** | **31.3** | ~2.71 GB |
+| Qwen3-4B-Q5_0 | 52/55 (94.5 %) | 0 | 3 019 ms | 3 876 ms | 23.1 | ~3.95 GB |
+| Qwen3-4B-Q5_K_M | **53/55 (96.4 %)** | 0 | 3 333 ms | 5 354 ms | 19.8 | ~3.95 GB |
+
+Los tres pasan los umbrales (intención ≥ 90 %, 0 fugas, p95 < 20 s). Nemotron se
+mantiene como **default de operación** porque es el más rápido y el que deja más
+VRAM libre; Qwen Q5_K_M acierta dos casos más dentro del ruido de los mismos
+turnos ambiguos. Bonsai-8B ya no está instalado, así que su 81.8 % de Fase 0 no
+es comparable con esta batería.
+
 ## Experimentos futuros (ya anotados)
 
 - **Contexto dentro de la VRAM**: comparar Bonsai-8B a **16k** contra Nemotron-4B

@@ -27,7 +27,7 @@ implementadas; el resto sigue como especificación aprobada que guía la impleme
 | Código de producción | **Fases 0, 1, 2, 3, 4 y 5 implementadas:** trazas, turnos persistentes, contexto, guardrails, hechos, resumen incremental, FTS5, embeddings opcionales, RRF, cierre por inactividad, ventas con stock reservado, ledger de comisiones, despacho al TCP, panel de finanzas, triage TCP con mutaciones de catálogo y undo, panel de auditoría y endurecimiento (fugas, divulgación del prompt, cancelaciones y reinicios). |
 | Migraciones | `012_observability_and_turns.sql`, `013_memory_retrieval.sql`, `014_sales_and_finance.sql` y `015_catalog_mutations.sql` creadas; se aplican al arrancar (aditivas). |
 | Dependencias | `fastembed` añadido a `requirements.txt`. El modelo vendorizado sigue siendo opcional: sin él, el bot usa FTS5 + fuzzy. |
-| Modelos | Dos candidatos locales; el dueño añadirá más para el bake-off. |
+| Modelos | Tres GGUF instalados y medidos con el prompt endurecido (Nemotron-3-Nano-4B default, dos Qwen3-4B); ver `12_CIERRE_FASE_5.md` §1.3. |
 | Base de datos real | Sin cambios hasta el próximo arranque. |
 | Commit | Fases 0–5 commiteadas en `main`; ver `git log` para los hashes. La Fase 5 cierra el plan de 6 fases. |
 | Aprobación | Aprobada por el dueño el 2026-11-03. |
@@ -39,7 +39,7 @@ y audio TCP que hoy no se transcribe).
 
 El dueño revisó la propuesta corregida y aprobó D1–D10 el **2026-11-03**. Desde
 entonces esta carpeta es el diseño de referencia para implementar, empezando por la
-Fase 0 (medición). Las fases 0, 1, 2, 3 y 4 ya están en el árbol de trabajo.
+Fase 0 (medición). Las fases 0–5 ya están implementadas y commiteadas.
 
 ---
 

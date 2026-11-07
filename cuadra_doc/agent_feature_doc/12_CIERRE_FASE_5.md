@@ -77,6 +77,45 @@ Los cuatro son ambiguos por diseño del set (precio vs. dato técnico vs.
 comparación). No bloquean la aceptación, pero conviene añadir few-shots si el
 dueño aporta turnos reales en los que el error importe.
 
+### 1.3 Bake-off con los modelos instalados
+
+Se repitió el set completo (67 turnos: 55 NLU + 12 redacción) con cada GGUF
+instalado, usando el **mismo prompt** (`a8ec6dcc23bf1ef5`), temperatura 0.0, la
+misma GPU y un solo modelo cargado a la vez:
+
+| Modelo | Intención | JSON/esquema | Fugas | Precios inv. | p50 | p95 | tok/s | VRAM total | Veredicto |
+|---|---|---|---|---|---|---|---|---|---|
+| **Nemotron-3-Nano-4B-Q4_K_M** | 51/55 (92.7 %) | 55/55 | 0 | 0 | 2 395 ms | **4 513 ms** | **31.3** | ~2.71 GB | **default de operación** |
+| Qwen3-4B-Q5_0 | 52/55 (94.5 %) | 55/55 | 0 | 0 | 3 019 ms | 3 876 ms | 23.1 | ~3.95 GB | alternativa |
+| Qwen3-4B-Q5_K_M | **53/55 (96.4 %)** | 55/55 | 0 | 0 | 3 333 ms | 5 354 ms | 19.8 | ~3.95 GB | mejor NLU, más lento |
+
+Lectura:
+
+- Los tres cumplen intención ≥ 90 %, JSON/esquema 100 %, 0 fugas y 0 precios
+  inventados; el p95 de los tres queda por debajo de 20 s.
+- Las diferencias de intención (51 / 52 / 53) están dentro del ruido de los
+  mismos cuatro turnos ambiguos; los tres fallan al menos `p02` y `d07`.
+- Qwen gana como máximo 2 casos pero deja la VRAM al límite (~139 MiB libres a
+  8k) y responde más lento. Con 4 GB de VRAM, Nemotron deja ~470 MiB libres y es
+  el más rápido: se mantiene como default.
+- **Bonsai no se pudo re-medir**: ya no está en `backend/models/`. Su 81.8 % de
+  Fase 0 no es comparable (batería de 7 casos y prompt anterior).
+- Informes (gitignored): `backend/data/logs/eval_nemotron_phase5_hardened.json`,
+  `eval_qwen3_4b_q5_0_phase5.json` y `eval_qwen3_4b_q5km_phase5.json`.
+
+Reproducir con otro modelo instalado:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m cuadra.ai.llm_server restart --model Qwen3-4B-Q5_K_M.gguf
+.\.venv\Scripts\python.exe scripts\eval_agent.py --tag qwen_q5km `
+  --compare data\logs\eval_nemotron_phase5_hardened.json
+.\.venv\Scripts\python.exe -m cuadra.ai.llm_server restart --model NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf
+```
+
+El cambio de modelo queda persistido en `settings` (clave del modelo activo), así
+que el `restart` final devuelve la operación al modelo de siempre.
+
 ---
 
 ## 2. Retrieval offline (`recall@3`)
@@ -235,7 +274,7 @@ perdido).
    umbrales si hace falta.
 2. Anotar el set de slots y el set de ventas end-to-end para cerrar las dos
    desviaciones.
-3. Repetir el bake-off con cada modelo que instale el dueño usando el mismo
-   `--compare`.
+3. Repetir el bake-off (sección 1.3) con cada modelo nuevo que instale el dueño;
+   los tres GGUF actuales ya están medidos con el prompt endurecido.
 4. Medir p95 y recall@3 en operación real, no solo con el set sintético.
 5. Revisar con el dueño el runbook antes de la primera venta real.
