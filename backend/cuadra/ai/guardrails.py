@@ -5,6 +5,7 @@ The model is never trusted with money or internal data:
 - every monetary amount in the reply must match a price present in the
   customer-safe context (never the commission or cost);
 - internal business terms are forbidden even if the customer brings them up;
+- the system prompt and internal rules are never repeated back to the customer;
 - replies stay short and plain (no JSON, no code fences).
 
 A violation triggers one corrective retry and, if it persists, a deterministic
@@ -42,6 +43,23 @@ _PRICE = re.compile(
 _CODE_FENCE = re.compile(r"```")
 _MARKDOWN_HEADING = re.compile(r"^\s*#{1,6}\s", re.MULTILINE)
 _JSON_HINT = re.compile(r'^\s*[\{\[]|"intencion"\s*:', re.IGNORECASE)
+
+# A model that repeats its own prompt hands an attacker the whole rulebook, even
+# when it never quotes commission numbers. This is checked separately from the
+# economics blocklist so the event log keeps a stable reason code.
+_PROMPT_DISCLOSURE = re.compile(
+    r"(?:"
+    r"\bprompt\b|"
+    r"\bsystem\s+prompt\b|"
+    r"instrucciones\s+(?:del\s+)?sistema|"
+    r"reglas\s+(?:del\s+)?sistema|"
+    r"reglas\s+internas|"
+    r"configuraci[oó]n\s+interna|"
+    r"mis\s+instrucciones|"
+    r"mis\s+reglas"
+    r")",
+    re.IGNORECASE,
+)
 
 
 def _decimal(value) -> Decimal | None:
@@ -133,6 +151,11 @@ def check_internal_terms(reply: str) -> bool:
     return _INTERNAL_TERMS.search(reply or "") is None
 
 
+def check_prompt_disclosure(reply: str) -> bool:
+    """False when the reply repeats the system prompt or internal rules."""
+    return _PROMPT_DISCLOSURE.search(reply or "") is None
+
+
 def check_format(reply: str) -> bool:
     text = (reply or "").strip()
     if not text:
@@ -165,6 +188,8 @@ def validate_reply(reply: str, context: dict) -> tuple[bool, str]:
         return False, "length"
     if not check_internal_terms(reply):
         return False, "internal_terms"
+    if not check_prompt_disclosure(reply):
+        return False, "prompt_disclosure"
     if not check_prices(reply, allowed_prices(context)):
         return False, "price"
     return True, ""

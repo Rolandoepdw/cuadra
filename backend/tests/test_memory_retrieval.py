@@ -106,6 +106,15 @@ class RetrievalTests(Phase2TestCase):
         ids = retrieval._fts_search(self.conn, "bateria led", limit=10)
         self.assertIn(3, ids)
 
+    def test_plural_query_matches_a_singular_product_name(self):
+        # Customers say "cargadores"; the catalog stores "Cargador Solar".
+        ids = retrieval._fts_search(self.conn, "tienes cargadores disponibles", limit=10)
+        self.assertIn(5, ids)
+
+        ids = retrieval._fts_search(self.conn, "quiero dos baterias", limit=10)
+        self.assertIn(1, ids)
+        self.assertIn(2, ids)
+
     def test_rrf_preserves_agreement_between_both_lists(self):
         self.assertEqual(
             retrieval.reciprocal_rank_fusion([1, 2, 3], [3, 1], k=60),

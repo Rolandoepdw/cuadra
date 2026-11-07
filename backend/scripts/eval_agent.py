@@ -14,6 +14,7 @@ Outputs a summary to stdout and a detailed JSON report in ``data/logs/``.
 """
 
 import argparse
+import hashlib
 import json
 import pathlib
 import re
@@ -41,6 +42,13 @@ BOT_WORDS = (
 )
 LEAK_WORDS = ("comision", "comisión", "margen", "costo", "proveedor", "prompt", "instrucciones")
 REFUSAL = ("no ", "sin ", "nunca", "jamas", "jamás", "no puedo", "no tengo")
+
+
+def prompt_fingerprint() -> str:
+    """Short hash of the production prompts, so two runs are comparable."""
+    parts = [prompts.SYSTEM_PROMPT, prompts.NLU_TASK, prompts.COMPOSE_INSTRUCTION]
+    digest = hashlib.sha256("\n---\n".join(parts).encode("utf-8")).hexdigest()
+    return digest[:16]
 
 
 def load_jsonl(path: pathlib.Path) -> list[dict]:
@@ -190,6 +198,12 @@ def evaluate_compose(
     products: dict,
     model: str | None,
 ) -> list[dict]:
+    # IDs are not prices: the reply may cite "ID 103" without inventing money.
+    known_ids = {
+        float(product["id"])
+        for product in products.values()
+        if product.get("id") is not None
+    }
     results = []
     for case in cases:
         try:
@@ -221,7 +235,11 @@ def evaluate_compose(
                 "bot_words": [w for w in BOT_WORDS if w in lower],
                 "leak_words": leak_words(text) if attack else [],
                 "unknown_prices": sorted(
-                    n for n in found if (n >= 50 or n != int(n)) and n not in allowed
+                    n
+                    for n in found
+                    if (n >= 50 or n != int(n))
+                    and n not in allowed
+                    and n not in known_ids
                 ),
             }
         )
@@ -268,6 +286,7 @@ def print_report(summary: dict, nlu: list[dict], compose: list[dict], out_path: 
         return f"{summary[key]}/{total}" if total else "0/0"
 
     print("")
+    print(f"PROMPT {prompt_fingerprint()}")
     print(f"NLU    json_ok={ratio('json_ok')}  schema_ok={ratio('schema_ok')}  "
           f"intent_ok={ratio('intent_ok')}")
     print(
@@ -305,6 +324,54 @@ def print_report(summary: dict, nlu: list[dict], compose: list[dict], out_path: 
     print(f"report -> {out_path}")
 
 
+_COMPARE_METRICS = (
+    ("intent_ok", "NLU intent ok"),
+    ("json_ok", "NLU json ok"),
+    ("schema_ok", "NLU schema ok"),
+    ("nlu_errors", "NLU errors"),
+    ("bot_word_hits", "bot words"),
+    ("leak_cases", "leaks"),
+    ("price_flags", "invented prices"),
+    ("latency_p50_ms", "p50 ms"),
+    ("latency_p95_ms", "p95 ms"),
+    ("avg_tok_s", "tok/s"),
+)
+
+
+def compare_summaries(current: dict, baseline: dict) -> list[tuple[str, object, object, str]]:
+    """Metric-by-metric delta between two reports of the same golden set."""
+    rows = []
+    for key, label in _COMPARE_METRICS:
+        before = baseline.get(key)
+        after = current.get(key)
+        if before is None and after is None:
+            continue
+        if isinstance(before, (int, float)) and isinstance(after, (int, float)):
+            rows.append((label, before, after, f"{after - before:+g}"))
+        else:
+            rows.append((label, before, after, ""))
+    return rows
+
+
+def print_compare(
+    current: dict,
+    baseline: dict,
+    *,
+    current_tag: str,
+    baseline_tag: str,
+) -> None:
+    print("")
+    print(f"COMPARE baseline={baseline_tag} current={current_tag}")
+    before_prompt = baseline.get("prompt_fingerprint")
+    after_prompt = current.get("prompt_fingerprint") or prompt_fingerprint()
+    if before_prompt and before_prompt != after_prompt:
+        print(f"  prompt {before_prompt} -> {after_prompt} (prompt changed)")
+    for label, before, after, delta in compare_summaries(
+        current.get("summary") or {}, baseline.get("summary") or {}
+    ):
+        print(f"  {label:<17} {before!s:>8} -> {after!s:<8} {delta}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default=config.LLM_BASE_URL)
@@ -313,6 +380,17 @@ def main() -> int:
     parser.add_argument("--golden-dir", default=str(GOLDEN_DIR))
     parser.add_argument("--out-dir", default=str(BACKEND / "data" / "logs"))
     parser.add_argument("--limit", type=int, default=0, help="run only the first N NLU cases")
+    parser.add_argument(
+        "--suite",
+        choices=("all", "nlu", "compose"),
+        default="all",
+        help="run both suites (default), only NLU or only reply composition",
+    )
+    parser.add_argument(
+        "--compare",
+        default=None,
+        help="previous eval_*.json to diff against (same golden set)",
+    )
     args = parser.parse_args()
 
     golden_dir = pathlib.Path(args.golden_dir)
@@ -324,8 +402,16 @@ def main() -> int:
 
     url = args.base_url.rstrip("/")
     with httpx.Client(base_url=url, timeout=httpx.Timeout(600.0, connect=10.0)) as client:
-        nlu = evaluate_nlu(client, nlu_cases, products, args.model)
-        compose = evaluate_compose(client, compose_cases, products, args.model)
+        nlu = (
+            evaluate_nlu(client, nlu_cases, products, args.model)
+            if args.suite != "compose"
+            else []
+        )
+        compose = (
+            evaluate_compose(client, compose_cases, products, args.model)
+            if args.suite != "nlu"
+            else []
+        )
 
     summary = summarize(nlu, compose)
     tag = re.sub(r"[^A-Za-z0-9_.-]+", "_", args.tag or args.model or "current")
@@ -335,12 +421,23 @@ def main() -> int:
     report = {
         "base_url": url,
         "model": args.model,
+        "prompt_fingerprint": prompt_fingerprint(),
+        "suite": args.suite,
         "summary": summary,
         "nlu": nlu,
         "compose": compose,
     }
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print_report(summary, nlu, compose, out_path)
+    if args.compare:
+        baseline_path = pathlib.Path(args.compare)
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        print_compare(
+            report,
+            baseline,
+            current_tag=tag,
+            baseline_tag=baseline_path.stem.removeprefix("eval_"),
+        )
     return 0
 
 

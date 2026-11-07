@@ -337,11 +337,33 @@ def _query_terms(text: str) -> list[str]:
     cleaned = "".join(
         char if char.isalnum() else " " for char in _fold(text or "").lower()
     )
-    return [
+    terms = [
         term
         for term in cleaned.split()
         if len(term) > 1 and term not in _STOPWORDS
     ]
+    # Spanish plurals are common in customer messages ("cargadores", "cables")
+    # while product names are usually singular. Adding the stem as an extra OR
+    # term (never replacing the original) recovers those matches without a real
+    # stemmer or extra dependency.
+    expanded: list[str] = []
+    for term in terms:
+        if term not in expanded:
+            expanded.append(term)
+        for stem in _stems(term):
+            if stem not in expanded:
+                expanded.append(stem)
+    return expanded
+
+
+def _stems(term: str) -> list[str]:
+    """Plural candidates (both ``-s`` and ``-es``), harmless as extra OR terms."""
+    stems = []
+    if len(term) > 3 and term.endswith("s"):
+        stems.append(term[:-1])
+    if len(term) > 4 and term.endswith("es"):
+        stems.append(term[:-2])
+    return [stem for stem in stems if stem != term]
 
 
 def _fts_search(conn, query: str, *, limit: int, statuses=SEARCH_STATUSES) -> list[int]:

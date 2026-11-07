@@ -2,7 +2,7 @@
 tipo: indice
 proyecto: Cuadra
 modulo: agent_feature_doc
-estado: DISEÑO APROBADO — fases 0–4 implementadas
+estado: DISEÑO APROBADO — fases 0–5 implementadas
 revisado: 2026-11-03
 aprobado: 2026-11-03
 tags: [indice, agente-ia, diseno-aprobado, revision]
@@ -11,7 +11,7 @@ tags: [indice, agente-ia, diseno-aprobado, revision]
 # Documentación del agente autónomo (diseño aprobado)
 
 Esta carpeta contiene el diseño de evolución del agente de Cuadra: memoria, retrieval,
-ventas, finanzas, bucle TCP y mutación de catálogo. Las fases 0, 1, 2, 3 y 4 ya están
+ventas, finanzas, bucle TCP y mutación de catálogo. Las fases 0, 1, 2, 3, 4 y 5 ya están
 implementadas; el resto sigue como especificación aprobada que guía la implementación.
 
 > **Empieza por `05_VIABILIDAD_Y_CAMBIOS_REQUERIDOS.md`.**
@@ -24,12 +24,12 @@ implementadas; el resto sigue como especificación aprobada que guía la impleme
 
 | Aspecto | Estado |
 |---|---|
-| Código de producción | **Fases 0, 1, 2, 3 y 4 implementadas:** trazas, turnos persistentes, contexto, guardrails, hechos, resumen incremental, FTS5, embeddings opcionales, RRF, cierre por inactividad, ventas con stock reservado, ledger de comisiones, despacho al TCP, panel de finanzas y triage TCP con mutaciones de catálogo y undo. |
+| Código de producción | **Fases 0, 1, 2, 3, 4 y 5 implementadas:** trazas, turnos persistentes, contexto, guardrails, hechos, resumen incremental, FTS5, embeddings opcionales, RRF, cierre por inactividad, ventas con stock reservado, ledger de comisiones, despacho al TCP, panel de finanzas, triage TCP con mutaciones de catálogo y undo, panel de auditoría y endurecimiento (fugas, divulgación del prompt, cancelaciones y reinicios). |
 | Migraciones | `012_observability_and_turns.sql`, `013_memory_retrieval.sql`, `014_sales_and_finance.sql` y `015_catalog_mutations.sql` creadas; se aplican al arrancar (aditivas). |
 | Dependencias | `fastembed` añadido a `requirements.txt`. El modelo vendorizado sigue siendo opcional: sin él, el bot usa FTS5 + fuzzy. |
 | Modelos | Dos candidatos locales; el dueño añadirá más para el bake-off. |
 | Base de datos real | Sin cambios hasta el próximo arranque. |
-| Commit | Fases 0, 1 y 2 commiteadas (`b3e9def`, `90cdec1`, `19b0e51`, `b94ba62`); las Fases 3 y 4 están en el árbol de trabajo. |
+| Commit | Fases 0–5 commiteadas en `main`; ver `git log` para los hashes. La Fase 5 cierra el plan de 6 fases. |
 | Aprobación | Aprobada por el dueño el 2026-11-03. |
 
 La propuesta original llegó marcada como `DISENO_APROBADO`; tras la revisión pasó a
@@ -58,6 +58,8 @@ Fase 0 (medición). Las fases 0, 1, 2, 3 y 4 ya están en el árbol de trabajo.
 | 9 | `08_CIERRE_FASE_2.md` | Hechos, resumen, FTS5, embeddings opcionales, RRF y cierre por inactividad. |
 | 10 | `09_CIERRE_FASE_3.md` | Ventas, stock reservado, ledger de comisiones, despacho al TCP y panel de finanzas. |
 | 11 | `10_CIERRE_FASE_4.md` | Triage TCP, mutaciones de catálogo, undo con conflicto y panel de auditoría. |
+| 12 | `11_RUNBOOK_OPERACION.md` | Cómo aprobar, cancelar, revertir, reindexar y restaurar en operación real. |
+| 13 | `12_CIERRE_FASE_5.md` | Endurecimiento, replay del golden set, recall@3 y métricas contra los criterios de aceptación. |
 | — | `../10_contexto_agente_ia.md` | Brief original que alimentó la propuesta. |
 
 ---
@@ -138,5 +140,17 @@ revisión ante ambigüedad, extracción estructurada, mutaciones atómicas de pr
 specs/zonas con política de auto-aplicación, undo con detección de conflicto (`409`) y
 panel **Auditoría**. Falta medir la correlación con mensajes reales.
 
+La **Fase 5** está implementada (ver `12`): replay completo del golden set contra el
+modelo local, comparación A/B de prompts con el mismo set, `recall@3` offline sobre las
+consultas etiquetadas, 118 ataques de fuga/divulgación bloqueados, pruebas de
+cancelación y de reinicio a mitad de turno, y runbook de operación (`11`). Las métricas
+que dependen de operación real (slots, ventas end-to-end, correlación TCP real) quedan
+documentadas como desviación con plan.
+
 La operación real no se toca: cualquier cambio de comportamiento se habilita con
 settings (`sales.mode`, `catalog.autoapply.*`), no reescribiendo el flujo.
+
+Con la Fase 5 se completa el plan de **6 fases (0–5)**. Lo que queda son tareas de
+operación real, no fases nuevas: correlación con mensajes TCP reales, sets de slots y
+de ventas end-to-end, bake-off con los modelos del dueño y medición de p95/recall@3
+en producción.
