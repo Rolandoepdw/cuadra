@@ -17,6 +17,20 @@ BROADCAST_REPEAT_PASSES = "broadcast.repeat_passes"
 BROADCAST_REPEAT_WINDOW_DAYS = "broadcast.repeat_window_days"
 BROADCAST_PUBLISHING = "broadcast.publishing"
 
+CATALOG_AUTOAPPLY_PRICE = "catalog.autoapply.price"
+CATALOG_AUTOAPPLY_STOCK = "catalog.autoapply.stock"
+CATALOG_AUTOAPPLY_SPECS = "catalog.autoapply.specs"
+CATALOG_PRICE_MAX_DELTA_PCT = "catalog.price_max_delta_pct"
+CATALOG_AUTOAPPLY_MIN_CONFIDENCE = "catalog.autoapply.min_confidence"
+
+CATALOG_AUTOAPPLY_DEFAULTS = {
+    CATALOG_AUTOAPPLY_PRICE: 1,
+    CATALOG_AUTOAPPLY_STOCK: 1,
+    CATALOG_AUTOAPPLY_SPECS: 1,
+    CATALOG_PRICE_MAX_DELTA_PCT: 50,
+    CATALOG_AUTOAPPLY_MIN_CONFIDENCE: 0.85,
+}
+
 BROADCAST_DEFAULTS = {
     BROADCAST_DEFAULT_MAX_POSTS: 20,
     BROADCAST_DEFAULT_MIN_INTERVAL: 300,
@@ -80,6 +94,45 @@ def broadcast_publishing_enabled(conn) -> bool:
 
 def set_broadcast_publishing(conn, enabled: bool) -> None:
     set(conn, BROADCAST_PUBLISHING, "1" if enabled else "0")
+
+
+def _as_float(value, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def catalog_autoapply(conn) -> dict:
+    """Automatic-apply policy for TCP catalog updates (migration 014 keys).
+
+    Price and stock are capped by ``catalog.price_max_delta_pct``; every
+    mutation also needs ``catalog.autoapply.min_confidence``. Zone changes are
+    never auto-applied and are not represented here on purpose.
+    """
+    defaults = CATALOG_AUTOAPPLY_DEFAULTS
+
+    def flag(key: str) -> bool:
+        raw = get(conn, key, str(defaults[key]))
+        return _as_int(raw, int(defaults[key])) != 0
+
+    return {
+        "price": flag(CATALOG_AUTOAPPLY_PRICE),
+        "stock": flag(CATALOG_AUTOAPPLY_STOCK),
+        "specs": flag(CATALOG_AUTOAPPLY_SPECS),
+        "price_max_delta_pct": _as_float(
+            get(conn, CATALOG_PRICE_MAX_DELTA_PCT, str(defaults[CATALOG_PRICE_MAX_DELTA_PCT])),
+            float(defaults[CATALOG_PRICE_MAX_DELTA_PCT]),
+        ),
+        "min_confidence": _as_float(
+            get(
+                conn,
+                CATALOG_AUTOAPPLY_MIN_CONFIDENCE,
+                str(defaults[CATALOG_AUTOAPPLY_MIN_CONFIDENCE]),
+            ),
+            float(defaults[CATALOG_AUTOAPPLY_MIN_CONFIDENCE]),
+        ),
+    }
 
 
 def set_broadcast_defaults(conn, data: dict) -> dict[str, int]:

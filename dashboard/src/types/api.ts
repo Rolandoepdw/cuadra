@@ -454,3 +454,59 @@ export interface LedgerPage {
 export interface CancelSaleIn {
   reason: string;
 }
+
+// ------------------------------------------------------------ catalog audit
+
+export type MutationStatus = "APPLIED" | "PENDING_REVIEW" | "REVERTED" | "REJECTED";
+export type MutationType = "PRICE" | "STOCK" | "STATUS" | "SPECS" | "ZONE" | "MIXED";
+export type CorrelationMethod = "case_id" | "single_pending" | "heuristic" | "manual";
+
+export interface CatalogState {
+  price: number;
+  currency: Currency;
+  stock: number;
+  stock_reserved: number;
+  status: ProductStatus;
+  specifications: Record<string, unknown>;
+  delivery_zone_ids: number[];
+  updated_at?: string | null;
+}
+
+export interface CatalogMutation {
+  id: number;
+  product_id: number;
+  product_name: string | null;
+  supplier_id: number;
+  supplier_name: string | null;
+  escalation_id: number | null;
+  sale_id: number | null;
+  source_message_id: number | null;
+  source_text: string | null;
+  mutation_type: MutationType;
+  previous_state_json: string;
+  new_state_json: string;
+  previous_state: CatalogState;
+  new_state: CatalogState;
+  previous_updated_at: string | null;
+  confidence: number;
+  correlation_method: CorrelationMethod;
+  ambiguous: boolean;
+  status: MutationStatus;
+  notes: string | null;
+  applied_by: "bot" | "operator";
+  reverted_at: string | null;
+  reverted_by: string | null;
+  revert_reason: string | null;
+  created_at: string;
+}
+
+export interface CatalogMutationPage {
+  items: CatalogMutation[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface MutationReasonIn {
+  reason: string;
+}

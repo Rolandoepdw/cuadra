@@ -95,12 +95,23 @@ TEMPLATES = {
         "¿Te reservo uno y coordinamos la entrega?"
     ),
     "escalation_question": (
-        "Buenas, te escribo de Cuadra. Un cliente pregunta por {producto}: "
-        "\"{pregunta}\" ¿Me confirmas ese dato para pasárselo? Gracias."
+        "Buenas, te escribo de Cuadra. Consulta sobre tu producto ref: "
+        "[E-{escalation_id:04d}]\n"
+        "Producto: {producto}\n"
+        "\"{pregunta}\"\n\n"
+        "¿Me confirmas ese dato para pasárselo? Gracias."
     ),
     "escalation_resolved": (
         "¡Buenas! Ya me confirmó el almacén: {respuesta} ¿Te reservo {producto} y "
         "coordinamos la entrega?"
+    ),
+    "escalation_resolved_summary": (
+        "¡Buenas! Ya me confirmó el almacén: {respuesta} ¿Te reservo {producto} y "
+        "coordinamos la entrega?"
+    ),
+    "escalation_resolved_generic": (
+        "¡Buenas! Ya me confirmó el almacén que sí está disponible. ¿Te reservo "
+        "{producto} y coordinamos la entrega?"
     ),
     "sale_ask_data": (
         "Para dejarte el pedido listo me falta {faltan}. ¿Me lo pasas?"

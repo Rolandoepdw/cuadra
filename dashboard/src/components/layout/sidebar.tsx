@@ -1,6 +1,7 @@
 ﻿import { NavLink } from "react-router-dom";
 import {
   Activity,
+  History,
   LayoutDashboard,
   LogOut,
   Megaphone,
@@ -21,6 +22,7 @@ const items = [
   { to: "/broadcasts", label: "Difusiones", icon: Megaphone, end: false },
   { to: "/strategy", label: "Estrategia", icon: SlidersHorizontal, end: false },
   { to: "/finance", label: "Finanzas", icon: Wallet, end: false },
+  { to: "/audit", label: "Auditoría", icon: History, end: false },
   { to: "/logs", label: "Logs", icon: ScrollText, end: false },
   { to: "/health", label: "Salud", icon: Activity, end: false },
 ];

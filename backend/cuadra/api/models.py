@@ -84,6 +84,12 @@ class MainImageIn(BaseModel):
     image_id: int
 
 
+class MutationReasonIn(BaseModel):
+    """Operator note for approving, rejecting or reverting a mutation."""
+
+    reason: str = Field(default="", max_length=500)
+
+
 # ------------------------------------------------------------------ broadcasts
 
 

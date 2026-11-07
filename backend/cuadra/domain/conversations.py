@@ -109,6 +109,17 @@ def set_context(conn, conversation_id: int, context: dict) -> None:
     conn.commit()
 
 
+def set_status(conn, conversation_id: int, status: str) -> None:
+    """Move a conversation between ACTIVE / WAITING_TCP / CLOSED."""
+    if status not in ("ACTIVE", "WAITING_TCP", "CLOSED"):
+        raise ValueError(f"invalid conversation status: {status}")
+    conn.execute(
+        "UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?",
+        (status, _now(), conversation_id),
+    )
+    conn.commit()
+
+
 def close_idle(conn, hours: float | None = None) -> int:
     """Close conversations with no messages for `hours` (default 72).
 

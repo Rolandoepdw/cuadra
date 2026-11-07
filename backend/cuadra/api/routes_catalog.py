@@ -1,14 +1,17 @@
 """Catalog CRUD endpoints: categories, suppliers (TCP), products, images."""
 
+import logging
+
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
-from cuadra import db
-from cuadra.ai import retrieval
+from cuadra import config, db
+from cuadra.ai import queue, retrieval, tcp_triage
 from cuadra.api.auth import require_pin
 from cuadra.api.models import (
     CategoryIn,
     CategoryPatch,
     MainImageIn,
+    MutationReasonIn,
     ProductIn,
     ProductPatch,
     SupplierIn,
@@ -16,9 +19,12 @@ from cuadra.api.models import (
     ZoneIn,
     ZonePatch,
 )
-from cuadra.domain import catalog
+from cuadra.domain import catalog, catalog_mutations
+from cuadra.domain.errors import Conflict
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_pin)])
+
+log = logging.getLogger("cuadra.routes_catalog")
 
 _BOOL_FIELDS = ("active", "is_main")
 
@@ -42,6 +48,8 @@ def _out(entity: dict) -> dict:
 
 
 def _http(exc: catalog.CatalogError) -> HTTPException:
+    if isinstance(exc, Conflict):
+        return HTTPException(status.HTTP_409_CONFLICT, str(exc))
     code = (
         status.HTTP_404_NOT_FOUND
         if isinstance(exc, catalog.NotFound)
@@ -216,3 +224,78 @@ def set_main_image(product_id: int, payload: MainImageIn) -> dict:
 @router.delete("/products/{product_id}/images/{image_id}")
 def delete_image(product_id: int, image_id: int) -> dict:
     return _run(catalog.delete_image, product_id, image_id)
+
+
+# --------------------------------------------------------- catalog mutations
+#
+# Audit + undo surface for TCP-originated catalog changes (doc 03 §7).
+
+
+@router.get("/catalog/mutations")
+def list_mutations(
+    status_filter: str | None = Query(default=None, alias="status"),
+    supplier_id: int | None = None,
+    product_id: int | None = None,
+    ambiguous: bool | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    filters = {
+        "status": status_filter,
+        "supplier_id": supplier_id,
+        "product_id": product_id,
+        "ambiguous": ambiguous,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
+    items = _run(catalog_mutations.list_mutations, **filters, limit=limit, offset=offset)
+    total = _run(catalog_mutations.count_mutations, **filters)
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/catalog/mutations/{mutation_id}")
+def get_mutation(mutation_id: int) -> dict:
+    return _run(catalog_mutations.get, mutation_id)
+
+
+def _resume_clients(mutation: dict) -> None:
+    """After an operator approval, answer every client still waiting."""
+    conn = db.connect()
+    try:
+        sends = tcp_triage.resume_escalations(
+            conn,
+            product_id=mutation["product_id"],
+            supplier_id=mutation["supplier_id"],
+            answer=mutation.get("source_text") or "",
+            summary=None,
+        )
+    except Exception:  # noqa: BLE001 - approval already persisted; never 500 for this
+        log.exception("could not resume clients for mutation %s", mutation["id"])
+        sends = []
+    finally:
+        conn.close()
+    for conversation_id, message_id in sends:
+        queue.enqueue(
+            "send_message",
+            {"conversation_id": conversation_id, "message_id": message_id},
+            priority=config.PRIORITY_CUSTOMER,
+        )
+
+
+@router.post("/catalog/mutations/{mutation_id}/approve")
+def approve_mutation(mutation_id: int) -> dict:
+    mutation = _run(catalog_mutations.approve, mutation_id)
+    _resume_clients(mutation)
+    return mutation
+
+
+@router.post("/catalog/mutations/{mutation_id}/reject")
+def reject_mutation(mutation_id: int, payload: MutationReasonIn) -> dict:
+    return _run(catalog_mutations.reject, mutation_id, reason=payload.reason)
+
+
+@router.post("/catalog/mutations/{mutation_id}/revert")
+def revert_mutation(mutation_id: int, payload: MutationReasonIn) -> dict:
+    return _run(catalog_mutations.revert, mutation_id, reason=payload.reason)

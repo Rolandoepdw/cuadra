@@ -121,6 +121,56 @@ def oldest_pending_for_supplier(conn, supplier_id: int) -> dict | None:
     return dict(row) if row is not None else None
 
 
+def pending_for_supplier(conn, supplier_id: int) -> list[dict]:
+    """Every PENDING escalation of one supplier (correlation candidates)."""
+    return [
+        dict(r)
+        for r in conn.execute(
+            """SELECT * FROM escalations
+               WHERE supplier_id = ? AND status = 'PENDING'
+               ORDER BY id""",
+            (supplier_id,),
+        )
+    ]
+
+
+def answered_recent_for_supplier(
+    conn, supplier_id: int, answer: str, *, hours: int = 24
+) -> dict | None:
+    """Recover a retried TCP job whose escalation was already set ANSWERED.
+
+    A crash between `set_answer` and the mutation log would otherwise leave the
+    answer correlated with nothing. Matching the stored answer keeps the retry
+    idempotent; it never matches a different message.
+    """
+    if not (answer or "").strip():
+        return None
+    row = conn.execute(
+        """SELECT * FROM escalations
+           WHERE supplier_id = ? AND status = 'ANSWERED'
+             AND tcp_answer = ?
+             AND answered_at >= datetime('now', ?)
+           ORDER BY id DESC LIMIT 1""",
+        (supplier_id, answer, f"-{int(hours)} hours"),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def open_for_product(conn, product_id: int, supplier_id: int) -> list[dict]:
+    """PENDING/ANSWERED escalations of a product for one supplier."""
+    placeholders = ", ".join("?" for _ in OPEN_STATUSES)
+    return [
+        dict(r)
+        for r in conn.execute(
+            f"""SELECT * FROM escalations
+                WHERE product_id = ? AND supplier_id = ?
+                  AND status IN ({placeholders})
+                ORDER BY id""",
+            (product_id, supplier_id, *OPEN_STATUSES),
+        )
+    ]
+
+
 def list_escalations(conn, *, status: str | None = None, limit: int = 50) -> list[dict]:
     sql, args = "SELECT * FROM escalations", []
     if status:

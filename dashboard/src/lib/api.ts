@@ -11,6 +11,8 @@ import type {
   BroadcastStrategy,
   BroadcastStrategyIn,
   CancelSaleIn,
+  CatalogMutation,
+  CatalogMutationPage,
   Category,
   CategoryIn,
   CategoryPatch,
@@ -22,6 +24,7 @@ import type {
   LogCategory,
   LogList,
   LogWindow,
+  MutationReasonIn,
   Product,
   ProductImage,
   ProductIn,
@@ -290,4 +293,43 @@ export const cancelSale = (id: number, reason: string) =>
   request<Sale>(`/api/finance/cancel/${id}`, {
     method: "POST",
     body: JSON.stringify({ reason } satisfies CancelSaleIn),
+  });
+
+// ------------------------------------------------------------- catalog audit
+
+export const listCatalogMutations = (
+  params: {
+    status?: string;
+    supplier_id?: number;
+    product_id?: number;
+    ambiguous?: boolean;
+    date_from?: string;
+    date_to?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+) => {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== "" && v !== null) qs.set(k, String(v));
+  }
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return request<CatalogMutationPage>(`/api/catalog/mutations${suffix}`);
+};
+
+export const approveCatalogMutation = (id: number) =>
+  request<CatalogMutation>(`/api/catalog/mutations/${id}/approve`, {
+    method: "POST",
+  });
+
+export const rejectCatalogMutation = (id: number, reason = "") =>
+  request<CatalogMutation>(`/api/catalog/mutations/${id}/reject`, {
+    method: "POST",
+    body: JSON.stringify({ reason } satisfies MutationReasonIn),
+  });
+
+export const revertCatalogMutation = (id: number, reason = "") =>
+  request<CatalogMutation>(`/api/catalog/mutations/${id}/revert`, {
+    method: "POST",
+    body: JSON.stringify({ reason } satisfies MutationReasonIn),
   });

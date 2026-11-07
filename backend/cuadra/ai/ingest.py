@@ -3,7 +3,7 @@
 Stores the message (idempotently by `external_id`) and arms the conversation's
 turn:
 - text/audio/image from a client -> update turn + `process_turn`
-- any from a known TCP          -> `tcp_reply` (correlates with an escalation)
+- any from a known TCP          -> `tcp_process` (or `transcribe_audio` first)
 
 Shared by the channel adapters and the debug endpoint so both paths behave
 identically. The `source` on the stored message is `customer` or `supplier`.
@@ -111,7 +111,7 @@ def _ingest_supplier(
     identity: str | None = None,
     external_id: str | None = None,
 ) -> dict:
-    """Store a TCP message and enqueue correlation with its oldest escalation."""
+    """Store a TCP message and enqueue its triage (transcribing audio first)."""
     # Supplier replies live in the same conversation bound to that TCP's channel,
     # so the audit trail stays in one place per contact.
     customer = conversations.get_or_create_customer(
@@ -139,9 +139,21 @@ def _ingest_supplier(
             "message_id": inbound["id"],
             "job_id": None,
         }
+    job_payload = {
+        "conversation_id": conversation["id"],
+        "message_id": inbound["id"],
+        "supplier_id": supplier["id"],
+    }
+    if type == "audio":
+        # `tcp_process` reads the message body, so audio must be transcribed
+        # first; `transcribe_audio` then queues the triage.
+        job_type = "transcribe_audio"
+        job_payload["next_job"] = "tcp_process"
+    else:
+        job_type = "tcp_process"
     job_id = queue.enqueue(
-        "tcp_reply",
-        {"conversation_id": conversation["id"], "message_id": inbound["id"], "supplier_id": supplier["id"]},
+        job_type,
+        job_payload,
         priority=config.PRIORITY_TCP,
     )
     events.log(

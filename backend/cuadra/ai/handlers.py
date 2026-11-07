@@ -7,10 +7,21 @@ import random
 from datetime import datetime, timedelta, timezone
 
 from cuadra import channels, config, db
-from cuadra.ai import assembler, memory, pipeline, prompts, queue, retrieval, stt
+from cuadra.ai import (
+    assembler,
+    memory,
+    pipeline,
+    prompts,
+    queue,
+    retrieval,
+    stt,
+    tcp_extractor,
+    tcp_triage,
+)
 from cuadra.domain import (
     broadcasts as broadcasts_domain,
     catalog,
+    catalog_mutations,
     conversations,
     escalations,
     events,
@@ -27,7 +38,9 @@ def register() -> None:
     queue.register_handler("transcribe_audio", transcribe_audio)
     queue.register_handler("send_message", send_message)
     queue.register_handler("send_escalation", send_escalation)
-    queue.register_handler("tcp_reply", tcp_reply)
+    queue.register_handler("tcp_process", tcp_process)
+    # Jobs queued by older versions/restarts keep working after the refactor.
+    queue.register_handler("tcp_reply", tcp_process)
     queue.register_handler("dispatch_sale", dispatch_sale)
     queue.register_handler("send_broadcast", send_broadcast)
     queue.register_handler("reindex_product", reindex_product)
@@ -262,6 +275,7 @@ async def process_turn(payload: dict) -> None:
                 question=result["escalation_question"] or result["reply"],
             )
             escalation_id = escalation["id"]
+            conversations.set_status(conn, turn["conversation_id"], "WAITING_TCP")
             events.log(
                 conn,
                 "bot",
@@ -358,6 +372,7 @@ async def generate_reply(payload: dict) -> None:
                 question=result["escalation_question"] or result["reply"],
             )
             escalation_id = escalation["id"]
+            conversations.set_status(conn, conversation_id, "WAITING_TCP")
             events.log(
                 conn,
                 "bot",
@@ -416,6 +431,24 @@ async def transcribe_audio(payload: dict) -> None:
             )
     finally:
         conn.close()
+
+    next_job = payload.get("next_job")
+    if next_job == "tcp_process":
+        # TCP audio used to be queued as tcp_reply, which reads `body` before
+        # transcription existed. Requeue the real triage job instead.
+        supplier_id = payload.get("supplier_id")
+        if supplier_id is None:
+            raise queue.PermanentJobError("tcp_process job has no supplier_id")
+        queue.enqueue(
+            "tcp_process",
+            {
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "supplier_id": supplier_id,
+            },
+            priority=config.PRIORITY_TCP,
+        )
+        return
 
     turn_id = payload.get("turn_id")
     if turn_id is not None:
@@ -571,6 +604,7 @@ async def send_escalation(payload: dict) -> None:
         return
 
     text = prompts.TEMPLATES["escalation_question"].format(
+        escalation_id=escalation_id,
         producto=(product["name"] if product else "un producto del catálogo"),
         pregunta=escalation["question"],
     )
@@ -732,53 +766,230 @@ def _notify_sale_ack(conversation_id: int, order_code: str, action: str) -> None
     )
 
 
-async def tcp_reply(payload: dict) -> None:
-    """A TCP answered: correlate with its oldest pending escalation, enrich the
-    product, resolve the escalation and resume the client (Hito 5)."""
+def _tcp_already_processed(conn, message_id: int) -> bool:
+    row = conn.execute(
+        """SELECT 1 FROM events
+           WHERE type = 'tcp_processed' AND entity = 'messages' AND entity_id = ?
+           LIMIT 1""",
+        (message_id,),
+    ).fetchone()
+    return row is not None
+
+
+def _mark_tcp_processed(
+    conn,
+    *,
+    message_id: int,
+    supplier_id: int,
+    kind: str,
+    details: dict | None = None,
+) -> None:
+    events.log(
+        conn,
+        "bot",
+        "tcp_processed",
+        entity="messages",
+        entity_id=message_id,
+        details={"supplier_id": supplier_id, "kind": kind, **(details or {})},
+    )
+
+
+async def tcp_process(payload: dict) -> None:
+    """Triage a supplier message: sale ack, escalation answer or catalog update.
+
+    Absorbs the phase-3 `tcp_reply`: `[E-###]`/`[V-######]` are honoured,
+    audio arrives already transcribed, and a retried job never applies twice.
+    """
     conversation_id = payload["conversation_id"]
     message_id = payload["message_id"]
     supplier_id = payload["supplier_id"]
 
     conn = db.connect()
+    sends: list[tuple[int, int]] = []
     notify_sale = None
     try:
+        if _tcp_already_processed(conn, message_id):
+            log.debug("TCP message %s already processed, skipping", message_id)
+            return
+
         message = conversations.get_message(conn, message_id)
         answer = (message["body"] or "").strip()
-        sale, action = sales_domain.apply_tcp_ack(conn, supplier_id, answer)
-        if sale is not None and action is not None:
+        if not answer:
             events.log(
                 conn,
                 "bot",
-                "tcp_sale_ack",
-                entity="sales",
-                entity_id=sale["id"],
-                details={
-                    "action": action,
-                    "order_code": sale["order_code"],
-                    "message_id": message_id,
-                },
+                "tcp_empty_message",
+                entity="suppliers",
+                entity_id=supplier_id,
+                details={"message_id": message_id},
             )
-            notify_sale = (
-                sale["conversation_id"],
-                sale["order_code"],
-                action,
+            _mark_tcp_processed(
+                conn, message_id=message_id, supplier_id=supplier_id, kind="EMPTY"
             )
-        else:
-            # Not a sale acknowledgement (or already in that state): treat the
-            # message as the answer to an open escalation.
-            escalation = escalations.oldest_pending_for_supplier(conn, supplier_id)
-            if escalation is None:
+            return
+
+        escalation_ids, order_codes = tcp_triage.parse_case_ids(answer)
+        # An explicit escalation reference always wins over sale-ack keywords.
+        if not escalation_ids:
+            sale, action = sales_domain.apply_tcp_ack(conn, supplier_id, answer)
+            if sale is not None and action is not None:
                 events.log(
                     conn,
                     "bot",
-                    "tcp_reply_unmatched",
-                    entity="suppliers",
-                    entity_id=supplier_id,
-                    details={"message_id": message_id},
+                    "tcp_sale_ack",
+                    entity="sales",
+                    entity_id=sale["id"],
+                    details={
+                        "action": action,
+                        "order_code": sale["order_code"],
+                        "message_id": message_id,
+                        "order_codes": order_codes,
+                    },
                 )
-                log.info("TCP %s replied with no pending escalation", supplier_id)
+                notify_sale = (
+                    sale["conversation_id"],
+                    sale["order_code"],
+                    action,
+                )
+                _mark_tcp_processed(
+                    conn,
+                    message_id=message_id,
+                    supplier_id=supplier_id,
+                    kind="SALE_ACK",
+                    details={"action": action, "sale_id": sale["id"]},
+                )
                 return
+
+        correlation = tcp_triage.correlate(conn, supplier_id=supplier_id, text=answer)
+        if correlation.reason.startswith("case_not_"):
+            events.log(
+                conn,
+                "bot",
+                correlation.reason,
+                entity="suppliers",
+                entity_id=supplier_id,
+                details={
+                    "message_id": message_id,
+                    "escalation_ids": escalation_ids,
+                    "status": (correlation.escalation or {}).get("status"),
+                },
+            )
+            _mark_tcp_processed(
+                conn,
+                message_id=message_id,
+                supplier_id=supplier_id,
+                kind=correlation.reason.upper(),
+            )
+            return
+        if not correlation.found:
+            events.log(
+                conn,
+                "bot",
+                "tcp_reply_unmatched",
+                entity="suppliers",
+                entity_id=supplier_id,
+                details={
+                    "message_id": message_id,
+                    "triage": tcp_triage.classify(answer),
+                    "method": correlation.method,
+                    "reason": correlation.reason,
+                    "escalation_ids": escalation_ids,
+                },
+            )
+            _mark_tcp_processed(
+                conn,
+                message_id=message_id,
+                supplier_id=supplier_id,
+                kind="UNMATCHED",
+                details={"triage": tcp_triage.classify(answer)},
+            )
+            return
+
+        escalation = correlation.escalation
+        product_id = correlation.product_id
+        if product_id is None:
+            events.log(
+                conn,
+                "bot",
+                "tcp_reply_unmatched",
+                entity="suppliers",
+                entity_id=supplier_id,
+                details={"message_id": message_id, "reason": "correlation_without_product"},
+            )
+            _mark_tcp_processed(
+                conn, message_id=message_id, supplier_id=supplier_id, kind="UNMATCHED"
+            )
+            return
+
+        product = catalog.get_product(conn, product_id)
+        if escalation is not None and escalation["status"] in escalations.OPEN_STATUSES:
             escalations.set_answer(conn, escalation["id"], answer)
+
+        extraction = await tcp_extractor.extract(
+            product,
+            answer,
+            conversation_id=conversation_id,
+            job_id=payload.get("job_id"),
+        )
+
+        mutation = None
+        if extraction is not None and extraction.has_catalog_update:
+            mutation = catalog_mutations.apply_tcp_update(
+                conn,
+                product_id=product_id,
+                supplier_id=supplier_id,
+                escalation_id=int(escalation["id"]) if escalation else None,
+                source_message_id=message_id,
+                source_text=answer,
+                extraction=extraction,
+                correlation_method=correlation.method,
+                ambiguous=correlation.ambiguous,
+            )
+
+        if mutation is not None:
+            if mutation["status"] == "APPLIED":
+                sends = tcp_triage.resume_escalations(
+                    conn,
+                    product_id=product_id,
+                    supplier_id=supplier_id,
+                    answer=answer,
+                    summary=extraction.customer_answer_summary,
+                )
+            # PENDING_REVIEW: the escalation stays ANSWERED until the operator
+            # approves or rejects it; the audit panel already flagged it.
+        elif escalation is not None:
+            # Model unavailable/invalid (or no catalog data): keep the legacy
+            # answer flow so the client is never left waiting.
+            clean_answer = tcp_triage.strip_case_ids(answer)
+            catalog.enrich_specifications(
+                conn, product_id, "dato_proveedor", clean_answer
+            )
+            retrieval.queue_reindex(product_id)
+            sends = tcp_triage.resume_escalations(
+                conn,
+                product_id=product_id,
+                supplier_id=supplier_id,
+                answer=clean_answer,
+                summary=(
+                    extraction.customer_answer_summary
+                    if extraction is not None
+                    else clean_answer
+                ),
+            )
+
+        _mark_tcp_processed(
+            conn,
+            message_id=message_id,
+            supplier_id=supplier_id,
+            kind=tcp_triage.classify(answer),
+            details={
+                "method": correlation.method,
+                "ambiguous": correlation.ambiguous,
+                "product_id": product_id,
+                "mutation_id": mutation["id"] if mutation else None,
+                "mutation_status": mutation["status"] if mutation else None,
+            },
+        )
     finally:
         conn.close()
 
@@ -788,49 +999,19 @@ async def tcp_reply(payload: dict) -> None:
             _notify_sale_ack(client_conversation_id, order_code, action)
         return
 
-    # Enrich the product with the answered detail, then tell the client.
-    product_name = "el producto"
-    if escalation["product_id"]:
-        conn = db.connect()
-        try:
-            product = catalog.get_product(conn, escalation["product_id"])
-            product_name = product["name"]
-            catalog.enrich_specifications(
-                conn, escalation["product_id"], "dato_proveedor", answer
-            )
-        except catalog.NotFound:
-            product = None
-        finally:
-            conn.close()
-
-    if escalation["product_id"]:
-        retrieval.queue_reindex(escalation["product_id"])
-
-    client_conversation_id = escalation["conversation_id"]
-    reply = prompts.TEMPLATES["escalation_resolved"].format(
-        producto=product_name, respuesta=answer
-    )
-    conn = db.connect()
-    try:
-        outbound = conversations.add_message(
-            conn, client_conversation_id, "OUTBOUND", "bot", body=reply
+    for client_conversation_id, outbound_id in sends:
+        queue.enqueue(
+            "send_message",
+            {
+                "conversation_id": client_conversation_id,
+                "message_id": outbound_id,
+            },
+            priority=config.PRIORITY_CUSTOMER,
         )
-        escalations.resolve(conn, escalation["id"])
-        events.log(
-            conn,
-            "bot",
-            "escalation_resolved",
-            entity="escalations",
-            entity_id=escalation["id"],
-            details={"supplier_id": supplier_id, "answer": answer},
-        )
-    finally:
-        conn.close()
-    queue.enqueue(
-        "send_message",
-        {"conversation_id": client_conversation_id, "message_id": outbound["id"]},
-        priority=config.PRIORITY_CUSTOMER,
-    )
+
+
+# Backwards-compatible name for callers that imported the phase-3 handler.
+tcp_reply = tcp_process
 
 
 def _index_one(product_id: int) -> bool:

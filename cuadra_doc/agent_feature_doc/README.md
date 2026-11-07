@@ -2,7 +2,7 @@
 tipo: indice
 proyecto: Cuadra
 modulo: agent_feature_doc
-estado: DISEÑO APROBADO — listo para implementar
+estado: DISEÑO APROBADO — fases 0–4 implementadas
 revisado: 2026-11-03
 aprobado: 2026-11-03
 tags: [indice, agente-ia, diseno-aprobado, revision]
@@ -11,7 +11,7 @@ tags: [indice, agente-ia, diseno-aprobado, revision]
 # Documentación del agente autónomo (diseño aprobado)
 
 Esta carpeta contiene el diseño de evolución del agente de Cuadra: memoria, retrieval,
-ventas, finanzas, bucle TCP y mutación de catálogo. Las fases 0, 1 y 2 ya están
+ventas, finanzas, bucle TCP y mutación de catálogo. Las fases 0, 1, 2, 3 y 4 ya están
 implementadas; el resto sigue como especificación aprobada que guía la implementación.
 
 > **Empieza por `05_VIABILIDAD_Y_CAMBIOS_REQUERIDOS.md`.**
@@ -24,12 +24,12 @@ implementadas; el resto sigue como especificación aprobada que guía la impleme
 
 | Aspecto | Estado |
 |---|---|
-| Código de producción | **Fases 0, 1 y 2 implementadas:** trazas, turnos persistentes, contexto, guardrails, hechos, resumen incremental, FTS5, embeddings opcionales, RRF y cierre por inactividad. |
-| Migraciones | `012_observability_and_turns.sql` y `013_memory_retrieval.sql` creadas; se aplican al arrancar (aditivas). `014`–`015` solo diseñadas. |
+| Código de producción | **Fases 0, 1, 2, 3 y 4 implementadas:** trazas, turnos persistentes, contexto, guardrails, hechos, resumen incremental, FTS5, embeddings opcionales, RRF, cierre por inactividad, ventas con stock reservado, ledger de comisiones, despacho al TCP, panel de finanzas y triage TCP con mutaciones de catálogo y undo. |
+| Migraciones | `012_observability_and_turns.sql`, `013_memory_retrieval.sql`, `014_sales_and_finance.sql` y `015_catalog_mutations.sql` creadas; se aplican al arrancar (aditivas). |
 | Dependencias | `fastembed` añadido a `requirements.txt`. El modelo vendorizado sigue siendo opcional: sin él, el bot usa FTS5 + fuzzy. |
 | Modelos | Dos candidatos locales; el dueño añadirá más para el bake-off. |
 | Base de datos real | Sin cambios hasta el próximo arranque. |
-| Commit | Fases 0, 1 y 2 commiteadas (`b3e9def`, `90cdec1`, `19b0e51`). |
+| Commit | Fases 0, 1 y 2 commiteadas (`b3e9def`, `90cdec1`, `19b0e51`, `b94ba62`); las Fases 3 y 4 están en el árbol de trabajo. |
 | Aprobación | Aprobada por el dueño el 2026-11-03. |
 
 La propuesta original llegó marcada como `DISENO_APROBADO`; tras la revisión pasó a
@@ -39,7 +39,7 @@ y audio TCP que hoy no se transcribe).
 
 El dueño revisó la propuesta corregida y aprobó D1–D10 el **2026-11-03**. Desde
 entonces esta carpeta es el diseño de referencia para implementar, empezando por la
-Fase 0 (medición). Las fases 0, 1 y 2 ya están en el árbol de trabajo.
+Fase 0 (medición). Las fases 0, 1, 2, 3 y 4 ya están en el árbol de trabajo.
 
 ---
 
@@ -56,6 +56,8 @@ Fase 0 (medición). Las fases 0, 1 y 2 ya están en el árbol de trabajo.
 | 7 | `06_LINEA_BASE_FASE_0.md` | Métricas base del modelo actual y fallos detectados. |
 | 8 | `07_CIERRE_FASE_1.md` | Turnos, idempotencia, contexto y guardrails: qué se implementó y qué falta medir. |
 | 9 | `08_CIERRE_FASE_2.md` | Hechos, resumen, FTS5, embeddings opcionales, RRF y cierre por inactividad. |
+| 10 | `09_CIERRE_FASE_3.md` | Ventas, stock reservado, ledger de comisiones, despacho al TCP y panel de finanzas. |
+| 11 | `10_CIERRE_FASE_4.md` | Triage TCP, mutaciones de catálogo, undo con conflicto y panel de auditoría. |
 | — | `../10_contexto_agente_ia.md` | Brief original que alimentó la propuesta. |
 
 ---
@@ -123,6 +125,18 @@ con FastEmbed, fusión RRF, fallback fuzzy y cierre de conversaciones inactivas.
 modelo está instalado y vendorizado en `backend/models/fastembed/`; el arranque no
 descarga y la inferencia offline funciona. Falta medir recall@3 con consultas reales;
 si el modelo falta, el bot sigue respondiendo con FTS5 + fuzzy.
+
+La **Fase 3** está implementada y probada en el árbol de trabajo (ver `09`): venta de
+punta a punta, stock reservado sin descontar inventario hasta la entrega, ledger de
+comisiones por moneda, despacho al TCP con acks `RECIBIDO`/`ENTREGADO`/`AGOTADO`,
+recuperación de despachos tras un reinicio y panel **Finanzas**. Queda probar una venta
+real con un TCP de prueba y decidir si `sales.mode` necesita selector en el dashboard.
+
+La **Fase 4** está implementada y probada en el árbol de trabajo (ver `10`): triage de
+mensajes TCP (texto y audio), correlación por `[E-###]`/`[V-######]` y heurística con
+revisión ante ambigüedad, extracción estructurada, mutaciones atómicas de precio/stock/
+specs/zonas con política de auto-aplicación, undo con detección de conflicto (`409`) y
+panel **Auditoría**. Falta medir la correlación con mensajes reales.
 
 La operación real no se toca: cualquier cambio de comportamiento se habilita con
 settings (`sales.mode`, `catalog.autoapply.*`), no reescribiendo el flujo.
