@@ -452,18 +452,20 @@ def _map_or_cool_down(exc: Exception) -> Exception:
     return mapped
 
 
-async def send_text(target: str, text: str) -> None:
+async def send_text(target: str, text: str) -> str | None:
     client = _require_client()
     _guard_account()
     try:
         entity = await _resolve(client, target)
-        await client.send_message(entity, text, link_preview=False)
+        sent = await client.send_message(entity, text, link_preview=False)
     except Exception as exc:  # noqa: BLE001 - mapped below
         mapped = _map_or_cool_down(exc)
         if mapped is exc:
             raise
         raise mapped from exc
     rate_limit.mark_action(_USERBOT_SENDER)
+    message_id = getattr(sent, "id", None)
+    return str(message_id) if message_id is not None else None
 
 
 async def send_image(target: str, path: str, caption: str | None = None) -> None:

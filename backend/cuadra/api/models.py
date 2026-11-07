@@ -60,6 +60,7 @@ class ProductIn(BaseModel):
     currency: Literal["USD", "CUP"] = "USD"
     commission: float = Field(ge=0)
     commission_currency: Literal["USD", "CUP"] = "USD"
+    commission_type: Literal["FIXED", "PERCENT"] = "FIXED"
     stock: int | None = None
     status: Literal["ACTIVE", "OUT_OF_STOCK", "PAUSED", "REMOVED"] = "ACTIVE"
     specifications: dict = Field(default_factory=dict)
@@ -73,6 +74,7 @@ class ProductPatch(BaseModel):
     currency: Literal["USD", "CUP"] | None = None
     commission: float | None = Field(default=None, ge=0)
     commission_currency: Literal["USD", "CUP"] | None = None
+    commission_type: Literal["FIXED", "PERCENT"] | None = None
     stock: int | None = None
     status: Literal["ACTIVE", "OUT_OF_STOCK", "PAUSED", "REMOVED"] | None = None
     specifications: dict | None = None

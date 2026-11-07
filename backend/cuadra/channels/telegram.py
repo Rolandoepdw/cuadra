@@ -128,11 +128,13 @@ async def stop() -> None:
     log.info("telegram channel stopped")
 
 
-async def send_text(target: str, text: str) -> None:
+async def send_text(target: str, text: str) -> str | None:
     if _bot is None:
         log.info("[dummy] send_text to %s: %s", target, text)
-        return
-    await _send(lambda: _bot.send_message(target, text))
+        return None
+    message = await _send(lambda: _bot.send_message(target, text))
+    message_id = getattr(message, "message_id", None)
+    return str(message_id) if message_id is not None else None
 
 
 async def send_image(target: str, path: str, caption: str | None = None) -> None:
@@ -153,12 +155,13 @@ async def send_audio(target: str, path: str) -> None:
     await _send(lambda: _bot.send_voice(target, FSInputFile(path)))
 
 
-async def _send(call) -> None:
+async def _send(call):
     """Run a Telegram send, mapping permanent failures to PermanentJobError.
 
     A 400 (chat not found, bot blocked, user deactivated) never succeeds by
     retrying, so the queue must not back off forever on it. Network/timeouts
-    stay transient and let the queue retry.
+    stay transient and let the queue retry. Returns the Telegram object so the
+    caller can persist its message id (sale dispatch correlation).
     """
     from aiogram.exceptions import (
         TelegramBadRequest,
@@ -171,7 +174,7 @@ async def _send(call) -> None:
     from cuadra.ai.queue import PermanentJobError
 
     try:
-        await call()
+        return await call()
     except TelegramRetryAfter as exc:
         raise TimeoutError(f"telegram retry after {exc.retry_after}s") from exc
     except (TelegramNetworkError, TelegramServerError) as exc:

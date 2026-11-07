@@ -2,6 +2,7 @@
 
 export type Currency = "USD" | "CUP";
 export type ProductStatus = "ACTIVE" | "OUT_OF_STOCK" | "PAUSED" | "REMOVED";
+export type CommissionType = "FIXED" | "PERCENT";
 
 export interface Category {
   id: number;
@@ -48,7 +49,9 @@ export interface Product {
   currency: Currency;
   commission: number;
   commission_currency: Currency;
+  commission_type: CommissionType;
   stock: number | null;
+  stock_reserved: number | null;
   status: ProductStatus;
   specifications: Record<string, unknown>;
   images?: ProductImage[];
@@ -196,6 +199,7 @@ export interface ProductIn {
   currency?: Currency;
   commission: number;
   commission_currency?: Currency;
+  commission_type?: CommissionType;
   stock?: number | null;
   status?: ProductStatus;
   specifications?: Record<string, unknown>;
@@ -337,4 +341,116 @@ export interface LogList {
   category_labels: Record<LogCategory, string>;
   window: LogWindow;
   generated_at: string;
+}
+
+// -------------------------------------------------------------------- finance
+
+export type SaleStatus =
+  | "DRAFT"
+  | "PENDING_APPROVAL"
+  | "PENDING_DISPATCH"
+  | "DISPATCHED"
+  | "CONFIRMED"
+  | "DELIVERED"
+  | "SETTLED"
+  | "CANCELLED"
+  | "NEEDS_OPERATOR";
+
+export type SalesMode = "assisted" | "hybrid" | "autonomous";
+export type LedgerStatus = "PENDING" | "COLLECTED" | "VOID";
+
+export interface Sale {
+  id: number;
+  order_code: string | null;
+  conversation_id: number | null;
+  product_id: number;
+  product_name: string | null;
+  supplier_id: number;
+  supplier_name: string | null;
+  customer_id: number;
+  quantity: number;
+  amount: number;
+  currency: Currency;
+  commission_type: CommissionType;
+  commission: number;
+  commission_currency: Currency;
+  recipient_name: string | null;
+  delivery_zone: string | null;
+  delivery_zone_id: number | null;
+  delivery_address: string | null;
+  customer_phone: string | null;
+  status: SaleStatus;
+  source: "bot" | "operator";
+  notes: string | null;
+  tcp_message_id: string | null;
+  approved_at: string | null;
+  dispatched_at: string | null;
+  tcp_ack_at: string | null;
+  delivered_at: string | null;
+  settled_at: string | null;
+  cancelled_at: string | null;
+  created_at: string;
+  updated_at: string;
+  ledger_status: LedgerStatus | null;
+  commission_earned: number | null;
+  ledger_currency: Currency | null;
+}
+
+export interface CurrencyTotals {
+  currency: Currency;
+  gross_sales: number;
+  commission_earned: number;
+  commission_collected: number;
+  commission_pending: number;
+}
+
+export interface FinanceSummary {
+  mode: SalesMode;
+  sales_today: number;
+  sales_pending_approval: number;
+  sales_dispatched: number;
+  sales_delivered_pending_settlement: number;
+  sales_needs_operator: number;
+  conversion_pending: number;
+  totals_by_currency: CurrencyTotals[];
+}
+
+export interface LedgerEntry {
+  id: number;
+  sale_id: number;
+  order_code: string | null;
+  sale_status: SaleStatus | null;
+  product_id: number;
+  supplier_id: number;
+  supplier_name: string | null;
+  product_name: string;
+  sale_total: number;
+  currency: Currency;
+  commission_type: CommissionType;
+  commission_rate: number;
+  commission_earned: number;
+  commission_currency: Currency;
+  supplier_payout: number | null;
+  status: LedgerStatus;
+  collected_at: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface SalesPage {
+  items: Sale[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface LedgerPage {
+  items: LedgerEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface CancelSaleIn {
+  reason: string;
 }

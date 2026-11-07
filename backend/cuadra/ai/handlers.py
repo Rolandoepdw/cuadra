@@ -14,6 +14,7 @@ from cuadra.domain import (
     conversations,
     escalations,
     events,
+    sales as sales_domain,
     turns,
 )
 
@@ -27,6 +28,7 @@ def register() -> None:
     queue.register_handler("send_message", send_message)
     queue.register_handler("send_escalation", send_escalation)
     queue.register_handler("tcp_reply", tcp_reply)
+    queue.register_handler("dispatch_sale", dispatch_sale)
     queue.register_handler("send_broadcast", send_broadcast)
     queue.register_handler("reindex_product", reindex_product)
     queue.register_handler("reindex_all_products", reindex_all_products)
@@ -235,6 +237,9 @@ async def process_turn(payload: dict) -> None:
                 "degraded": result["degraded"],
                 "latency_ms": result["latency_ms"],
                 "context_tokens": result["context_tokens"],
+                "stage": result.get("stage"),
+                "sale_id": result.get("sale_id"),
+                "sale_status": result.get("sale_status"),
             },
         )
         events.log(
@@ -297,6 +302,12 @@ async def process_turn(payload: dict) -> None:
         {"conversation_id": turn["conversation_id"], "message_id": outbound["id"]},
         priority=config.PRIORITY_CUSTOMER,
     )
+    if result.get("sale_status") == "PENDING_DISPATCH" and result.get("sale_id"):
+        queue.enqueue(
+            "dispatch_sale",
+            {"sale_id": result["sale_id"]},
+            priority=config.PRIORITY_TCP,
+        )
 
 
 async def generate_reply(payload: dict) -> None:
@@ -333,6 +344,9 @@ async def generate_reply(payload: dict) -> None:
                 "degraded": result["degraded"],
                 "latency_ms": result["latency_ms"],
                 "context_tokens": result["context_tokens"],
+                "stage": result.get("stage"),
+                "sale_id": result.get("sale_id"),
+                "sale_status": result.get("sale_status"),
             },
         )
         if result["escalate"] and result["product_id"] and result["supplier_id"]:
@@ -369,6 +383,12 @@ async def generate_reply(payload: dict) -> None:
         {"conversation_id": conversation_id, "message_id": outbound["id"]},
         priority=config.PRIORITY_CUSTOMER,
     )
+    if result.get("sale_status") == "PENDING_DISPATCH" and result.get("sale_id"):
+        queue.enqueue(
+            "dispatch_sale",
+            {"sale_id": result["sale_id"]},
+            priority=config.PRIORITY_TCP,
+        )
 
 
 async def transcribe_audio(payload: dict) -> None:
@@ -484,10 +504,12 @@ async def send_message(payload: dict) -> None:
         await adapter.send_image(
             target, str(config.DATA_DIR / message["file_path"]), caption=message["body"]
         )
+        provider_message_id = None
     elif message["type"] == "audio" and message["file_path"]:
         await adapter.send_audio(target, str(config.DATA_DIR / message["file_path"]))
+        provider_message_id = None
     else:
-        await adapter.send_text(target, message["body"] or "")
+        provider_message_id = await adapter.send_text(target, message["body"] or "")
 
     conn = db.connect()
     try:
@@ -501,6 +523,7 @@ async def send_message(payload: dict) -> None:
                 "channel": conversation["channel"],
                 "identity": identity,
                 "delay_s": round(delay, 2),
+                "provider_message_id": provider_message_id,
             },
         )
     finally:
@@ -575,6 +598,140 @@ async def send_escalation(payload: dict) -> None:
         conn.close()
 
 
+def _sale_product_name(sale: dict) -> str:
+    try:
+        context = json.loads(sale.get("context_json") or "{}")
+    except (TypeError, ValueError):
+        context = {}
+    return context.get("product_name") or f"producto {sale['product_id']}"
+
+
+async def dispatch_sale(payload: dict) -> None:
+    """Send a PENDING_DISPATCH sale to its TCP (idempotent by sale status)."""
+    sale_id = int(payload["sale_id"])
+    conn = db.connect()
+    try:
+        sale = sales_domain.get_sale(conn, sale_id)
+        if sale["status"] != "PENDING_DISPATCH":
+            log.debug("sale %s is %s, not dispatching", sale_id, sale["status"])
+            return
+        supplier = catalog.get_supplier(conn, sale["supplier_id"])
+        order_code = sale["order_code"]
+        product_name = _sale_product_name(sale)
+    finally:
+        conn.close()
+
+    target = supplier.get("telegram_id")
+    if not target:
+        conn = db.connect()
+        try:
+            sales_domain.mark_needs_operator(
+                conn, sale_id, "supplier has no telegram_id for dispatch"
+            )
+        finally:
+            conn.close()
+        return
+
+    adapter = channels.get_adapter("telegram", "bot")
+    if adapter is None:
+        conn = db.connect()
+        try:
+            sales_domain.mark_needs_operator(
+                conn, sale_id, "telegram bot adapter unavailable"
+            )
+        finally:
+            conn.close()
+        return
+
+    text = prompts.TEMPLATES["tcp_order"].format(
+        order_code=order_code,
+        producto=product_name,
+        product_id=sale["product_id"],
+        cantidad=sale["quantity"],
+        total=f"{float(sale['amount']):g}",
+        moneda=sale["currency"],
+        cliente=sale["recipient_name"],
+        zona=sale["delivery_zone"],
+        direccion=sale["delivery_address"],
+        telefono=sale["customer_phone"],
+    )
+    try:
+        _respect_userbot_gap(adapter)
+        await adapter.typing(target)
+        await asyncio.sleep(_human_delay())
+        tcp_message_id = await adapter.send_text(target, text)
+    except Exception as exc:  # noqa: BLE001 - operator takes over on any send error
+        log.exception("sale %s dispatch failed", sale_id)
+        conn = db.connect()
+        try:
+            sales_domain.mark_needs_operator(
+                conn, sale_id, f"dispatch failed: {str(exc)[:300]}"
+            )
+        finally:
+            conn.close()
+        return
+
+    conn = db.connect()
+    try:
+        sales_domain.mark_dispatched(conn, sale_id, tcp_message_id)
+    finally:
+        conn.close()
+
+
+def recover_pending_dispatches() -> int:
+    """Re-arm dispatch jobs for sales left PENDING_DISPATCH by a restart."""
+    conn = db.connect()
+    try:
+        rows = conn.execute(
+            "SELECT id FROM sales WHERE status = 'PENDING_DISPATCH' ORDER BY id"
+        ).fetchall()
+        sale_ids = []
+        for row in rows:
+            pending = conn.execute(
+                """SELECT 1 FROM jobs
+                   WHERE type = 'dispatch_sale'
+                     AND status IN ('PENDING', 'IN_PROGRESS')
+                     AND json_extract(payload_json, '$.sale_id') = ?
+                   LIMIT 1""",
+                (int(row["id"]),),
+            ).fetchone()
+            if pending is None:
+                sale_ids.append(int(row["id"]))
+    finally:
+        conn.close()
+    for sale_id in sale_ids:
+        queue.enqueue(
+            "dispatch_sale", {"sale_id": sale_id}, priority=config.PRIORITY_TCP
+        )
+    return len(sale_ids)
+
+
+_SALE_ACK_TEMPLATE = {
+    "CONFIRMED": "sale_confirmed",
+    "DELIVERED": "sale_delivered",
+    "NEEDS_OPERATOR": "sale_unavailable",
+}
+
+
+def _notify_sale_ack(conversation_id: int, order_code: str, action: str) -> None:
+    key = _SALE_ACK_TEMPLATE.get(action)
+    if key is None:
+        return
+    text = prompts.TEMPLATES[key].format(order_code=order_code)
+    conn = db.connect()
+    try:
+        outbound = conversations.add_message(
+            conn, conversation_id, "OUTBOUND", "bot", body=text
+        )
+    finally:
+        conn.close()
+    queue.enqueue(
+        "send_message",
+        {"conversation_id": conversation_id, "message_id": outbound["id"]},
+        priority=config.PRIORITY_CUSTOMER,
+    )
+
+
 async def tcp_reply(payload: dict) -> None:
     """A TCP answered: correlate with its oldest pending escalation, enrich the
     product, resolve the escalation and resume the client (Hito 5)."""
@@ -583,24 +740,53 @@ async def tcp_reply(payload: dict) -> None:
     supplier_id = payload["supplier_id"]
 
     conn = db.connect()
+    notify_sale = None
     try:
         message = conversations.get_message(conn, message_id)
         answer = (message["body"] or "").strip()
-        escalation = escalations.oldest_pending_for_supplier(conn, supplier_id)
-        if escalation is None:
+        sale, action = sales_domain.apply_tcp_ack(conn, supplier_id, answer)
+        if sale is not None and action is not None:
             events.log(
                 conn,
                 "bot",
-                "tcp_reply_unmatched",
-                entity="suppliers",
-                entity_id=supplier_id,
-                details={"message_id": message_id},
+                "tcp_sale_ack",
+                entity="sales",
+                entity_id=sale["id"],
+                details={
+                    "action": action,
+                    "order_code": sale["order_code"],
+                    "message_id": message_id,
+                },
             )
-            log.info("TCP %s replied with no pending escalation", supplier_id)
-            return
-        escalations.set_answer(conn, escalation["id"], answer)
+            notify_sale = (
+                sale["conversation_id"],
+                sale["order_code"],
+                action,
+            )
+        else:
+            # Not a sale acknowledgement (or already in that state): treat the
+            # message as the answer to an open escalation.
+            escalation = escalations.oldest_pending_for_supplier(conn, supplier_id)
+            if escalation is None:
+                events.log(
+                    conn,
+                    "bot",
+                    "tcp_reply_unmatched",
+                    entity="suppliers",
+                    entity_id=supplier_id,
+                    details={"message_id": message_id},
+                )
+                log.info("TCP %s replied with no pending escalation", supplier_id)
+                return
+            escalations.set_answer(conn, escalation["id"], answer)
     finally:
         conn.close()
+
+    if notify_sale is not None:
+        client_conversation_id, order_code, action = notify_sale
+        if client_conversation_id:
+            _notify_sale_ack(client_conversation_id, order_code, action)
+        return
 
     # Enrich the product with the answered detail, then tell the client.
     product_name = "el producto"

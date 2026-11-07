@@ -46,6 +46,16 @@ CONVERSATION_EVENTS = frozenset(
         "nlu_invalid_output",
         "summary_updated",
         "audio_transcribed",
+        "sale_created",
+        "sale_approved",
+        "sale_dispatched",
+        "sale_confirmed",
+        "sale_delivered",
+        "sale_cancelled",
+        "sale_needs_operator",
+        "sale_dispatch_rearmed",
+        "tcp_sale_ack",
+        "commission_settled",
     }
 )
 

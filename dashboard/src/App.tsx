@@ -10,6 +10,7 @@ import { HealthPanel } from "@/panels/health/health_panel";
 import { GroupsPanel } from "@/panels/groups/groups_panel";
 import { BroadcastsPanel } from "@/panels/broadcasts/broadcasts_panel";
 import { StrategyPanel } from "@/panels/strategy/strategy_panel";
+import { FinancePanel } from "@/panels/finance/finance_panel";
 import { LogsPanel } from "@/panels/logs/logs_panel";
 
 function Gated() {
@@ -23,6 +24,7 @@ function Gated() {
         <Route path="groups" element={<GroupsPanel />} />
         <Route path="broadcasts" element={<BroadcastsPanel />} />
         <Route path="strategy" element={<StrategyPanel />} />
+        <Route path="finance" element={<FinancePanel />} />
         <Route path="logs" element={<LogsPanel />} />
         <Route path="health" element={<HealthPanel />} />
         <Route path="*" element={<Navigate to="/" replace />} />

@@ -10,7 +10,7 @@ import {
   listSuppliers,
   updateProduct,
 } from "@/lib/api";
-import type { Currency, Product, ProductIn, ProductStatus } from "@/types/api";
+import type { CommissionType, Currency, Product, ProductIn, ProductStatus } from "@/types/api";
 import { formatMoney, STATUS_LABELS, STATUS_VARIANTS } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -173,6 +173,7 @@ function ProductForm({
     currency: "USD",
     commission: 0,
     commission_currency: "USD",
+    commission_type: "FIXED",
     stock: 1,
     status: "ACTIVE",
   };
@@ -192,6 +193,7 @@ function ProductForm({
             currency: product.currency,
             commission: product.commission,
             commission_currency: product.commission_currency,
+            commission_type: product.commission_type,
             stock: product.stock,
             status: product.status,
           }
@@ -254,6 +256,15 @@ function ProductForm({
               value={form.commission}
               onChange={(e) => set("commission", Number(e.target.value))}
             />
+          </Field>
+          <Field label="Tipo de comisión">
+            <Select
+              value={form.commission_type}
+              onChange={(e) => set("commission_type", e.target.value as CommissionType)}
+            >
+              <option value="FIXED">Monto fijo por unidad</option>
+              <option value="PERCENT">Porcentaje de la venta</option>
+            </Select>
           </Field>
           <Field label="Moneda comisión">
             <Select

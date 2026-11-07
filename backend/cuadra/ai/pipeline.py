@@ -14,7 +14,7 @@ import time
 from cuadra import config
 from cuadra.ai import guardrails, llm, memory, prompts, retrieval
 from cuadra.ai.context import ContextBuilder
-from cuadra.domain import catalog, conversations, events, turns
+from cuadra.domain import catalog, conversations, events, sales as sales_domain, turns
 
 log = logging.getLogger("cuadra.pipeline")
 
@@ -135,6 +135,249 @@ def _guard_context(
         "products": products,
         "quoted_prices": context.get("quoted_prices") or [],
     }
+
+
+_AFFIRMATIVE = re.compile(
+    r"\b(s[ií]|dale|ok|okay|confirmo|confirmado|claro|de acuerdo|perfecto|"
+    r"vamos|lo quiero|lo llevo|res[eé]rvamelo|res[eé]rvalo|pa'?lante)\b",
+    re.IGNORECASE,
+)
+_NEGATIVE = re.compile(
+    r"\b(no|todav[ií]a no|ahora no|d[eé]jalo|lo pienso|despu[eé]s)\b", re.IGNORECASE
+)
+_SALE_STAGES = ("CAPTURE_DATA", "CONFIRM")
+
+
+def _is_affirmative(text: str) -> bool:
+    body = text or ""
+    return bool(_AFFIRMATIVE.search(body)) and not _NEGATIVE.search(body)
+
+
+def _sale_slots(conn, conversation, facts: dict[str, str]) -> dict:
+    try:
+        customer = conversations.get_customer(conn, conversation["customer_id"])
+    except Exception:  # noqa: BLE001 - a missing customer must not block the reply
+        customer = {}
+    name = facts.get(memory.FACT_CUSTOMER_NAME) or (customer.get("name") or "").strip()
+    return {
+        "recipient_name": name or None,
+        "delivery_zone": facts.get(memory.FACT_ZONE),
+        "delivery_address": facts.get(memory.FACT_ADDRESS),
+        "customer_phone": facts.get(memory.FACT_PHONE),
+    }
+
+
+def _missing_slots(slots: dict) -> list[str]:
+    labels = []
+    if not slots.get("recipient_name"):
+        labels.append("tu nombre")
+    if not slots.get("delivery_zone"):
+        labels.append("la zona de entrega")
+    if not slots.get("delivery_address"):
+        labels.append("la dirección (calle, número y entrecalles)")
+    if not slots.get("customer_phone"):
+        labels.append("un teléfono de contacto")
+    return labels
+
+
+def _sale_guard(product: dict, total: float) -> dict:
+    """Guard context whose only price is the sale total (no internal data)."""
+    safe = {**product, "price": round(total, 2)}
+    return {"product": safe, "products": [safe], "quoted_prices": []}
+
+
+def _fast_template(conn, conversation, key: str, guard_context: dict, **values):
+    text = prompts.TEMPLATES[key].format(**values)
+    return _safe_template(conn, conversation, text, guard_context, "template")
+
+
+def _sale_failure(
+    conn, conversation, product: dict, context: dict, exc: Exception
+) -> dict:
+    message = str(exc)
+    if "stock" in message:
+        alternatives = catalog.alternatives(conn, product)
+        guard = _guard_context(product, alternatives, context)
+        reply, generator = _safe_template(
+            conn, conversation, _render_out_of_stock(alternatives), guard, "template"
+        )
+        return {
+            "reply": reply,
+            "escalate": False,
+            "generator": generator,
+            "escalation_question": None,
+            "stage": "CLOSE",
+        }
+    if "zone" in message or "supplier" in message:
+        guard = _guard_context(product, None, context)
+        reply, generator = _safe_template(
+            conn,
+            conversation,
+            "Esa zona no la cubre el almacén de este producto. ¿Me confirmas otra "
+            "zona o te busco una alternativa?",
+            guard,
+            "template",
+        )
+        return {
+            "reply": reply,
+            "escalate": True,
+            "generator": generator,
+            "escalation_question": "El cliente pide entrega en una zona que el TCP no cubre.",
+            "stage": "HANDOFF",
+        }
+    guard = _guard_context(product, None, context)
+    reply, generator = _safe_template(
+        conn,
+        conversation,
+        "No pude registrar el pedido con esos datos. ¿Me los confirmas otra vez?",
+        guard,
+        "template",
+    )
+    return {
+        "reply": reply,
+        "escalate": True,
+        "generator": generator,
+        "escalation_question": message,
+        "stage": "HANDOFF",
+    }
+
+
+def _maybe_handle_sale(
+    conn, conversation, text: str, intent, product: dict | None, context: dict
+) -> dict | None:
+    """Advance the sale state machine when a purchase is in play.
+
+    Returns a reply outcome (same shape as `_decide` plus `stage`/`sale`) or
+    None when the turn is not part of a sale.
+    """
+    stage = str(context.get("stage") or "DISCOVERY").upper()
+    if product is None:
+        return None
+    if intent.intencion != "comprar" and stage not in _SALE_STAGES:
+        return None
+
+    facts = memory.facts_map(conn, conversation["id"])
+    slots = _sale_slots(conn, conversation, facts)
+    missing = _missing_slots(slots)
+    guard = _sale_guard(product, float(product["price"]))
+
+    existing = sales_domain.active_sale_for_conversation(conn, conversation["id"])
+    if existing is not None:
+        guard = _sale_guard(product, float(existing["amount"]))
+        reply, generator = _fast_template(
+            conn,
+            conversation,
+            "sale_created",
+            guard,
+            order_code=existing["order_code"],
+        )
+        return {
+            "reply": reply,
+            "escalate": False,
+            "generator": generator,
+            "escalation_question": None,
+            "stage": "DONE",
+            "sale": existing,
+        }
+
+    if not missing and _is_affirmative(text):
+        try:
+            sale = sales_domain.create_sale(
+                conn,
+                conversation_id=conversation["id"],
+                customer_id=conversation["customer_id"],
+                product_id=product["id"],
+                quantity=1,
+                recipient_name=slots["recipient_name"],
+                delivery_zone=slots["delivery_zone"],
+                delivery_address=slots["delivery_address"],
+                customer_phone=slots["customer_phone"],
+            )
+        except sales_domain.Invalid as exc:
+            return _sale_failure(conn, conversation, product, context, exc)
+
+        guard = _sale_guard(product, float(sale["amount"]))
+        reply, generator = _fast_template(
+            conn,
+            conversation,
+            "sale_created",
+            guard,
+            order_code=sale["order_code"],
+        )
+        return {
+            "reply": reply,
+            "escalate": False,
+            "generator": generator,
+            "escalation_question": None,
+            "stage": "DONE",
+            "sale": sale,
+        }
+
+    if missing:
+        reply, generator = _fast_template(
+            conn,
+            conversation,
+            "sale_ask_data",
+            guard,
+            faltan=", ".join(missing),
+        )
+        return {
+            "reply": reply,
+            "escalate": False,
+            "generator": generator,
+            "escalation_question": None,
+            "stage": "CAPTURE_DATA",
+        }
+
+    if stage == "CONFIRM" and _NEGATIVE.search(text or ""):
+        reply, generator = _fast_template(
+            conn, conversation, "sale_declined", guard
+        )
+        return {
+            "reply": reply,
+            "escalate": False,
+            "generator": generator,
+            "escalation_question": None,
+            "stage": "CLOSE",
+        }
+
+    total = round(float(product["price"]), 2)
+    guard = _sale_guard(product, total)
+    reply, generator = _fast_template(
+        conn,
+        conversation,
+        "sale_confirm",
+        guard,
+        producto=product["name"],
+        cantidad=1,
+        total=f"{total:g}",
+        moneda=product["currency"],
+        cliente=slots["recipient_name"],
+        direccion=slots["delivery_address"],
+        zona=slots["delivery_zone"],
+    )
+    return {
+        "reply": reply,
+        "escalate": False,
+        "generator": generator,
+        "escalation_question": None,
+        "stage": "CONFIRM",
+    }
+
+
+def _stage_for(context: dict, intent, product: dict | None, escalate: bool) -> str:
+    if escalate:
+        return "HANDOFF"
+    if product is None:
+        return "DISCOVERY"
+    if intent.intencion == "queja":
+        return "OBJECTION"
+    if intent.intencion in ("consulta_precio", "consulta_stock", "comprar", "comparar"):
+        return "QUOTE"
+    previous = str(context.get("stage") or "").upper()
+    if previous in ("CONFIRM", "CAPTURE_DATA", "DONE", "HANDOFF"):
+        return previous
+    return "PRODUCT_MATCH"
 
 
 def _log_guardrail(conn, conversation, reason: str, stage: str) -> None:
@@ -264,13 +507,28 @@ async def _decide(
     return reply, False, generator, None
 
 
-def _update_context(conn, conversation, intent, product, generator: str, escalate: bool) -> None:
+def _update_context(
+    conn,
+    conversation,
+    intent,
+    product,
+    generator: str,
+    escalate: bool,
+    *,
+    stage: str | None = None,
+    sale: dict | None = None,
+) -> None:
     context = conversations.get_context(conn, conversation["id"])
     if product is not None:
         context["product_id"] = product["id"]
     context["last_intent"] = intent.intencion
     context["last_generator"] = generator
     context["pending_escalation"] = bool(escalate)
+    if stage:
+        context["stage"] = stage
+    if sale is not None:
+        context["sale_id"] = sale["id"]
+        context["order_code"] = sale["order_code"]
     conversations.set_context(conn, conversation["id"], context)
 
 
@@ -373,19 +631,40 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
         source_message_id=last_message_id,
     )
 
-    reply, escalate, generator, escalation_question = await _decide(
-        conn,
-        conversation,
-        {"body": text, "id": last_message_id},
-        intent,
-        product,
-        context,
-        history,
-        last_text=text,
-    )
+    sale = None
+    sale_outcome = _maybe_handle_sale(conn, conversation, text, intent, product, context)
+    if sale_outcome is not None:
+        reply = sale_outcome["reply"]
+        escalate = sale_outcome["escalate"]
+        generator = sale_outcome["generator"]
+        escalation_question = sale_outcome["escalation_question"]
+        stage = sale_outcome["stage"]
+        sale = sale_outcome.get("sale")
+    else:
+        reply, escalate, generator, escalation_question = await _decide(
+            conn,
+            conversation,
+            {"body": text, "id": last_message_id},
+            intent,
+            product,
+            context,
+            history,
+            last_text=text,
+        )
+        stage = _stage_for(context, intent, product, escalate)
+
     supplier_id = product["supplier_id"] if (escalate and product) else None
 
-    _update_context(conn, conversation, intent, product, generator, escalate)
+    _update_context(
+        conn,
+        conversation,
+        intent,
+        product,
+        generator,
+        escalate,
+        stage=stage,
+        sale=sale,
+    )
     return {
         "turn_id": turn.get("id"),
         "message_id": last_message_id,
@@ -398,6 +677,10 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
         "escalate": escalate,
         "escalation_question": escalation_question,
         "generator": generator,
+        "stage": stage,
+        "sale_id": sale["id"] if sale else None,
+        "sale_status": sale["status"] if sale else None,
+        "sale_order_code": sale["order_code"] if sale else None,
         "latency_ms": int((time.perf_counter() - started) * 1000),
         "context_tokens": llm.estimate_tokens(
             [*nlu_messages, {"role": "user", "content": prompt_text}]

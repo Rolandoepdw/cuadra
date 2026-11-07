@@ -10,10 +10,13 @@ import type {
   BroadcastReevaluate,
   BroadcastStrategy,
   BroadcastStrategyIn,
+  CancelSaleIn,
   Category,
   CategoryIn,
   CategoryPatch,
+  FinanceSummary,
   Health,
+  LedgerPage,
   LlmModelsResponse,
   LlmStatus,
   LogCategory,
@@ -23,6 +26,8 @@ import type {
   ProductImage,
   ProductIn,
   ProductPatch,
+  Sale,
+  SalesPage,
   Summary,
   Supplier,
   SupplierIn,
@@ -245,3 +250,44 @@ export const setBroadcastStrategy = (body: BroadcastStrategyIn) =>
       }),
     },
   );
+
+// -------------------------------------------------------------------- finance
+
+export const getFinanceSummary = () => request<FinanceSummary>("/api/finance/summary");
+
+export const listSales = (
+  params: { status?: string; currency?: string; supplier_id?: number; limit?: number; offset?: number } = {},
+) => {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== "") qs.set(k, String(v));
+  }
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return request<SalesPage>(`/api/finance/sales${suffix}`);
+};
+
+export const listLedger = (
+  params: { status?: string; currency?: string; supplier_id?: number; limit?: number; offset?: number } = {},
+) => {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== "") qs.set(k, String(v));
+  }
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return request<LedgerPage>(`/api/finance/ledger${suffix}`);
+};
+
+export const approveSale = (id: number) =>
+  request<Sale>(`/api/finance/approve/${id}`, { method: "POST" });
+
+export const dispatchSale = (id: number) =>
+  request<Sale>(`/api/finance/dispatch/${id}`, { method: "POST" });
+
+export const settleSale = (id: number) =>
+  request<Sale>(`/api/finance/settle/${id}`, { method: "POST" });
+
+export const cancelSale = (id: number, reason: string) =>
+  request<Sale>(`/api/finance/cancel/${id}`, {
+    method: "POST",
+    body: JSON.stringify({ reason } satisfies CancelSaleIn),
+  });

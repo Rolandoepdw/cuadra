@@ -102,4 +102,38 @@ TEMPLATES = {
         "¡Buenas! Ya me confirmó el almacén: {respuesta} ¿Te reservo {producto} y "
         "coordinamos la entrega?"
     ),
+    "sale_ask_data": (
+        "Para dejarte el pedido listo me falta {faltan}. ¿Me lo pasas?"
+    ),
+    "sale_confirm": (
+        "Te confirmo: {producto} x{cantidad} en {total} {moneda}, para {cliente} "
+        "en {direccion}, {zona}. ¿Lo dejo registrado?"
+    ),
+    "sale_created": (
+        "Tu pedido {order_code} quedó registrado. El almacén confirmará la entrega; "
+        "el pago es en efectivo al recibir."
+    ),
+    "sale_confirmed": "Confirmado, tu pedido {order_code} está en preparación.",
+    "sale_delivered": "Entregado. ¡Gracias por confiar en Cuadra!",
+    "sale_unavailable": (
+        "El almacén no tiene disponibilidad para {order_code}. No quiero prometerte "
+        "algo que no puedo cumplir; te ofrezco otra opción o te devuelvo la reserva."
+    ),
+    "sale_cancelled": "Tu pedido {order_code} quedó cancelado. Si quieres, miramos otra opción.",
+    "sale_declined": "Sin problema, lo dejamos para cuando quieras. Aquí seguimos.",
+    "tcp_order": (
+        "📦 NUEVA ORDEN — Ref: {order_code}\n\n"
+        "Producto: {producto} (ID: {product_id})\n"
+        "Cantidad: {cantidad}\n"
+        "Total a cobrar al cliente: {total} {moneda} (cobro en destino)\n\n"
+        "Datos de entrega:\n"
+        "• Cliente: {cliente}\n"
+        "• Municipio: {zona}\n"
+        "• Dirección: {direccion}\n"
+        "• Teléfono: {telefono}\n\n"
+        "Responde a este mensaje con:\n"
+        "• RECIBIDO  → confirmas que la preparas\n"
+        "• AGOTADO   → no tienes disponibilidad\n"
+        "• ENTREGADO → ya la entregaste y cobraste"
+    ),
 }

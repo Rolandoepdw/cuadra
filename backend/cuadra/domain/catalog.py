@@ -28,6 +28,7 @@ JPEG_QUALITY = 82
 
 CURRENCIES = ("USD", "CUP")
 PRODUCT_STATUSES = ("ACTIVE", "OUT_OF_STOCK", "PAUSED", "REMOVED")
+COMMISSION_TYPES = ("FIXED", "PERCENT")
 
 _TABLES = ("categories", "zones", "suppliers", "products", "product_images")
 
@@ -613,6 +614,13 @@ def _validate_product_fields(conn, data: dict, *, partial: bool) -> dict:
         if key in data and data[key] is not None:
             _require(data[key] in CURRENCIES, f"'{key}' must be one of {CURRENCIES}")
             fields[key] = data[key]
+
+    if "commission_type" in data and data["commission_type"] is not None:
+        _require(
+            data["commission_type"] in COMMISSION_TYPES,
+            f"'commission_type' must be one of {COMMISSION_TYPES}",
+        )
+        fields["commission_type"] = data["commission_type"]
 
     if "status" in data and data["status"] is not None:
         _require(

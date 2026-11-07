@@ -20,7 +20,7 @@ import sqlite3
 
 from cuadra import config
 from cuadra.ai import llm
-from cuadra.domain import catalog, conversations
+from cuadra.domain import catalog, conversations, sales as sales_domain
 
 log = logging.getLogger("cuadra.memory")
 
@@ -30,6 +30,7 @@ FACT_ZONE = "zone_name"
 FACT_BUDGET = "budget"
 FACT_CUSTOMER_NAME = "customer_name"
 FACT_PHONE = "customer_phone"
+FACT_ADDRESS = "delivery_address"
 FACT_OBJECTION = "objection"
 
 FACT_LABELS = {
@@ -39,6 +40,7 @@ FACT_LABELS = {
     FACT_BUDGET: "Presupuesto mencionado",
     FACT_CUSTOMER_NAME: "Nombre del cliente",
     FACT_PHONE: "Teléfono",
+    FACT_ADDRESS: "Dirección de entrega",
     FACT_OBJECTION: "Objeción",
 }
 
@@ -75,6 +77,20 @@ _PHONE_HINT = re.compile(
     r"llamar|contacto)\b",
     re.IGNORECASE,
 )
+# Delivery address: an explicit label or a street-like phrase. A bare zone
+# ("vivo en Marianao") is rejected because it has neither a digit nor a street
+# keyword, so it stays a zone fact and never becomes an address.
+_ADDRESS_LABEL = re.compile(
+    r"\b(?:direcci[oó]n|dirijo a|domicilio|entregar en|entr[eé]gala en|"
+    r"vivo en|resido en)\b\s*(?:es|:|-)?\s*(.{6,200})",
+    re.IGNORECASE,
+)
+_ADDRESS_STREET = re.compile(
+    r"\b(?:calle|avenida|av\.?|edificio|edif\.?|reparto|carretera|autopista|"
+    r"consejo popular|calzada|pasaje)\b[^\n,;.]{2,120}",
+    re.IGNORECASE,
+)
+_ADDRESS_REJECT = {"mi casa", "casa", "aqui", "aquí", "alla", "allá", "por ahi", "por ahí"}
 _OBJECTIONS = (
     (re.compile(r"\b(muy caro|caro|costoso|no me alcanza|fuera de presupuesto)\b", re.I), "precio"),
     (re.compile(r"\b(no conf[ií]o|desconf[ií]o|es falso|estafa)\b", re.I), "confianza"),
@@ -209,12 +225,7 @@ def _extract_budget(text: str) -> str | None:
 
 def compose_phone(raw: str | None) -> str | None:
     """Accept 6-8 digits with optional +53; reject anything else (doc 02 §3.2)."""
-    digits = re.sub(r"\D", "", raw or "")
-    if len(digits) == 10 and digits.startswith("53"):
-        digits = digits[2:]
-    if not 6 <= len(digits) <= 8:
-        return None
-    return f"+53 {digits}"
+    return sales_domain.normalize_phone(raw)
 
 
 def _extract_phone(text: str) -> str | None:
@@ -235,6 +246,24 @@ def _extract_objection(text: str) -> str | None:
     for pattern, label in _OBJECTIONS:
         if pattern.search(text or ""):
             return label
+    return None
+
+
+def _looks_like_address(value: str) -> bool:
+    candidate = _clean(value, 200).strip(" .,;:-")
+    if len(candidate) < 6 or candidate.casefold() in _ADDRESS_REJECT:
+        return False
+    return bool(re.search(r"\d", candidate) or _ADDRESS_STREET.search(candidate))
+
+
+def _extract_address(text: str) -> str | None:
+    body = text or ""
+    match = _ADDRESS_LABEL.search(body)
+    if match and _looks_like_address(match.group(1)):
+        return _clean(match.group(1), 200).strip(" .,;:-")
+    match = _ADDRESS_STREET.search(body)
+    if match and _looks_like_address(match.group(0)):
+        return _clean(match.group(0), 200).strip(" .,;:-")
     return None
 
 
@@ -324,6 +353,19 @@ def capture_facts(
         )
         _set_profile_pref(conn, customer_id, "phone", phone)
         found[FACT_PHONE] = phone
+
+    address = _extract_address(text)
+    if address:
+        upsert_fact(
+            conn,
+            conversation_id,
+            FACT_ADDRESS,
+            address,
+            confidence=0.8,
+            source_message_id=source_message_id,
+        )
+        _set_profile_pref(conn, customer_id, "usual_address", address)
+        found[FACT_ADDRESS] = address
 
     objection = _extract_objection(text)
     if objection:

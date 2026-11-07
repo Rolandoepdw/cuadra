@@ -20,6 +20,7 @@ from cuadra.api import (
     routes_catalog,
     routes_dashboard,
     routes_debug,
+    routes_finance,
     routes_llm,
     routes_logs,
     routes_settings,
@@ -72,6 +73,9 @@ async def lifespan(app: FastAPI):
     if recovered_turns:
         log.warning("re-armed %s abandoned customer turn(s)", recovered_turns)
     handlers.register()
+    rearmed = handlers.recover_pending_dispatches()
+    if rearmed:
+        log.warning("re-armed %s pending sale dispatch(es)", rearmed)
     queue.start()
     # If the embedding model is vendored and some products lack a vector, queue
     # one low-priority reindex. Without the model this is skipped and search
@@ -118,6 +122,7 @@ app = FastAPI(title="Cuadra Core", lifespan=lifespan)
 app.include_router(routes_dashboard.router)
 app.include_router(routes_catalog.router)
 app.include_router(routes_broadcasts.router)
+app.include_router(routes_finance.router)
 app.include_router(routes_settings.router)
 app.include_router(routes_llm.router)
 app.include_router(routes_logs.router)
