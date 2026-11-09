@@ -198,9 +198,14 @@ def validate_reply(reply: str, context: dict) -> tuple[bool, str]:
 def fallback_reply(context: dict) -> str:
     """Deterministic, always-safe reply used when the model cannot comply."""
     product = context.get("product")
+    # H-09: the fallback may only quote a product this turn actually resolved.
+    # A product inherited from the previous turn would answer a different
+    # question ("¿Tienes neveras?" -> Monitor LED 24).
+    from_turn = bool(context.get("product_from_turn", True))
     price = product.get("price") if isinstance(product, dict) else None
     if (
-        isinstance(product, dict)
+        from_turn
+        and isinstance(product, dict)
         and price is not None
         and product.get("status", "ACTIVE") == "ACTIVE"
         and (product.get("stock") or 0) > 0

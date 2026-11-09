@@ -16,7 +16,17 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from cuadra import config, db
-from cuadra.ai import assembler, context, guardrails, handlers, ingest, llm, queue
+from cuadra.ai import (
+    assembler,
+    context,
+    guardrails,
+    handlers,
+    ingest,
+    llm,
+    pipeline,
+    prompts,
+    queue,
+)
 from cuadra.domain import conversations, turns
 
 
@@ -537,6 +547,228 @@ class EscalationTests(Phase1TestCase):
             ),
             1,
         )
+
+
+class ProductResolutionTests(Phase1TestCase):
+    """H-07 / H-09 / H-11: answer about the product this turn actually names."""
+
+    def _add_product(self, product_id: int, name: str, price: float, stock: int = 5):
+        conn = db.connect()
+        try:
+            conn.execute(
+                """INSERT INTO products
+                   (id, supplier_id, name, price, currency, commission, stock, status)
+                   VALUES (?, 1, ?, ?, 'USD', 1, ?, 'ACTIVE')""",
+                (product_id, name, price, stock),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_turn_text_wins_over_the_product_stored_in_context(self):
+        self._add_product(2, "Teclado Mecánico", 45.0)
+        conn = db.connect()
+        try:
+            product, source = pipeline._resolve_product(
+                conn,
+                llm.Intent(intencion="consulta_precio", confianza=0.9),
+                {"product_id": 1},
+                "precio del teclado mecánico",
+            )
+        finally:
+            conn.close()
+        self.assertEqual(product["id"], 2)
+        self.assertEqual(source, "text")
+
+    def test_named_product_resolves_when_intent_producto_is_null(self):
+        self._add_product(2, "Teclado Mecánico", 45.0)
+        conn = db.connect()
+        try:
+            product, source = pipeline._resolve_product(
+                conn,
+                llm.Intent(intencion="consulta_precio", producto=None, confianza=0.5),
+                {"product_id": 1},
+                "Hola\n¿precio del teclado mecánico?",
+            )
+        finally:
+            conn.close()
+        self.assertEqual(product["id"], 2)
+        self.assertEqual(source, "text")
+
+    def test_pipeline_answers_about_the_newly_named_product(self):
+        self._add_product(2, "Teclado Mecánico", 45.0)
+        first = llm.Intent(
+            intencion="consulta_precio", producto="Power Bank", confianza=0.95
+        )
+        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=first)):
+            self._ingest("precio del Power Bank")
+            self._make_due()
+            self._run_process()
+
+        second = llm.Intent(
+            intencion="consulta_precio", producto=None, confianza=0.6
+        )
+        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=second)):
+            self._ingest("y el precio del teclado mecánico")
+            self._make_due()
+            self._run_process()
+
+        outbound = self._rows(
+            "SELECT body FROM messages WHERE direction = 'OUTBOUND' ORDER BY id"
+        )
+        self.assertEqual(len(outbound), 2)
+        self.assertIn("Teclado Mecánico", outbound[1]["body"])
+        self.assertIn("45", outbound[1]["body"])
+        self.assertNotIn("Power Bank", outbound[1]["body"])
+
+    def _first_turn(self, intent) -> None:
+        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=intent)):
+            self._ingest("precio del Power Bank")
+            self._make_due()
+            self._run_process()
+
+    def test_unknown_product_does_not_inherit_context_or_escalate(self):
+        self._first_turn(
+            llm.Intent(
+                intencion="consulta_precio", producto="Power Bank", confianza=0.95
+            )
+        )
+        unknown = llm.Intent(
+            intencion="consulta_dato",
+            producto=None,
+            datos_faltantes=["precio", "stock", "garantía", "especificaciones"],
+            confianza=0.0,
+        )
+        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=unknown)):
+            self._ingest("¿Tienes neveras?")
+            self._make_due()
+            self._run_process()
+
+        outbound = self._rows(
+            "SELECT body FROM messages WHERE direction = 'OUTBOUND' ORDER BY id"
+        )
+        self.assertEqual(len(outbound), 2)
+        self.assertEqual(outbound[1]["body"], prompts.TEMPLATES["ask_which_product"])
+        self.assertNotIn("Power Bank", outbound[1]["body"])
+        self.assertEqual(self._scalar("SELECT COUNT(*) FROM escalations"), 0)
+        self.assertEqual(
+            self._scalar(
+                "SELECT COUNT(*) FROM jobs WHERE type = 'send_escalation'"
+            ),
+            0,
+        )
+        event = self._rows(
+            "SELECT details_json FROM events WHERE type = 'reply_generated' "
+            "ORDER BY id DESC LIMIT 1"
+        )[0]
+        self.assertIn('"product_id": null', event["details_json"])
+        self.assertIn('"escalate": false', event["details_json"])
+
+    def test_high_confidence_followup_keeps_the_context_product(self):
+        self._first_turn(
+            llm.Intent(
+                intencion="consulta_precio", producto="Power Bank", confianza=0.95
+            )
+        )
+        followup = llm.Intent(
+            intencion="consulta_dato",
+            producto=None,
+            datos_faltantes=["garantía"],
+            confianza=0.9,
+        )
+        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=followup)):
+            self._ingest("¿Qué garantía trae?")
+            self._make_due()
+            self._run_process()
+
+        escalation = self._rows("SELECT * FROM escalations")[0]
+        self.assertEqual(escalation["product_id"], 1)
+        self.assertEqual(escalation["supplier_id"], 1)
+        self.assertEqual(escalation["question"], "garantía")
+        outbound = self._rows(
+            "SELECT body FROM messages WHERE direction = 'OUTBOUND' ORDER BY id"
+        )
+        self.assertIn("consulto al almacén", outbound[1]["body"])
+
+    def test_sale_capture_keeps_the_context_product(self):
+        self._first_turn(
+            llm.Intent(
+                intencion="consulta_precio", producto="Power Bank", confianza=0.95
+            )
+        )
+        conn = db.connect()
+        try:
+            stored = conversations.get_context(conn, 1)
+            stored["stage"] = "CAPTURE_DATA"
+            conversations.set_context(conn, 1, stored)
+        finally:
+            conn.close()
+
+        noise = llm.Intent(intencion="otro", confianza=0.1)
+        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=noise)):
+            self._ingest("calle 10 número 123")
+            self._make_due()
+            self._run_process()
+
+        outbound = self._rows(
+            "SELECT body FROM messages WHERE direction = 'OUTBOUND' ORDER BY id"
+        )
+        self.assertIn("me falta", outbound[1]["body"])
+        self.assertIn("teléfono", outbound[1]["body"])
+
+    def test_comparison_resolves_both_named_products(self):
+        self._add_product(2, "Monitor LED 24", 180.0, stock=6)
+        self._add_product(3, "Tablet Android 10", 220.0, stock=3)
+        conn = db.connect()
+        try:
+            products = pipeline._comparison_products(
+                conn,
+                "Compárame el Monitor LED 24 con la Tablet Android 10",
+                llm.Intent(intencion="comparar", producto=None, confianza=0.9),
+                None,
+            )
+        finally:
+            conn.close()
+        ids = [product["id"] for product in products]
+        self.assertIn(2, ids)
+        self.assertIn(3, ids)
+        self.assertNotIn(1, ids)
+
+    def test_fallback_does_not_reuse_a_product_from_the_context(self):
+        inherited = {
+            "product": {
+                "id": 2,
+                "name": "Monitor LED 24",
+                "price": 180.0,
+                "currency": "USD",
+                "stock": 6,
+                "status": "ACTIVE",
+            },
+            "products": [],
+            "quoted_prices": [],
+            "product_from_turn": False,
+        }
+        body = guardrails.fallback_reply(inherited)
+        self.assertEqual(body, prompts.TEMPLATES["ask_which_product"])
+        self.assertNotIn("180", body)
+
+    def test_fallback_still_quotes_a_product_resolved_this_turn(self):
+        current = {
+            "product": {
+                "id": 1,
+                "name": "Power Bank 10000",
+                "price": 12.5,
+                "currency": "USD",
+                "stock": 5,
+                "status": "ACTIVE",
+            },
+            "products": [],
+            "quoted_prices": [],
+            "product_from_turn": True,
+        }
+        body = guardrails.fallback_reply(current)
+        self.assertIn("Power Bank 10000", body)
+        self.assertIn("12.5", body)
 
 
 class GuardrailTests(unittest.TestCase):

@@ -131,6 +131,25 @@ class RetrievalTests(Phase2TestCase):
         self.assertEqual(results[0]["id"], 2)
         self.assertIn("match_score", results[0])
 
+    def test_weak_semantic_matches_are_dropped(self):
+        # "nevera" is not in this catalog: the dense layer must not return the
+        # closest unrelated product just because it is the closest one.
+        close = retrieval._pack([1.0, 0.0])
+        far = retrieval._pack([0.0, 1.0])
+        for product_id, vector in ((2, close), (3, far)):
+            self.conn.execute(
+                """INSERT INTO product_embeddings
+                   (product_id, model, dim, vector, text_hash)
+                   VALUES (?, ?, 2, ?, ?)""",
+                (product_id, config.EMBEDDING_MODEL, vector, f"hash-{product_id}"),
+            )
+        self.conn.commit()
+        with patch.object(retrieval, "_get_model", return_value=object()), patch.object(
+            retrieval, "embed_text", return_value=[0.95, 0.31]
+        ):
+            # id 2 is above the floor, id 3 (cosine 0.31) is dropped.
+            self.assertEqual(retrieval._vector_search(self.conn, "nevera", limit=5), [2])
+
     def test_index_without_model_is_a_noop(self):
         with patch.object(retrieval, "_get_model", return_value=None):
             self.assertFalse(retrieval.index_product(self.conn, 1))

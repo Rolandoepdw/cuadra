@@ -130,6 +130,11 @@ EMBEDDING_THREADS = int(os.environ.get("CUADRA_EMBEDDING_THREADS", "4"))
 RETRIEVAL_CANDIDATES = int(os.environ.get("CUADRA_RETRIEVAL_CANDIDATES", "20"))
 RETRIEVAL_TOP_K = int(os.environ.get("CUADRA_RETRIEVAL_TOP_K", "4"))
 RRF_K = int(os.environ.get("CUADRA_RRF_K", "60"))
+# Cosine floor for the semantic layer. Without it a completely unrelated query
+# ("nevera") returns the closest product anyway ("Pan con Croqueta" at 0.13).
+RETRIEVAL_MIN_SEMANTIC_SCORE = float(
+    os.environ.get("CUADRA_RETRIEVAL_MIN_SEMANTIC_SCORE", "0.40")
+)
 
 # Conversations without messages for this many hours are closed by the daily
 # scheduler; a returning customer gets a fresh conversation (profile survives).

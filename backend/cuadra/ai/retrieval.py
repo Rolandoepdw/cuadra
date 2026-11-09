@@ -411,7 +411,12 @@ def _vector_search(conn, query: str, *, limit: int, statuses=SEARCH_STATUSES) ->
         values = _unpack(row["vector"])
         if len(values) != int(row["dim"]):
             continue
-        scored.append((_cosine(vector, values), int(row["product_id"])))
+        score = _cosine(vector, values)
+        # A dense index always returns *something*; the floor keeps an unknown
+        # product ("nevera") from matching the closest unrelated row.
+        if score < config.RETRIEVAL_MIN_SEMANTIC_SCORE:
+            continue
+        scored.append((score, int(row["product_id"])))
     scored.sort(key=lambda item: (-item[0], item[1]))
     return [product_id for _, product_id in scored[:limit]]
 

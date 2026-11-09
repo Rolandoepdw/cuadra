@@ -63,31 +63,90 @@ def _retrieve_candidates(conn, query: str, *, limit: int = 4) -> list[dict]:
     return products
 
 
+def _find_product_in_text(conn, text: str) -> dict | None:
+    """Fuzzy match the whole turn, then each line (consolidated bursts dilute it)."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    product = catalog.find_product(conn, text)
+    if product is not None:
+        return product
+    chunks = [chunk.strip() for chunk in re.split(r"[\n.;!?]+", text) if chunk.strip()]
+    if len(chunks) < 2:
+        return None
+    for chunk in sorted(chunks, key=len, reverse=True):
+        if len(chunk) < 4:
+            continue
+        product = catalog.find_product(conn, chunk)
+        if product is not None:
+            return product
+    return None
+
+
 def _resolve_product(
     conn, intent, context: dict, text: str = ""
-) -> dict | None:
+) -> tuple[dict | None, str]:
+    """Return `(product, source)`; source is id/intent/text/context or ''.
+
+    The turn's own text always wins over the product remembered in the
+    context: a customer who names a product must not be answered about the
+    previous one (H-11).
+    """
     explicit_id = product_id_from_text(text)
     if explicit_id is not None:
         try:
-            return catalog.get_product(conn, explicit_id)
+            return catalog.get_product(conn, explicit_id), "id"
         except catalog.NotFound:
             if _ID_PREFIXED.search(text):
-                return None
+                return None, ""
     if intent.producto:
         # Fuzzy first: it is precise for the exact names the NLU usually emits.
         product = catalog.find_product(conn, intent.producto)
         if product is not None:
-            return product
+            return product, "intent"
         # Semantic/lexical fallback for paraphrases the fuzzy matcher misses.
         candidates = _retrieve_candidates(conn, intent.producto, limit=1)
         if candidates:
-            return candidates[0]
+            return candidates[0], "intent"
+    if text:
+        product = _find_product_in_text(conn, text)
+        if product is not None:
+            return product, "text"
     if context.get("product_id"):
         try:
-            return catalog.get_product(conn, context["product_id"])
+            return catalog.get_product(conn, context["product_id"]), "context"
         except catalog.NotFound:
-            return None
-    return None
+            return None, ""
+    return None, ""
+
+
+_COMPARE_SPLIT = re.compile(
+    r"\s+(?:con|y|vs\.?|versus|contra|frente\s+a)\s+|[,;/\n]", re.IGNORECASE
+)
+
+
+def _comparison_products(conn, text: str, intent, product: dict | None) -> list[dict]:
+    """Every product the customer is comparing (H-07).
+
+    Splitting the phrase and resolving each chunk is precise for the usual
+    "A con B" wording; hybrid retrieval is only used to fill gaps, so an
+    unrelated candidate never displaces a named product.
+    """
+    found: dict[int, dict] = {}
+
+    def add(value: dict | None) -> None:
+        if value is not None and value["status"] in ("ACTIVE", "OUT_OF_STOCK"):
+            found.setdefault(int(value["id"]), value)
+
+    add(product)
+    for chunk in _COMPARE_SPLIT.split(text or ""):
+        chunk = chunk.strip(" .!?¿¡")
+        if len(chunk) >= 3:
+            add(catalog.find_product(conn, chunk))
+    if len(found) < 2:
+        for candidate in _retrieve_candidates(conn, text, limit=4):
+            add(candidate)
+    return list(found.values())[:4]
 
 
 def _render_greeting(conn, product: dict) -> str:
@@ -125,6 +184,7 @@ def _guard_context(
     context: dict,
     *,
     extra_products: list[dict] | None = None,
+    product_source: str = "",
 ) -> dict:
     products = []
     for value in (product, *(candidates or []), *(extra_products or [])):
@@ -132,6 +192,9 @@ def _guard_context(
             products.append(value)
     return {
         "product": product,
+        # H-09: a product inherited from the context must not be reused by the
+        # deterministic fallback when this turn did not mention it.
+        "product_from_turn": product_source in ("id", "intent", "text"),
         "products": products,
         "quoted_prices": context.get("quoted_prices") or [],
     }
@@ -146,6 +209,10 @@ _NEGATIVE = re.compile(
     r"\b(no|todav[ií]a no|ahora no|d[eé]jalo|lo pienso|despu[eé]s)\b", re.IGNORECASE
 )
 _SALE_STAGES = ("CAPTURE_DATA", "CONFIRM")
+
+# Below this the NLU is guessing (the unknown-product case often lands here), so
+# the engine must not inherit the product of the previous turn (H-09).
+LOW_CONFIDENCE = 0.35
 
 
 def _is_affirmative(text: str) -> bool:
@@ -415,6 +482,7 @@ async def _decide(
     history: list[dict],
     *,
     last_text: str | None = None,
+    product_source: str = "",
 ) -> tuple[str, bool, str, str | None]:
     """Returns (reply, escalate, generator, escalation_question)."""
     text = last_text if last_text is not None else (inbound["body"] or "")
@@ -433,7 +501,11 @@ async def _decide(
         if product["status"] != "ACTIVE" or (product.get("stock") or 0) <= 0:
             alternatives = catalog.alternatives(conn, product)
             guard_context = _guard_context(
-                product, None, context, extra_products=alternatives
+                product,
+                None,
+                context,
+                extra_products=alternatives,
+                product_source=product_source,
             )
             reply, generator = _safe_template(
                 conn,
@@ -443,7 +515,9 @@ async def _decide(
                 "template",
             )
             return reply, False, generator, None
-        guard_context = _guard_context(product, None, context)
+        guard_context = _guard_context(
+            product, None, context, product_source=product_source
+        )
         reply = _render_greeting(conn, product)
         if intent.intencion == "comprar":
             canonical = catalog.llm_product_json(conn, product)
@@ -455,7 +529,21 @@ async def _decide(
 
     if intent.intencion == "consulta_dato":
         missing = ", ".join(intent.datos_faltantes) if intent.datos_faltantes else text
-        guard_context = _guard_context(product, None, context)
+        if product is None:
+            # Nothing in the catalog matches what the customer asked about
+            # (H-09): never escalate a question about an unknown product.
+            guard_context = _guard_context(None, None, context)
+            reply, generator = _safe_template(
+                conn,
+                conversation,
+                prompts.TEMPLATES["ask_which_product"],
+                guard_context,
+                "template",
+            )
+            return reply, False, generator, None
+        guard_context = _guard_context(
+            product, None, context, product_source=product_source
+        )
         reply, generator = _safe_template(
             conn,
             conversation,
@@ -468,7 +556,7 @@ async def _decide(
     # comparar / queja / otro / low confidence -> careful free generation
     candidates = None
     if intent.intencion == "comparar":
-        candidates = _retrieve_candidates(conn, intent.producto or text, limit=4)
+        candidates = _comparison_products(conn, text, intent, product)
     messages, prompt_text = _build_base_messages(
         conn,
         conversation,
@@ -481,7 +569,9 @@ async def _decide(
     extra = ""
     if candidates:
         extra = "El cliente compara productos: usa solo los PRODUCTOS CANDIDATOS que tienes."
-    guard_context = _guard_context(product, candidates, context)
+    guard_context = _guard_context(
+        product, candidates, context, product_source=product_source
+    )
 
     generator = "llm"
     reply = await llm.compose(
@@ -593,7 +683,7 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
         if message["id"] not in turn_ids
     ]
 
-    current_product = _resolve_product(
+    current_product, _current_source = _resolve_product(
         conn, llm.Intent(intencion="otro"), context, text
     )
     # Deterministic facts are written before the prompt is built so a zone,
@@ -618,7 +708,18 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
         conn, conversation, nlu_messages, prompt_text, last_message_id
     )
 
-    product = _resolve_product(conn, intent, context, text)
+    product, product_source = _resolve_product(conn, intent, context, text)
+    # H-09: a low-confidence read must not inherit the previous product. An
+    # unknown product ("¿Tienes neveras?") would otherwise be answered or
+    # escalated about the monitor of the previous turn. An in-progress sale is
+    # exempt: there the context product is the one being purchased.
+    stage_hint = str(context.get("stage") or "").upper()
+    if (
+        product_source == "context"
+        and intent.confianza < LOW_CONFIDENCE
+        and stage_hint not in _SALE_STAGES
+    ):
+        product, product_source = None, ""
     if product is not None and product_id_from_text(text) is not None:
         if intent.intencion == "otro":
             intent.intencion = "consulta_precio"
@@ -650,6 +751,7 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
             context,
             history,
             last_text=text,
+            product_source=product_source,
         )
         stage = _stage_for(context, intent, product, escalate)
 
