@@ -260,6 +260,15 @@ def get_mutation(mutation_id: int) -> dict:
     return _run(catalog_mutations.get, mutation_id)
 
 
+def _enqueue_sends(sends) -> None:
+    for conversation_id, message_id in sends:
+        queue.enqueue(
+            "send_message",
+            {"conversation_id": conversation_id, "message_id": message_id},
+            priority=config.PRIORITY_CUSTOMER,
+        )
+
+
 def _resume_clients(mutation: dict) -> None:
     """After an operator approval, answer every client still waiting."""
     conn = db.connect()
@@ -276,12 +285,20 @@ def _resume_clients(mutation: dict) -> None:
         sends = []
     finally:
         conn.close()
-    for conversation_id, message_id in sends:
-        queue.enqueue(
-            "send_message",
-            {"conversation_id": conversation_id, "message_id": message_id},
-            priority=config.PRIORITY_CUSTOMER,
-        )
+    _enqueue_sends(sends)
+
+
+def _notify_outcome(mutation: dict, kind: str) -> None:
+    """After a reject/undo, tell the client the previous answer no longer holds (H-21)."""
+    conn = db.connect()
+    try:
+        sends = tcp_triage.notify_mutation_outcome(conn, mutation, kind=kind)
+    except Exception:  # noqa: BLE001 - the decision is persisted; never 500 for this
+        log.exception("could not notify clients for mutation %s (%s)", mutation["id"], kind)
+        sends = []
+    finally:
+        conn.close()
+    _enqueue_sends(sends)
 
 
 @router.post("/catalog/mutations/{mutation_id}/approve")
@@ -293,9 +310,13 @@ def approve_mutation(mutation_id: int) -> dict:
 
 @router.post("/catalog/mutations/{mutation_id}/reject")
 def reject_mutation(mutation_id: int, payload: MutationReasonIn) -> dict:
-    return _run(catalog_mutations.reject, mutation_id, reason=payload.reason)
+    mutation = _run(catalog_mutations.reject, mutation_id, reason=payload.reason)
+    _notify_outcome(mutation, "rejected")
+    return mutation
 
 
 @router.post("/catalog/mutations/{mutation_id}/revert")
 def revert_mutation(mutation_id: int, payload: MutationReasonIn) -> dict:
-    return _run(catalog_mutations.revert, mutation_id, reason=payload.reason)
+    mutation = _run(catalog_mutations.revert, mutation_id, reason=payload.reason)
+    _notify_outcome(mutation, "reverted")
+    return mutation

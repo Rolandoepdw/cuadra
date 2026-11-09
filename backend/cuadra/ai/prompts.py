@@ -113,9 +113,29 @@ TEMPLATES = {
         "¡Buenas! Ya me confirmó el almacén: {respuesta} ¿Te reservo {producto} y "
         "coordinamos la entrega?"
     ),
+    "escalation_resolved_out_of_stock": (
+        "¡Buenas! Ya me confirmó el almacén: {respuesta} Por ahora no tenemos "
+        "unidades; ¿quieres que te avise cuando vuelva a entrar?"
+    ),
     "escalation_resolved_generic": (
         "¡Buenas! Ya me confirmó el almacén que sí está disponible. ¿Te reservo "
         "{producto} y coordinamos la entrega?"
+    ),
+    "escalation_resolved_generic_out_of_stock": (
+        "¡Buenas! Ya me confirmó el almacén. Por ahora no tenemos unidades de "
+        "{producto}; ¿quieres que te avise cuando vuelva a entrar?"
+    ),
+    "mutation_rejected": (
+        "Buenas. No pude confirmar ese dato con el almacén, así que no te lo doy "
+        "por bueno. Si quieres, lo intento de nuevo más tarde."
+    ),
+    "mutation_reverted": (
+        "Buenas. Corrijo lo que te dije: {producto} vuelve a estar en {precio} "
+        "{moneda}. Si quieres, te lo confirmo de nuevo antes de reservar."
+    ),
+    "mutation_reverted_generic": (
+        "Buenas. Corrijo lo que te dije: el dato anterior vuelve a estar vigente. "
+        "Si quieres, te lo confirmo de nuevo antes de reservar."
     ),
     "sale_ask_data": (
         "Para dejarte el pedido listo me falta {faltan}. ¿Me lo pasas?"

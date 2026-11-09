@@ -313,9 +313,20 @@ def correlate(conn, *, supplier_id: int, text: str) -> Correlation:
 
 def _customer_reply(product: dict | None, summary: str | None) -> str:
     product_name = product["name"] if product else "el producto"
+    # H-20: never offer to reserve a product that is out of stock or paused.
+    available = bool(
+        product
+        and product.get("status") == "ACTIVE"
+        and (product.get("stock") or 0) > 0
+    )
     summary = (summary or "").strip()
     if summary:
-        candidate = prompts.TEMPLATES["escalation_resolved_summary"].format(
+        template = (
+            "escalation_resolved_summary"
+            if available
+            else "escalation_resolved_out_of_stock"
+        )
+        candidate = prompts.TEMPLATES[template].format(
             producto=product_name, respuesta=summary[:400]
         )
         context = {
@@ -328,9 +339,95 @@ def _customer_reply(product: dict | None, summary: str | None) -> str:
         ok, _reason = guardrails.validate_reply(candidate, context)
         if ok:
             return candidate
-    return prompts.TEMPLATES["escalation_resolved_generic"].format(
-        producto=product_name
+    template = (
+        "escalation_resolved_generic"
+        if product is None or available
+        else "escalation_resolved_generic_out_of_stock"
     )
+    return prompts.TEMPLATES[template].format(producto=product_name)
+
+
+def _operator_decision_reply(product: dict | None, kind: str) -> str:
+    """Safe customer text for a rejected or reverted catalog mutation (H-21)."""
+    if kind == "reverted" and product is not None:
+        candidate = prompts.TEMPLATES["mutation_reverted"].format(
+            producto=product["name"],
+            precio=f"{float(product['price']):g}",
+            moneda=product["currency"],
+        )
+        context = {
+            "quoted_prices": [
+                {"amount": product["price"], "currency": product["currency"]}
+            ]
+        }
+        ok, _reason = guardrails.validate_reply(candidate, context)
+        if ok:
+            return candidate
+        return prompts.TEMPLATES["mutation_reverted_generic"]
+    return prompts.TEMPLATES["mutation_rejected"]
+
+
+def notify_mutation_outcome(conn, mutation: dict, *, kind: str) -> list[tuple[int, int]]:
+    """Answer the waiting client after the operator rejects or reverts a change.
+
+    The escalation is closed even when the data could not be confirmed, so the
+    client never waits forever without an answer. Returns `(conversation_id,
+    outbound_message_id)` pairs for the caller to enqueue `send_message` jobs.
+    """
+    if kind not in ("rejected", "reverted"):
+        raise ValueError(f"unsupported mutation outcome: {kind}")
+
+    product = None
+    if mutation.get("product_id"):
+        try:
+            product = catalog.get_product(conn, mutation["product_id"])
+        except catalog.NotFound:
+            product = None
+
+    targets: list[dict] = []
+    escalation_id = mutation.get("escalation_id")
+    if escalation_id:
+        try:
+            targets = [escalations.get(conn, int(escalation_id))]
+        except escalations.NotFound:
+            targets = []
+    if not targets and mutation.get("product_id") and mutation.get("supplier_id"):
+        targets = escalations.open_for_product(
+            conn, mutation["product_id"], mutation["supplier_id"]
+        )
+
+    reply = _operator_decision_reply(product, kind)
+    sends: list[tuple[int, int]] = []
+    seen: set[int] = set()
+    for escalation in targets:
+        conversation_id = int(escalation["conversation_id"])
+        if conversation_id in seen:
+            continue
+        seen.add(conversation_id)
+        conversation = conversations.get_conversation(conn, conversation_id)
+        outbound = None
+        if conversation["status"] in conversations.OPEN_STATUSES:
+            outbound = conversations.add_message(
+                conn, conversation_id, "OUTBOUND", "bot", body=reply
+            )
+            conversations.set_status(conn, conversation_id, "ACTIVE")
+        if escalation["status"] in escalations.OPEN_STATUSES:
+            escalations.resolve(conn, int(escalation["id"]))
+        events.log(
+            conn,
+            "bot",
+            f"catalog_mutation_{kind}_notified",
+            entity="escalations",
+            entity_id=int(escalation["id"]),
+            details={
+                "mutation_id": mutation["id"],
+                "product_id": mutation.get("product_id"),
+                "reply_sent": outbound is not None,
+            },
+        )
+        if outbound is not None:
+            sends.append((conversation_id, int(outbound["id"])))
+    return sends
 
 
 def resume_escalations(

@@ -164,14 +164,23 @@ def normalize_extraction(conn, extraction) -> tuple[dict, list[str]]:
             clean["stock"] = value
 
     currency = raw.get("currency")
+    invalid_currency = False
     if currency is not None:
         value = str(currency).strip().upper()
         if value == "MLC":
             reasons.append("MLC no es una moneda del catálogo; requiere revisión")
+            invalid_currency = True
         elif value not in CURRENCIES:
             reasons.append(f"moneda no soportada: {value or '(vacía)'}")
+            invalid_currency = True
         else:
             clean["currency"] = value
+
+    # H-21: a price without a supported currency is meaningless. Dropping the
+    # number prevents an approval from writing "4200 MLC" as 4200 USD.
+    if invalid_currency and clean["price"] is not None:
+        clean["price"] = None
+        reasons.append("precio descartado: la moneda no es del catálogo")
 
     status = raw.get("status")
     if status is not None:
@@ -559,6 +568,26 @@ def _flag_oversold(conn, product: dict, state: dict) -> None:
 
 # --------------------------------------------------------------- operator ops
 
+def _validate_state(state: dict) -> None:
+    """Refuse to apply an incoherent product snapshot (defense in depth, H-21)."""
+    currency = str(state.get("currency") or "").strip().upper()
+    if currency not in CURRENCIES:
+        raise Invalid(
+            f"estado propuesto inválido: moneda {currency or '(vacía)'} no soportada"
+        )
+    try:
+        price = float(state.get("price"))
+    except (TypeError, ValueError):
+        raise Invalid("estado propuesto inválido: precio ausente") from None
+    if not math.isfinite(price) or price <= 0 or price > MAX_PRICE:
+        raise Invalid("estado propuesto inválido: precio fuera de rango")
+    stock = int(state.get("stock") or 0)
+    if stock < 0 or stock > MAX_STOCK:
+        raise Invalid("estado propuesto inválido: stock fuera de rango")
+    if state.get("status") not in PRODUCT_STATUSES:
+        raise Invalid("estado propuesto inválido: estado desconocido")
+
+
 def approve(conn, mutation_id: int, *, actor: str = "operator") -> dict:
     """Apply a PENDING_REVIEW mutation, refusing if the product moved on."""
     mutation = get(conn, mutation_id)
@@ -575,6 +604,10 @@ def approve(conn, mutation_id: int, *, actor: str = "operator") -> dict:
         )
 
     new_state = mutation["new_state"]
+    # H-21: legacy rows could carry a price with an unsupported currency (e.g.
+    # 4200 MLC stored as 4200 USD). Never write such a state, even if an old
+    # PENDING_REVIEW row slipped through normalization.
+    _validate_state(new_state)
     with conn:
         _write_state(conn, mutation["product_id"], new_state)
         conn.execute(

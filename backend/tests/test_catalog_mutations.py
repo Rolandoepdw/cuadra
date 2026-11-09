@@ -7,6 +7,7 @@ replaced by a deterministic fake in the handler test. Run from `backend/`:
 """
 
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,7 +17,7 @@ from cuadra import config, db
 from cuadra.ai import handlers, ingest, tcp_extractor, tcp_triage
 from cuadra.domain import catalog, catalog_mutations
 from cuadra.domain import escalations
-from cuadra.domain.errors import Conflict
+from cuadra.domain.errors import Conflict, Invalid
 
 
 class Phase4Fixture(unittest.TestCase):
@@ -126,6 +127,9 @@ class Phase4Fixture(unittest.TestCase):
             self.conn,
             product_id=values.pop("product_id", 1),
             supplier_id=values.pop("supplier_id", 1),
+            escalation_id=values.pop("escalation_id", None),
+            source_message_id=values.pop("source_message_id", None),
+            source_text=values.pop("source_text", None),
             extraction=self.extraction(**values),
         )
 
@@ -481,6 +485,91 @@ class TestTcpHandler(Phase4Fixture):
         self.assertEqual(job["type"], "transcribe_audio")
         self.assertIn('"next_job": "tcp_process"', job["payload_json"])
         self.assertEqual(result["source"], "supplier")
+
+
+class TestOperatorNotifications(Phase4Fixture):
+    """H-20 / H-21: out-of-stock wording and reject/revert notifications."""
+
+    def test_mlc_price_never_reaches_the_proposed_state(self):
+        mutation = self.apply(price=4200.0, currency="MLC")
+        self.assertEqual(mutation["status"], "PENDING_REVIEW")
+        self.assertEqual(mutation["new_state"]["price"], 25.0)
+        self.assertEqual(mutation["new_state"]["currency"], "USD")
+        self.assertIn("MLC", mutation["notes"])
+        self.assertEqual(self.product()["price"], 25.0)
+
+    def test_approve_refuses_a_legacy_incoherent_state(self):
+        mutation = self.apply(price=30.0)
+        self.assertEqual(mutation["status"], "APPLIED")
+        # Simulate a row created before the H-21 fix: price + MLC currency.
+        catalog_mutations.revert(self.conn, mutation["id"])
+        state = dict(mutation["previous_state"])
+        state.update({"price": 4200.0, "currency": "MLC"})
+        cur = self.conn.execute(
+            """INSERT INTO catalog_mutation_log (
+                   product_id, supplier_id, mutation_type, previous_state_json,
+                   new_state_json, previous_updated_at, confidence,
+                   correlation_method, ambiguous, status, applied_by
+               ) VALUES (1, 1, 'PRICE', ?, ?, ?, 0.95, 'case_id', 0,
+                         'PENDING_REVIEW', 'bot')""",
+            (
+                mutation["previous_state_json"],
+                json.dumps(state),
+                mutation["previous_updated_at"],
+            ),
+        )
+        self.conn.commit()
+        with self.assertRaises(Invalid):
+            catalog_mutations.approve(self.conn, int(cur.lastrowid))
+        self.assertEqual(self.product()["price"], 25.0)
+
+    def test_out_of_stock_summary_does_not_offer_a_reservation(self):
+        self.conn.execute(
+            "UPDATE products SET stock = 0, status = 'OUT_OF_STOCK' WHERE id = 2"
+        )
+        self.conn.commit()
+        body = tcp_triage._customer_reply(
+            self.product(2), "Trae estuche y tiene 6 meses de garantía."
+        )
+        self.assertIn("no tenemos unidades", body)
+        self.assertNotIn("¿Te reservo", body)
+
+    def test_available_product_still_offers_a_reservation(self):
+        body = tcp_triage._customer_reply(self.product(1), "Me quedan 2 unidades.")
+        self.assertIn("¿Te reservo", body)
+
+    def test_reject_notifies_the_waiting_client(self):
+        escalations.set_answer(self.conn, 4, "cuesta 4200 MLC")
+        mutation = self.apply(price=300.0, escalation_id=4)
+        self.assertEqual(mutation["status"], "PENDING_REVIEW")
+
+        sends = tcp_triage.notify_mutation_outcome(
+            self.conn, mutation, kind="rejected"
+        )
+        self.assertEqual([conversation for conversation, _ in sends], [1])
+        body = self.conn.execute(
+            "SELECT body FROM messages WHERE id = ?", (sends[0][1],)
+        ).fetchone()["body"]
+        self.assertNotIn("4200", body)
+        self.assertIn("No pude confirmar", body)
+        self.assertEqual(escalations.get(self.conn, 4)["status"], "RESOLVED")
+
+    def test_revert_tells_the_client_the_restored_price(self):
+        mutation = self.apply(price=30.0, escalation_id=1)
+        self.assertEqual(mutation["status"], "APPLIED")
+        escalations.set_answer(self.conn, 1, "subió a 30")
+        catalog_mutations.revert(self.conn, mutation["id"])
+
+        sends = tcp_triage.notify_mutation_outcome(
+            self.conn,
+            catalog_mutations.get(self.conn, mutation["id"]),
+            kind="reverted",
+        )
+        self.assertEqual([conversation for conversation, _ in sends], [1])
+        body = self.conn.execute(
+            "SELECT body FROM messages WHERE id = ?", (sends[0][1],)
+        ).fetchone()["body"]
+        self.assertIn("25 USD", body)
 
 
 if __name__ == "__main__":

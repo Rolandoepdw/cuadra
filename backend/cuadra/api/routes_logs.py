@@ -48,6 +48,8 @@ LABELS = {
     "escalation_resolved": "Escalación resuelta",
     "escalation_retry": "Reintento de escalación",
     "escalation_timeout": "Escalación vencida",
+    "catalog_mutation_rejected_notified": "Cliente avisado del rechazo",
+    "catalog_mutation_reverted_notified": "Cliente avisado de la corrección",
     "tcp_message_received": "Mensaje del TCP recibido",
     "tcp_reply_unmatched": "Respuesta del TCP sin consulta",
     "nlu_invalid_output": "Salida NLU inválida",
