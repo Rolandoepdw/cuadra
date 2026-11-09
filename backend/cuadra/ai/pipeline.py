@@ -149,16 +149,41 @@ def _comparison_products(conn, text: str, intent, product: dict | None) -> list[
     return list(found.values())[:4]
 
 
-def _render_greeting(conn, product: dict) -> str:
+def _render_greeting(conn, product: dict, conversation: dict) -> str:
     info = catalog.llm_product_json(conn, product)
+    zona, zona_clause = _reply_zone(conn, conversation, info)
     return prompts.TEMPLATES["greeting_product"].format(
         producto=info["nombre"],
         precio=f"{info['precio']:g}",
         moneda=info["moneda"],
         transporte_clause="",
-        zona=info["zona_entrega"] or "tu zona",
-        zona_clause="",
+        zona=zona,
+        zona_clause=zona_clause,
     )
+
+
+# H-03: a chat message should not list a dozen municipalities at once.
+_MAX_ZONES_IN_REPLY = 3
+_DEFERRED_ZONE = "tu municipio"
+_DEFERRED_ZONE_CLAUSE = " (te confirmo la zona exacta al cerrar el pedido)"
+
+
+def _reply_zone(conn, conversation, info: dict) -> tuple[str, str]:
+    """Zone phrase for a greeting: the known one, a short list or a promise."""
+    zones = [str(zone) for zone in (info.get("zonas_entrega") or []) if zone]
+    usual = ""
+    try:
+        profile = memory.customer_profile(conn, conversation["customer_id"])
+        usual = str(profile.get("zona_habitual") or "").strip()
+    except Exception:  # noqa: BLE001 - wording must never break the reply
+        log.warning("could not read the customer profile for zones", exc_info=True)
+    if usual and any(usual.casefold() == zone.casefold() for zone in zones):
+        return usual, ""
+    if 0 < len(zones) <= _MAX_ZONES_IN_REPLY:
+        return ", ".join(zones), ""
+    if not zones and info.get("zona_entrega"):
+        return str(info["zona_entrega"]), ""
+    return _DEFERRED_ZONE, _DEFERRED_ZONE_CLAUSE
 
 
 def _render_out_of_stock(alternatives: list[dict]) -> str:
@@ -518,10 +543,10 @@ async def _decide(
         guard_context = _guard_context(
             product, None, context, product_source=product_source
         )
-        reply = _render_greeting(conn, product)
+        reply = _render_greeting(conn, product, conversation)
         if intent.intencion == "comprar":
             canonical = catalog.llm_product_json(conn, product)
-            reply += f" ¿Te reservo el {canonical['nombre']} y coordinamos la entrega?"
+            reply += f" ¿Te reservo {canonical['nombre']} y coordinamos la entrega?"
         reply, generator = _safe_template(
             conn, conversation, reply, guard_context, "template"
         )

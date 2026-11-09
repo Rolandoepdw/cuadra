@@ -27,7 +27,7 @@ from cuadra.ai import (
     prompts,
     queue,
 )
-from cuadra.domain import conversations, turns
+from cuadra.domain import catalog, conversations, turns
 
 
 def _past() -> str:
@@ -769,6 +769,120 @@ class ProductResolutionTests(Phase1TestCase):
         body = guardrails.fallback_reply(current)
         self.assertIn("Power Bank 10000", body)
         self.assertIn("12.5", body)
+
+
+class ReplyWordingTests(Phase1TestCase):
+    """H-03 / H-13 / H-26: chat-sized wording and no gendered close."""
+
+    def _add_product(self, product_id: int, name: str, price: float, stock: int = 5):
+        conn = db.connect()
+        try:
+            conn.execute(
+                """INSERT INTO products
+                   (id, supplier_id, name, price, currency, commission, stock, status)
+                   VALUES (?, 1, ?, ?, 'USD', 1, ?, 'ACTIVE')""",
+                (product_id, name, price, stock),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _link_zones(self, names: list[str]) -> None:
+        conn = db.connect()
+        try:
+            for index, name in enumerate(names, start=1):
+                conn.execute(
+                    "INSERT INTO zones (id, name, active) VALUES (?, ?, 1)",
+                    (index, name),
+                )
+                conn.execute(
+                    """INSERT INTO supplier_delivery_zones (supplier_id, zone_id)
+                       VALUES (1, ?)""",
+                    (index,),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _outbound(self) -> list[str]:
+        return [
+            row["body"]
+            for row in self._rows(
+                "SELECT body FROM messages WHERE direction = 'OUTBOUND' ORDER BY id"
+            )
+        ]
+
+    def _turn(self, text: str, intent) -> None:
+        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=intent)):
+            self._ingest(text)
+            self._make_due()
+            self._run_process()
+
+    def test_ask_which_product_does_not_confirm_availability(self):
+        body = prompts.TEMPLATES["ask_which_product"]
+        self.assertIn("Dime cuál producto te interesa", body)
+        self.assertNotIn("Claro que sí", body)
+
+    def test_closing_phrases_are_neutral(self):
+        self._add_product(2, "Tablet Android 10", 220.0)
+        info = self._ingest("precio de la Tablet")
+        conn = db.connect()
+        try:
+            conversation = conversations.get_conversation(
+                conn, info["conversation_id"]
+            )
+            body = pipeline._render_greeting(
+                conn, catalog.get_product(conn, 2), conversation
+            )
+        finally:
+            conn.close()
+        self.assertIn("Tablet Android 10", body)
+        self.assertNotIn("el Tablet", body)
+        self.assertNotIn("te la llevo", prompts.SYSTEM_PROMPT.lower())
+        self.assertNotIn("te lo llevo", prompts.SYSTEM_PROMPT.lower())
+
+    def test_greeting_does_not_list_every_zone(self):
+        self._link_zones([f"Zona {index}" for index in range(1, 5)])
+        self._turn(
+            "precio del Power Bank",
+            llm.Intent(
+                intencion="consulta_precio", producto="Power Bank", confianza=0.95
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("Entregamos en tu municipio", body)
+        self.assertIn("te confirmo la zona exacta", body)
+        self.assertNotIn("Zona 1", body)
+
+    def test_greeting_uses_the_usual_zone(self):
+        self._link_zones(["San Miguel", "Vedado"])
+        self._ingest("precio del Power Bank")
+        conn = db.connect()
+        try:
+            conn.execute(
+                """UPDATE customers SET preferences_json = ?
+                   WHERE id = (SELECT customer_id FROM conversations
+                               ORDER BY id LIMIT 1)""",
+                ('{"usual_zone": "San Miguel"}',),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        self._make_due()
+        with patch(
+            "cuadra.ai.llm.classify",
+            new=AsyncMock(
+                return_value=llm.Intent(
+                    intencion="consulta_precio",
+                    producto="Power Bank",
+                    confianza=0.95,
+                )
+            ),
+        ):
+            self._run_process()
+        body = self._outbound()[-1]
+        self.assertIn("Entregamos en San Miguel", body)
+        self.assertNotIn("Vedado", body)
 
 
 class GuardrailTests(unittest.TestCase):
