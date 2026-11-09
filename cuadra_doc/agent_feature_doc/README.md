@@ -60,6 +60,7 @@ Fase 0 (medición). Las fases 0–5 ya están implementadas y commiteadas.
 | 11 | `10_CIERRE_FASE_4.md` | Triage TCP, mutaciones de catálogo, undo con conflicto y panel de auditoría. |
 | 12 | `11_RUNBOOK_OPERACION.md` | Cómo aprobar, cancelar, revertir, reindexar y restaurar en operación real. |
 | 13 | `12_CIERRE_FASE_5.md` | Endurecimiento, replay del golden set, recall@3 y métricas contra los criterios de aceptación. |
+| 14 | `13_BITACORA_OPERACION_REAL.md` | Pruebas end-to-end en vivo con Telegram y la BD de prueba: plan, resultados y hallazgos. |
 | — | `../10_contexto_agente_ia.md` | Brief original que alimentó la propuesta. |
 
 ---
