@@ -509,13 +509,35 @@ def set_supplier_zones(conn, supplier_id: int, zone_ids: list[int]) -> list[int]
     return ids
 
 
+def set_supplier_telegram_peer(conn, supplier_id: int, peer_id: str | None) -> None:
+    """Persist the numeric Telegram id resolved for a supplier handle.
+
+    Telegram reports inbound messages with a numeric id, while the catalog stores
+    the human handle (`@usuario`). Keeping the resolved peer lets TCP acks match
+    without resolving the username on every inbound message.
+    """
+    raw = str(peer_id).strip() if peer_id is not None else ""
+    if not raw:
+        return
+    _get(conn, "suppliers", supplier_id, "supplier")
+    conn.execute(
+        "UPDATE suppliers SET telegram_peer_id = ?, updated_at = ? WHERE id = ?",
+        (raw, _now(), supplier_id),
+    )
+    conn.commit()
+
+
 def find_supplier_by_telegram_id(conn, telegram_id: str) -> dict | None:
     """Resolve a Telegram chat id to its supplier (for the inbound TCP flow)."""
     if not telegram_id:
         return None
+    raw = str(telegram_id).strip()
     row = conn.execute(
-        "SELECT * FROM suppliers WHERE telegram_id = ? AND active = 1 LIMIT 1",
-        (str(telegram_id),),
+        """SELECT * FROM suppliers
+           WHERE active = 1
+             AND (telegram_id = ? OR telegram_peer_id = ?)
+           LIMIT 1""",
+        (raw, raw),
     ).fetchone()
     return dict(row) if row is not None else None
 

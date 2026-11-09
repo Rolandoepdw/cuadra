@@ -404,7 +404,7 @@ def mark_dispatched(conn, sale_id: int, tcp_message_id: str | None) -> dict:
         conn.execute(
             """UPDATE sales
                SET status = 'DISPATCHED', dispatched_at = ?, tcp_message_id = ?,
-                   updated_at = ?
+                   notes = NULL, updated_at = ?
                WHERE id = ?""",
             (_now(), tcp_message_id, _now(), sale_id),
         )

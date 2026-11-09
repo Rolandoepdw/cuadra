@@ -585,14 +585,14 @@ async def send_escalation(payload: dict) -> None:
             return
         supplier = catalog.get_supplier(conn, escalation["supplier_id"])
         conversation = conversations.get_conversation(conn, escalation["conversation_id"])
-        identity = conversation.get("identity") or "bot"
+        identity = _tcp_identity(conversation.get("identity"))
         product = None
         if escalation["product_id"]:
             try:
                 product = catalog.get_product(conn, escalation["product_id"])
             except catalog.NotFound:
                 product = None
-        target = supplier.get("telegram_id")
+        target = supplier.get("telegram_peer_id") or supplier.get("telegram_id")
     finally:
         conn.close()
 
@@ -602,6 +602,35 @@ async def send_escalation(payload: dict) -> None:
     adapter = channels.get_adapter("telegram", identity)
     if adapter is None:
         return
+
+    if identity == "userbot" and not supplier.get("telegram_peer_id"):
+        from cuadra.channels import telegram_user
+
+        try:
+            peer_id = await telegram_user.resolve_peer(target)
+        except Exception:  # noqa: BLE001 - sending may still resolve the handle
+            log.warning(
+                "could not resolve supplier %s peer", escalation["supplier_id"], exc_info=True
+            )
+            peer_id = None
+        if peer_id:
+            target = peer_id
+            supplier["telegram_peer_id"] = peer_id
+            conn = db.connect()
+            try:
+                catalog.set_supplier_telegram_peer(
+                    conn, escalation["supplier_id"], peer_id
+                )
+                events.log(
+                    conn,
+                    "bot",
+                    "supplier_peer_resolved",
+                    entity="suppliers",
+                    entity_id=escalation["supplier_id"],
+                    details={"telegram_id": supplier.get("telegram_id"), "peer_id": peer_id},
+                )
+            finally:
+                conn.close()
 
     text = prompts.TEMPLATES["escalation_question"].format(
         escalation_id=escalation_id,
@@ -632,6 +661,21 @@ async def send_escalation(payload: dict) -> None:
         conn.close()
 
 
+def _tcp_identity(conversation_identity: str | None) -> str:
+    """Pick the Telegram account used to talk to suppliers.
+
+    TCPs are contacts of the operator userbot: the customer-facing bot can only
+    message users who started it and rejects `@usuario` targets. The userbot is
+    preferred whenever it is connected; the conversation identity keeps dummy or
+    offline setups working.
+    """
+    from cuadra.channels import telegram_user
+
+    if telegram_user.available():
+        return "userbot"
+    return conversation_identity or "userbot"
+
+
 def _sale_product_name(sale: dict) -> str:
     try:
         context = json.loads(sale.get("context_json") or "{}")
@@ -650,12 +694,14 @@ async def dispatch_sale(payload: dict) -> None:
             log.debug("sale %s is %s, not dispatching", sale_id, sale["status"])
             return
         supplier = catalog.get_supplier(conn, sale["supplier_id"])
+        conversation = conversations.get_conversation(conn, sale["conversation_id"])
+        identity = _tcp_identity(conversation.get("identity"))
         order_code = sale["order_code"]
         product_name = _sale_product_name(sale)
     finally:
         conn.close()
 
-    target = supplier.get("telegram_id")
+    target = supplier.get("telegram_peer_id") or supplier.get("telegram_id")
     if not target:
         conn = db.connect()
         try:
@@ -666,7 +712,7 @@ async def dispatch_sale(payload: dict) -> None:
             conn.close()
         return
 
-    adapter = channels.get_adapter("telegram", "bot")
+    adapter = channels.get_adapter("telegram", identity)
     if adapter is None:
         conn = db.connect()
         try:
@@ -676,6 +722,33 @@ async def dispatch_sale(payload: dict) -> None:
         finally:
             conn.close()
         return
+
+    # Telegram reports inbound messages with a numeric id; persist it once so the
+    # supplier's RECIBIDO/ENTREGADO acks match this row without a lookup.
+    if identity == "userbot" and not supplier.get("telegram_peer_id"):
+        from cuadra.channels import telegram_user
+
+        try:
+            peer_id = await telegram_user.resolve_peer(target)
+        except Exception:  # noqa: BLE001 - sending may still resolve the handle
+            log.warning("could not resolve supplier %s peer", sale["supplier_id"], exc_info=True)
+            peer_id = None
+        if peer_id:
+            target = peer_id
+            supplier["telegram_peer_id"] = peer_id
+            conn = db.connect()
+            try:
+                catalog.set_supplier_telegram_peer(conn, sale["supplier_id"], peer_id)
+                events.log(
+                    conn,
+                    "bot",
+                    "supplier_peer_resolved",
+                    entity="suppliers",
+                    entity_id=sale["supplier_id"],
+                    details={"telegram_id": supplier.get("telegram_id"), "peer_id": peer_id},
+                )
+            finally:
+                conn.close()
 
     text = prompts.TEMPLATES["tcp_order"].format(
         order_code=order_code,
@@ -806,7 +879,6 @@ async def tcp_process(payload: dict) -> None:
 
     conn = db.connect()
     sends: list[tuple[int, int]] = []
-    notify_sale = None
     try:
         if _tcp_already_processed(conn, message_id):
             log.debug("TCP message %s already processed, skipping", message_id)
@@ -846,11 +918,6 @@ async def tcp_process(payload: dict) -> None:
                         "order_codes": order_codes,
                     },
                 )
-                notify_sale = (
-                    sale["conversation_id"],
-                    sale["order_code"],
-                    action,
-                )
                 _mark_tcp_processed(
                     conn,
                     message_id=message_id,
@@ -858,6 +925,13 @@ async def tcp_process(payload: dict) -> None:
                     kind="SALE_ACK",
                     details={"action": action, "sale_id": sale["id"]},
                 )
+                # The customer must hear the outcome even though this job ends
+                # here; `_notify_sale_ack` opens its own connection and queues
+                # the `send_message` job.
+                if sale["conversation_id"]:
+                    _notify_sale_ack(
+                        sale["conversation_id"], sale["order_code"], action
+                    )
                 return
 
         correlation = tcp_triage.correlate(conn, supplier_id=supplier_id, text=answer)
@@ -992,12 +1066,6 @@ async def tcp_process(payload: dict) -> None:
         )
     finally:
         conn.close()
-
-    if notify_sale is not None:
-        client_conversation_id, order_code, action = notify_sale
-        if client_conversation_id:
-            _notify_sale_ack(client_conversation_id, order_code, action)
-        return
 
     for client_conversation_id, outbound_id in sends:
         queue.enqueue(

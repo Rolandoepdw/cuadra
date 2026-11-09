@@ -452,6 +452,19 @@ def _map_or_cool_down(exc: Exception) -> Exception:
     return mapped
 
 
+async def resolve_peer(target: str) -> str | None:
+    """Return the numeric Telegram id for a handle without sending anything.
+
+    Used to persist the supplier's peer before dispatching a sale, so inbound
+    TCP acknowledgements (which carry the numeric id) can be correlated back to
+    the supplier row that stores the `@usuario`.
+    """
+    client = _require_client()
+    entity = await _resolve(client, target)
+    peer_id = getattr(entity, "id", None)
+    return str(peer_id) if peer_id is not None else None
+
+
 async def send_text(target: str, text: str) -> str | None:
     client = _require_client()
     _guard_account()

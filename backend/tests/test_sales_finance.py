@@ -336,6 +336,46 @@ class TcpAckTests(Phase3TestCase):
         self.assertEqual(delivered["status"], "DELIVERED")
         self.assertEqual(self.product(1)["stock"], 4)
 
+    def test_ack_creates_the_customer_notification(self):
+        import asyncio
+
+        from cuadra.ai import handlers
+
+        sale = self.create_sale()
+        self.dispatch(sale["id"])
+        inbound = conversations.add_message(
+            self.conn,
+            2,
+            "INBOUND",
+            "tcp",
+            body=f"RECIBIDO {sale['order_code']}",
+        )
+
+        asyncio.run(
+            handlers.tcp_process(
+                {
+                    "conversation_id": 2,
+                    "message_id": inbound["id"],
+                    "supplier_id": 1,
+                }
+            )
+        )
+
+        confirmed = sales.get_sale(self.conn, sale["id"])
+        self.assertEqual(confirmed["status"], "CONFIRMED")
+        outbound = self.conn.execute(
+            """SELECT id, body FROM messages
+               WHERE conversation_id = 1 AND direction = 'OUTBOUND'
+               ORDER BY id DESC LIMIT 1"""
+        ).fetchone()
+        self.assertIn(sale["order_code"], outbound["body"])
+        job = self.conn.execute(
+            "SELECT type, payload_json FROM jobs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        self.assertEqual(job["type"], "send_message")
+        self.assertIn('"message_id"', job["payload_json"])
+        self.assertIn(str(outbound["id"]), job["payload_json"])
+
     def test_out_of_stock_flags_the_operator(self):
         sale = self.create_sale()
         self.dispatch(sale["id"])
@@ -484,6 +524,63 @@ class AddressFactTests(Phase3TestCase):
         )
         profile = memory.customer_profile(self.conn, 2)
         self.assertIn("Avenida 26", profile["direccion_habitual"])
+
+
+class SupplierPeerTests(Phase3TestCase):
+    def test_supplier_is_resolved_from_the_numeric_peer(self):
+        catalog.set_supplier_telegram_peer(self.conn, 1, "777888999")
+        found = catalog.find_supplier_by_telegram_id(self.conn, "777888999")
+        self.assertIsNotNone(found)
+        self.assertEqual(found["id"], 1)
+
+    def test_handle_keeps_matching_before_the_peer_is_known(self):
+        found = catalog.find_supplier_by_telegram_id(self.conn, "111222333")
+        self.assertIsNotNone(found)
+        self.assertEqual(found["id"], 1)
+
+    def test_unknown_identifier_is_not_a_supplier(self):
+        self.assertIsNone(catalog.find_supplier_by_telegram_id(self.conn, "000000000"))
+
+    def test_dispatch_uses_the_userbot_and_persists_the_peer(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from cuadra.ai import handlers
+        from cuadra.channels import telegram_user
+
+        sale = self.create_sale()
+        sales.approve(self.conn, sale["id"])
+
+        class FakeAdapter:
+            def __init__(self):
+                self.sent = []
+
+            async def typing(self, target):
+                return None
+
+            async def send_text(self, target, text):
+                self.sent.append((target, text))
+                return "9001"
+
+        adapter = FakeAdapter()
+        with (
+            patch.object(telegram_user, "available", return_value=True),
+            patch.object(
+                telegram_user, "resolve_peer", new=AsyncMock(return_value="777888999")
+            ),
+            patch.object(handlers.channels, "get_adapter", return_value=adapter),
+            patch.object(handlers, "_human_delay", return_value=0),
+        ):
+            asyncio.run(handlers.dispatch_sale({"sale_id": sale["id"]}))
+
+        updated = sales.get_sale(self.conn, sale["id"])
+        self.assertEqual(updated["status"], "DISPATCHED")
+        self.assertEqual(updated["tcp_message_id"], "9001")
+        self.assertEqual(
+            catalog.get_supplier(self.conn, 1)["telegram_peer_id"], "777888999"
+        )
+        self.assertEqual(adapter.sent[0][0], "777888999")
+        self.assertIn(sale["order_code"], adapter.sent[0][1])
 
 
 if __name__ == "__main__":
