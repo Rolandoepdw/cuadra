@@ -101,7 +101,7 @@ Leyenda: ✅ OK · ⚠️ OK con observación · ❌ falla · ⏳ pendiente · �
 | E2E-10 | Memoria y ráfagas | ⚠️ OK *(con observación)* | `turns` 23 `[56,57]` y 24 `[58]`, `messages` 56–60 | 4.º intento (2026-11-08 03:35): `Hola` y `precio` llegaron a **1.2 s** y se consolidaron en el turno 23; el 3.º (`teclado mecánico`) llegó a **3.6 s** y abrió el turno 24. La consolidación por *debounce* **funciona**; la ráfaga estricta de 3 mensajes no se logró manualmente con el *debounce* de 2.5 s. Ambos turnos respondieron **Teclado 45 USD** (2 respuestas idénticas). |
 | E2E-11 | Audio del cliente | ✅ OK | `messages` 49 (type `audio`, transcripción) y 50, `turns` 20 `DONE`, `audio_transcribed`, `llm_calls` 35, jobs 109–112 | Whisper transcribió «¿Cuánto cuesta el mouse inalámbrico?» (`es`, 0.987, 3.36 s); respondió **15 USD** y las 12 zonas. Latencia total nota → entrega: **38 s**. |
 | E2E-12 | Reinicio a mitad de turno | ✅ OK | `turns` 25 `DONE` (`attempts` del job 125 = 2), `messages` 61→62, `events` 380–385 (`jobs_requeued` count 1), `llm_calls` 42–45 | Corte forzado a los 6 s de entrar el mensaje, con el turno en `PROCESSING`. El nuevo core reencoló el job, rearmó el turno y respondió **una sola vez**; el mensaje del cliente ya estaba persistido (no se perdió). Observación **H-24** (un `compose` falló con `ReadError` y el reintento lo absorbió). |
-| E2E-13 | Correlación TCP | ✅ OK | `escalations` 1–4 (`case_id`), `sales` 1 ack `V-000001`, `catalog_mutation_log` 1–4; subcaso ambiguo 2026-11-09: `messages` 72, mutación 5 `PENDING_REVIEW` `ambiguous=1` → **`REJECTED`** desde Auditoría, `products` 3 y 4 intactos | Códigos explícitos al producto/venta correctos. Sin código y con 2 pendientes (6 Monitor, 7 Tablet): mutación 5 en revisión, **no se aplica**; al rechazarla se avisó al cliente (`messages` 73, evento `catalog_mutation_rejected_notified`). Observaciones: solo la escalación mejor puntuada (6) pasó a `ANSWERED`; el extractor añadió `garantia: "no especificado"` (ruido, sin aplicar). |
+| E2E-13 | Correlación TCP | ✅ OK | `escalations` 1–4 (`case_id`), `sales` 1 ack `V-000001`, `catalog_mutation_log` 1–4; subcaso ambiguo 2026-11-09: `messages` 72, mutación 5 `PENDING_REVIEW` `ambiguous=1` → **`REJECTED`** desde Auditoría, `products` 3 y 4 intactos | Códigos explícitos al producto/venta correctos. Sin código y con 2 pendientes (6 Monitor, 7 Tablet): mutación 5 en revisión, **no se aplica**; al rechazarla se avisó al cliente (`messages` 73, evento `catalog_mutation_rejected_notified`). Observaciones: solo la escalación mejor puntuada (6) pasó a `ANSWERED`; la 7 se cerró después como `TIMEOUT`; el extractor añadió `garantia: "no especificado"` (ruido, sin aplicar). |
 | E2E-14 | Cierre por inactividad | ⏳ aparcado | — | Aparcado a petición del dueño el 2026-11-09 (umbral real de 72 h). Procedimiento y opciones en **§9.1**. |
 | E2E-15 | Producto fuera de catálogo | ✅ OK | Reintento 2026-11-09: `turns` 29 `DONE`, `messages` 70–71, `llm_calls` 50 (`consulta_stock`, `nevera`, confianza 0.0), 0 escalaciones | Pide aclaración (`ask_which_product`): `product_id: null`, sin inventar producto ni precio, sin escalar el Monitor. **H-09 corregido** (fallback + `consulta_dato` + umbral semántico). Observaciones **H-10** y **H-26**. |
 | E2E-16 | Precio en CUP | ✅ OK | `messages` 13–14, `llm_calls` 12 | **300 CUP** exacto, moneda preservada, zonas del proveedor correctas. |
@@ -517,9 +517,9 @@ completa; el coste fue un reintento (~25 s).
 | H-25 | Baja (prompt) | `ESTADO DE LA CONVERSACIÓN` muestra `Producto en juego (id 19)` aunque el producto resuelto del turno sea otro (id 3); el bloque `PRODUCTO EN JUEGO` sí es correcto. | Ruido para el modelo; no cambió la respuesta en E2E-03, pero puede sesgar el NLU. | Renderizar en el estado el id del producto resuelto del turno, no el del contexto anterior. |
 | H-26 | Baja (UX) | `ask_which_product` empieza con “Claro que sí”; ante “¿Tienes neveras?” puede leerse como confirmación de disponibilidad. | Matiz de redacción en un caso de producto inexistente. | Quitar la afirmación inicial: “Dime cuál producto te interesa y te paso precio y disponibilidad”. |
 
-> H-01 quedó corregido en la BD. El `seed_real.json` todavía contiene el nombre
-> antiguo: si se vuelve a ejecutar el seed, el error reaparece. Pendiente decidir
-> si se parchea el archivo fuente.
+> H-01 quedó corregido en la BD y en la fuente. El nombre antiguo solo estaba en
+> `seed_demo_data.py` (corregido y commiteado el 2026-11-09); se comprobó que
+> `seed_real.json` no lo contiene, así que volver a sembrar ya no lo reintroduce.
 
 > **Correcciones del 2026-11-09:** H-07, H-09, H-11, H-20 y H-21 quedaron
 > corregidas y cubiertas por tests; H-08 se descartó al comprobar que las specs
@@ -796,7 +796,8 @@ posterior cree una `conversations` nueva con el mismo `customer_id`.
 `correlate` devolvió `method=heuristic`, `ambiguous=True`,
 `reason=multiple_pending`; la mutación 5 quedó en revisión con
 `notes = "correlación ambigua: no se aplica automáticamente"`. Solo la
-escalación mejor puntuada (6) pasó a `ANSWERED`; la 7 sigue `PENDING`.
+escalación mejor puntuada (6) pasó a `ANSWERED`; la 7 se cerró después como
+`TIMEOUT` al no haber más respuestas (ver §10.3).
 
 ### 10.3 Artefactos de prueba y cierre del subcaso
 
@@ -806,8 +807,13 @@ escalación mejor puntuada (6) pasó a `ANSWERED`; la 7 sigue `PENDING`.
   retardo, `provider_message_id` 731) con la plantilla genérica de rechazo, sin
   precios. Eventos 414–416 y job 137 `COMPLETED`: **H-21b validado en vivo**.
 - `escalations` 5: `TIMEOUT` (limpieza del primer E2E-15).
-- `escalations` 7: sigue `PENDING` (artefacto del subcaso ambiguo, producto 4);
-  no afecta al cliente. Se puede marcar `TIMEOUT` en la siguiente sesión.
+- `escalations` 7: **`TIMEOUT`** el 2026-11-09 16:18 UTC (evento 418,
+  `reason = manual_test_cleanup`). Era un artefacto del subcaso ambiguo
+  (producto 4) y no afectaba al cliente.
+- `escalations` 3: sigue `ANSWERED` (producto 18). El rechazo de la mutación 3
+  ocurrió antes del arreglo de H-21, así que no hubo aviso ni cierre; es otro
+  artefacto. Se puede pasar a `RESOLVED`/`TIMEOUT` si se quiere dejar la tabla
+  limpia (no afecta al cliente).
 
 ### 10.4 Pendiente
 
@@ -816,3 +822,25 @@ escalación mejor puntuada (6) pasó a `ANSWERED`; la 7 sigue `PENDING`.
   (resumen contaminado), H-22 (resumen incompleto), H-23 (precios históricos),
   H-25 (id del estado) y H-26 (redacción de `ask_which_product`).
 - Dashboard H-18/H-19 y los 20 casos de correlación TCP reales.
+
+### 10.5 Estado de la BD de prueba (decisión del 2026-11-09)
+
+La BD actual **se conserva como evidencia**: contiene los 73 mensajes, 29 turnos,
+137 jobs, 418 eventos, 52 llamadas al LLM, la venta `V-000001` con su ledger y
+las mutaciones 1–5 que cita esta bitácora. El seed es idempotente y no reinicia
+stock ni precios, así que “borrar y sembrar” habría exigido borrar
+`data/cuadra.db`.
+
+Decisión: **no borrar ahora**. El borrado + re-seed se hará al inicio del
+próximo ciclo de pruebas (por ejemplo, antes del dashboard H-18/H-19), con este
+procedimiento:
+
+1. Parar el core y `llama-server`; borrar `data/cuadra.lock`.
+2. Copiar `cuadra.db` (+ `-wal`/`-shm`) a `data/backups/` y archivar
+   `data/logs/`.
+3. Borrar la BD, arrancar (migraciones 001–016) y ejecutar
+   `seed_demo_data.py --schedule future`.
+4. Verificar 16 zonas (`Arroyo Naranjo`), 4 proveedores, 32 productos; salud
+   `ok`, cola 0 y userbot conectado.
+5. Dejar que el reindex inicial reconstruya `product_embeddings` (lo encola
+   `main.py` al arrancar).
