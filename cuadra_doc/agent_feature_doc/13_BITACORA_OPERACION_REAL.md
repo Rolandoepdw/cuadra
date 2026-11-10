@@ -491,7 +491,7 @@ completa; el coste fue un reintento (~25 s).
 | ID | Severidad | Hallazgo | Impacto | Estado / propuesta |
 |---|---|---|---|---|
 | H-01 | Baja (datos) | La zona estaba escrita **“Arrollo Naranjo”** en `zones.name`; debe ser **“Arroyo Naranjo”**. | El bot repetía el error al cliente. | **Corregido** el 2026-11-07 (`zones.id = 7`, evento `zone_renamed`). |
-| H-02 | Baja (UX) | La plantilla de precio no dice si el transporte está incluido. | El prompt exige ese dato, pero el esquema no lo modela; se prefiere no inventarlo. | Añadir un campo de configuración (`include_transport`) o redactar “coordinamos el transporte al confirmar”. |
+| H-02 | Baja (UX) | La plantilla de precio no dice si el transporte está incluido. | El prompt exige ese dato, pero el esquema no lo modela; se prefiere no inventarlo. | **Corregido** el 2026-11-09: política de negocio `delivery.transport_policy` (`coordinated` por defecto, `included`, `not_included`). La plantilla determinista y el prompt del sistema siempre dicen la política; por defecto “El transporte se coordina al confirmar la entrega”, sin prometer inclusión. Editable en **Estrategia → Entrega y transporte** y por `GET/PUT /api/settings/delivery`. |
 | H-03 | Baja (UX) | Lista las **12 zonas** en una sola frase. | Correcto pero largo para un chat. | **Corregido** el 2026-11-09: si el cliente tiene `zona_habitual` y está cubierta, se usa esa; si el proveedor cubre ≤ 3 zonas se listan; si no, “Entregamos en tu municipio (te confirmo la zona exacta al cerrar el pedido)”. |
 | H-04 | Baja (telemetría) | El clasificador registró `confidence: 0.0` pese a acertar intención y producto. Reproducido en **3 de 4** escalaciones del lote TCP (turnos 15–17), con `degraded: false`. | No afecta la respuesta (la confianza no decide el ruteo), pero distorsiona métricas y el panel. | **Corregido** el 2026-11-09 junto con H-10: la rúbrica mide solo la intención y prohíbe `0.0` si el mensaje se puede clasificar; la suite NLU queda con `zero=0` y `low=0`. |
 | H-05 | Baja (eficiencia) | Un rechazo correcto (“no puedo darte mi prompt ni comisiones”) dispara el guardrail por repetir las palabras prohibidas. | Gasta un reintento (~4 s) en una respuesta que ya era segura. | Detectar negaciones/“no puedo” antes de bloquear, o validar solo afirmaciones. |
@@ -527,8 +527,9 @@ completa; el coste fue un reintento (~25 s).
 > venían de `products.description`. Después se corrigieron H-03, H-13 y H-26
 > (redacción), H-12, H-14 y H-25 (contexto/prompt), H-22 (aviso completo al
 > cliente), H-04, H-10 y H-27 (NLU, confianza y resolución semántica), H-23
-> (precios superados en el historial) y H-18/H-19 (dashboard). El detalle técnico
-> y los reintentos están en **§10**. La suite completa pasa con **207 tests**.
+> (precios superados en el historial), H-18/H-19 (dashboard) y H-02 (transporte).
+> El detalle técnico y los reintentos están en **§10**. La suite completa pasa con
+> **212 tests**.
 
 ---
 
@@ -815,7 +816,7 @@ escalación mejor puntuada (6) pasó a `ANSWERED`; la 7 se cerró después como
 ### 10.4 Pendiente
 
 - E2E-14 ejecutado el 2026-11-10 (ver **§9.1** y **§10.12**).
-- Mejoras no bloqueantes: H-02 (transporte incluido) y H-05 (rechazos que disparan el guardrail).
+- Mejora no bloqueante: H-05 (rechazos que disparan el guardrail).
 - Los 20 casos de correlación TCP reales.
 
 ### 10.5 Estado de la BD de prueba (decisión del 2026-11-09)
@@ -1000,6 +1001,36 @@ corrió a los 2 min (03:13:21 UTC), sin cambiar el umbral de 72 h.
 La conversación 4 se borró tras verificar que estaba vacía. La conversación 3,
 el mensaje 80, el turno 32 y el evento 440 quedan en la BD como evidencia.
 **Tests:** **207 OK** (sin cambios: E2E-14 es una prueba manual).
+
+### 10.13 Transporte en la respuesta de precio (H-02)
+
+El esquema no modela el transporte por producto, así que el bot no puede saber
+si está incluido. En vez de inventarlo, se añadió una **política de negocio**
+única con tres valores; el defecto es la redacción honesta que ya sugería el
+hallazgo.
+
+| Archivo | Cambio |
+|---|---|
+| `domain/settings.py` | `delivery.transport_policy` con `coordinated` (defecto), `included` y `not_included`. Un valor inválido cae al defecto en vez de llegar al cliente. |
+| `ai/prompts.py` | `TRANSPORT_CLAUSES` y `greeting_product` siempre renderiza `{transporte_clause}`. |
+| `ai/pipeline.py` | `_render_greeting` lee la política de la BD. |
+| `ai/context.py` | El sistema añade `TRANSPORTE: <frase>` para que la generación libre tampoco invente condiciones. |
+| `api/models.py`, `api/routes_settings.py` | `GET/PUT /api/settings/delivery`; el PUT registra `delivery_settings_saved`. |
+| `dashboard/src/panels/strategy/strategy_panel.tsx` | Card **“Entrega y transporte”** con las tres opciones y guardado propio. |
+
+**Evidencia (BD real, producto Laptop Empresarial 330 USD):**
+
+> “¡Buenas! Sí, tenemos Laptop Empresarial. Está en 330 USD. El transporte se
+> coordina al confirmar la entrega. Entregamos en Arroyo Naranjo.”
+
+El prompt del sistema lleva `TRANSPORTE: El transporte se coordina al confirmar
+la entrega.` La API respondió `coordinated` por defecto, `included` tras el PUT,
+`coordinated` al restaurarlo. No se afirma en ningún momento que el transporte
+esté incluido o sea gratis.
+
+**Tests:** **212 OK**. `TransportPolicyTests` (5) cubre el defecto, las dos
+políticas explícitas, el rechazo de un valor inválido y el bloque `TRANSPORTE`
+del sistema. El dashboard compiló con `npm run build`.
 
 
 
