@@ -87,8 +87,10 @@ Reglas:
 5. No inventes precios, stock ni zonas.
 6. "has_catalog_update" es false cuando el mensaje no aporta ningún dato de
    catálogo (p. ej. solo un saludo o una pregunta).
-7. customer_answer_summary: una frase breve y apta para el cliente final, sin
-   comisiones, costos ni datos internos. Vacía si no hay nada que contarle.
+7. customer_answer_summary: una o dos frases aptas para el cliente final que
+   recojan TODO lo que el TCP respondió (accesorios, garantía, stock y precio).
+   No omitas ningún dato ni resumas de más. Sin comisiones, costos ni datos
+   internos. Vacía si no hay nada que contarle.
 8. Responde solo con el JSON del esquema.
 """
 

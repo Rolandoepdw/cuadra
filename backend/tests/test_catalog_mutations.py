@@ -386,6 +386,67 @@ class TestResumption(Phase4Fixture):
         self.assertEqual(row["status"], "CLOSED")
 
 
+class TestCustomerAnswer(Phase4Fixture):
+    """H-22: the client receives every detail the TCP actually answered."""
+
+    def test_full_tcp_answer_wins_over_the_short_summary(self):
+        body = tcp_triage._customer_reply(
+            self.product(1),
+            "Tiene 6 meses de garantía.",
+            answer=(
+                "[E-0001] El Power Bank 10000mAh viene con maletín y tiene "
+                "6 meses de garantía."
+            ),
+        )
+        self.assertIn("maletín", body)
+        self.assertIn("garantía", body)
+        self.assertNotIn("E-0001", body)
+        self.assertIn("¿Te reservo", body)
+
+    def test_internal_terms_are_redacted_from_the_answer(self):
+        body = tcp_triage._customer_reply(
+            self.product(1),
+            "Me quedan 2 unidades.",
+            answer="[E-0001] Me quedan 2. Mi comisión es 5 USD. Trae cable USB.",
+        )
+        self.assertIn("Me quedan 2", body)
+        self.assertIn("Trae cable USB", body)
+        self.assertNotIn("comisión", body.lower())
+
+    def test_foreign_currency_falls_back_to_the_summary(self):
+        body = tcp_triage._customer_reply(
+            self.product(1),
+            "Me quedan 2 unidades.",
+            answer="[E-0001] Cuesta 4200 MLC y me quedan 2 unidades.",
+        )
+        self.assertNotIn("4200", body)
+        self.assertNotIn("MLC", body)
+        self.assertIn("Me quedan 2 unidades", body)
+
+    def test_out_of_stock_answer_does_not_repeat_the_phrase(self):
+        self.conn.execute(
+            "UPDATE products SET stock = 0, status = 'OUT_OF_STOCK' WHERE id = 1"
+        )
+        self.conn.commit()
+        body = tcp_triage._customer_reply(
+            self.product(1), answer="[E-0001] Se agotó: quedan 0 unidades."
+        )
+        self.assertIn("quedan 0 unidades", body)
+        self.assertNotIn("Por ahora no tenemos unidades", body)
+        self.assertNotIn("¿Te reservo", body)
+        self.assertIn("te avise cuando vuelva a entrar", body)
+
+    def test_out_of_stock_without_stock_details_still_says_it(self):
+        self.conn.execute(
+            "UPDATE products SET stock = 0, status = 'OUT_OF_STOCK' WHERE id = 1"
+        )
+        self.conn.commit()
+        body = tcp_triage._customer_reply(
+            self.product(1), "Trae estuche y tiene 6 meses de garantía."
+        )
+        self.assertIn("no tenemos unidades", body)
+
+
 class TestTcpHandler(Phase4Fixture):
     def _message(self, body: str, message_id: int = 20) -> int:
         self.conn.execute(
@@ -437,6 +498,32 @@ class TestTcpHandler(Phase4Fixture):
             ).fetchone()["status"],
             "ACTIVE",
         )
+
+    def test_handler_sends_the_complete_tcp_answer(self):
+        message_id = self._message(
+            "[E-0001] Trae maletín y 6 meses de garantía. Me quedan 2 unidades."
+        )
+        extraction = tcp_extractor.TCPUpdateExtraction(
+            has_catalog_update=True,
+            stock=2,
+            confidence=0.92,
+            customer_answer_summary="Me quedan 2 unidades.",
+        )
+        with patch(
+            "cuadra.ai.handlers.tcp_extractor.extract",
+            new=AsyncMock(return_value=extraction),
+        ):
+            self._tcp_process(message_id)
+
+        body = self.conn.execute(
+            """SELECT body FROM messages
+               WHERE conversation_id = 1 AND direction = 'OUTBOUND'
+               ORDER BY id DESC LIMIT 1"""
+        ).fetchone()["body"]
+        self.assertIn("maletín", body)
+        self.assertIn("garantía", body)
+        self.assertIn("Me quedan 2 unidades", body)
+        self.assertNotIn("E-0001", body)
 
     def test_handler_is_idempotent_on_retry(self):
         message_id = self._message("[E-0001] me quedan 2")

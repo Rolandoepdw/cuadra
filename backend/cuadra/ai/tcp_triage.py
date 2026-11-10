@@ -311,7 +311,64 @@ def correlate(conn, *, supplier_id: int, text: str) -> Correlation:
 
 # ------------------------------------------------------------------ resumption
 
-def _customer_reply(product: dict | None, summary: str | None) -> str:
+_MAX_CUSTOMER_ANSWER = 400
+_MENTIONED_CURRENCY = re.compile(r"\b(USD|CUP|MLC)\b", re.IGNORECASE)
+_NO_STOCK = re.compile(
+    r"\b(?:0\s*unidades|agotad[oa]|sin\s+stock|"
+    r"no\s+(?:hay|queda|quedan|tenemos|me\s+queda))\b",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_customer_text(text: str | None) -> str:
+    """Strip case codes, internal sentences and stray whitespace (H-22)."""
+    clean = guardrails.redact_internal_terms(strip_case_ids(text or ""))
+    clean = " ".join(clean.split())
+    if len(clean) > _MAX_CUSTOMER_ANSWER:
+        cut = clean[:_MAX_CUSTOMER_ANSWER].rstrip()
+        clean = cut.rsplit(" ", 1)[0] + "…" if " " in cut else cut + "…"
+    if clean and clean[-1] not in ".!?…":
+        clean += "."
+    return clean
+
+
+def _answer_currencies_ok(text: str, product: dict | None) -> bool:
+    """A raw TCP echo may only mention the currency the catalog stores (H-22).
+
+    `4200 MLC` is never a valid customer price (H-21); dropping the candidate
+    makes the caller fall back to the vetted summary or the generic template.
+    """
+    mentioned = {match.upper() for match in _MENTIONED_CURRENCY.findall(text)}
+    if not mentioned:
+        return True
+    allowed = {str((product or {}).get("currency") or "").upper()}
+    return mentioned <= allowed
+
+
+def _customer_answers(
+    answer: str | None, summary: str | None, product: dict | None
+) -> list[str]:
+    """Complete TCP answer first, then the model summary (H-22).
+
+    The extractor summary is a paraphrase and used to drop details the supplier
+    did answer (maletín, recetario, garantía). The raw answer is preferred when
+    it survives sanitisation; the summary remains the fallback for text that
+    cannot be shown verbatim (internal terms, foreign currency, bad price).
+    """
+    candidates: list[str] = []
+    for value in (answer, summary):
+        clean = _sanitize_customer_text(value)
+        if clean and clean not in candidates and _answer_currencies_ok(clean, product):
+            candidates.append(clean)
+    return candidates
+
+
+def _customer_reply(
+    product: dict | None,
+    summary: str | None = None,
+    *,
+    answer: str | None = None,
+) -> str:
     product_name = product["name"] if product else "el producto"
     # H-20: never offer to reserve a product that is out of stock or paused.
     available = bool(
@@ -319,23 +376,23 @@ def _customer_reply(product: dict | None, summary: str | None) -> str:
         and product.get("status") == "ACTIVE"
         and (product.get("stock") or 0) > 0
     )
-    summary = (summary or "").strip()
-    if summary:
-        template = (
-            "escalation_resolved_summary"
-            if available
-            else "escalation_resolved_out_of_stock"
+    context = {
+        "quoted_prices": (
+            [{"amount": product["price"], "currency": product["currency"]}]
+            if product
+            else []
         )
+    }
+    for respuesta in _customer_answers(answer, summary, product):
+        if available:
+            template = "escalation_resolved_summary"
+        elif _NO_STOCK.search(respuesta):
+            template = "escalation_resolved_out_of_stock_known"
+        else:
+            template = "escalation_resolved_out_of_stock"
         candidate = prompts.TEMPLATES[template].format(
-            producto=product_name, respuesta=summary[:400]
+            producto=product_name, respuesta=respuesta
         )
-        context = {
-            "quoted_prices": (
-                [{"amount": product["price"], "currency": product["currency"]}]
-                if product
-                else []
-            )
-        }
         ok, _reason = guardrails.validate_reply(candidate, context)
         if ok:
             return candidate
@@ -458,7 +515,7 @@ def resume_escalations(
     for escalation in open_rows:
         grouped.setdefault(int(escalation["conversation_id"]), []).append(escalation)
 
-    reply = _customer_reply(product, summary)
+    reply = _customer_reply(product, summary, answer=answer)
     sends: list[tuple[int, int]] = []
     for conversation_id, group in grouped.items():
         conversation = conversations.get_conversation(conn, conversation_id)

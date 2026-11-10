@@ -119,6 +119,10 @@ TEMPLATES = {
         "¡Buenas! Ya me confirmó el almacén: {respuesta} Por ahora no tenemos "
         "unidades; ¿quieres que te avise cuando vuelva a entrar?"
     ),
+    "escalation_resolved_out_of_stock_known": (
+        "¡Buenas! Ya me confirmó el almacén: {respuesta} ¿Quieres que te avise "
+        "cuando vuelva a entrar?"
+    ),
     "escalation_resolved_generic": (
         "¡Buenas! Ya me confirmó el almacén que sí está disponible. ¿Te reservo "
         "{producto} y coordinamos la entrega?"
