@@ -507,8 +507,8 @@ completa; el coste fue un reintento (~25 s).
 | H-15 | **Alta** (bloqueante) | `dispatch_sale` envía siempre con el adaptador `bot`, aunque la venta venga de una conversación `userbot`. Además, los TCP están guardados como `@usuario` y el Bot API solo acepta ids numéricos: `chat not found`. | La venta no llega al proveedor y queda en `NEEDS_OPERATOR`. | **Corregido** el 2026-11-08: identidad `userbot` + resolución del peer; la venta `V-000001` quedó `DISPATCHED`. |
 | H-16 | **Alta** (bloqueante) | `find_supplier_by_telegram_id` compara el id numérico entrante contra `suppliers.telegram_id`, que guarda `@usuario`. Los mensajes `RECIBIDO`/`ENTREGADO` del TCP se ingieren como si fueran de un cliente. | El ack del proveedor nunca se correlaciona con la venta. | **Corregido** el 2026-11-08: columna `telegram_peer_id` y búsqueda por handle o peer. |
 | H-17 | **Alta** (correctitud) | `tcp_process` hacía `return` dentro del `try` del ack: el bloque que llama a `_notify_sale_ack()` nunca se ejecutaba. | El cliente no recibe “Confirmado” ni “Entregado”; solo ve “pedido registrado”. | **Corregido** el 2026-11-08: notificación antes del `return` + prueba `test_ack_creates_the_customer_notification`. |
-| H-18 | Media (dashboard) | `sales_today` filtra con `date('now')` en **UTC**; la zona horaria local puede estar todavía en el día anterior. | “Ventas hoy” muestra 0 aunque haya ventas del día local. | Calcular “hoy” con la zona configurada (`date('now','localtime')` o `TZ` explícita). |
-| H-19 | Baja (dashboard) | Los cards superiores son conteos de estado actual: `PENDING_DISPATCH` no aparece, “Despachadas” desaparece al confirmar y “por liquidar” al cobrar. Los acks del TCP no invalidan la caché (poll 30 s). | Los cards parecen “no actualizarse” durante el flujo. | Renombrar a estados (“En despacho”, “En preparación”), añadir “Por despachar” y refrescar tras eventos externos. |
+| H-18 | Media (dashboard) | `sales_today` filtra con `date('now')` en **UTC**; la zona horaria local puede estar todavía en el día anterior. | “Ventas hoy” muestra 0 aunque haya ventas del día local. | **Corregido** el 2026-11-09: `domain/clock.day_bounds()` calcula el día de `America/Havana` y `sales.summary` + `/api/summary` filtran por esa ventana UTC (`[start, end)`). A las 03:03 UTC (22:03 en La Habana) los mensajes de hoy pasaron de 6 (UTC) a 19 (Havana). |
+| H-19 | Baja (dashboard) | Los cards superiores son conteos de estado actual: `PENDING_DISPATCH` no aparece, “Despachadas” desaparece al confirmar y “por liquidar” al cobrar. Los acks del TCP no invalidan la caché (poll 30 s). | Los cards parecen “no actualizarse” durante el flujo. | **Corregido** el 2026-11-09: nuevo card **“Por despachar”** (`sales_pending_dispatch`), “Despachadas” → **“En despacho”** (`DISPATCHED`+`CONFIRMED`) y “Entregadas por liquidar”; el panel refresca cada 15 s y al volver a la pestaña. Los conteos son estados actuales por diseño. |
 | H-20 | Media (UX) | `escalation_resolved_summary` termina siempre con “¿Te reservo {producto} y coordinamos la entrega?”, aunque el resumen diga que el producto se agotó. Evidencia: mensaje 40 (“quedan 0 unidades. ¿Te reservo Freidora de Aire…?”). | El bot se contradice y ofrece reservar algo sin stock. | **Corregido** el 2026-11-09: `_customer_reply` elige plantilla según `status`/`stock` y añade `escalation_resolved_out_of_stock` (aviso de reposición). Cubierto por 4 tests. |
 | H-21 | **Alta** (correctitud) | `normalize_extraction` descarta la moneda `MLC` pero conserva el `price`; el `new_state` de la mutación 3 guarda **4200 USD** aunque el TCP dijo 4200 MLC. Aprobar esa revisión escribiría 4200 USD. Además, `approve` reanuda al cliente pero `reject` y `revert` no le avisan. | Aprobar una revisión MLC corrompe el precio; un rechazo o un undo deja al cliente con un dato viejo sin corrección. | **Corregido** el 2026-11-09: si la moneda es inválida se descarta también el precio; `approve` valida el estado (`_validate_state`) y rechaza monedas no soportadas; `reject`/`revert` avisan al cliente (`notify_mutation_outcome`) y dejan evento `catalog_mutation_*_notified`. Cubierto por 6 tests. |
 | H-22 | Media (UX) | El resumen que recibe el cliente es una paráfrasis del modelo y pierde parte de la respuesta del TCP: E2E-06 omitió recetario y garantía; E2E-05 omitió el maletín. | El cliente preguntó por varios datos y solo recibe uno. | **Corregido** el 2026-11-09: el aviso al cliente usa la respuesta completa del TCP, saneada (sin códigos `[E-####]`, sin frases con términos internos y sin monedas ajenas al catálogo); el resumen del extractor queda como respaldo. El prompt del extractor exige cubrir todos los datos. Cubierto por 6 tests. |
@@ -526,9 +526,9 @@ completa; el coste fue un reintento (~25 s).
 > corregidas y cubiertas por tests; H-08 se descartó al comprobar que las specs
 > venían de `products.description`. Después se corrigieron H-03, H-13 y H-26
 > (redacción), H-12, H-14 y H-25 (contexto/prompt), H-22 (aviso completo al
-> cliente), H-04, H-10 y H-27 (NLU, confianza y resolución semántica) y H-23
-> (precios superados en el historial). El detalle técnico y los reintentos están
-> en **§10**. La suite completa pasa con **203 tests**.
+> cliente), H-04, H-10 y H-27 (NLU, confianza y resolución semántica), H-23
+> (precios superados en el historial) y H-18/H-19 (dashboard). El detalle técnico
+> y los reintentos están en **§10**. La suite completa pasa con **207 tests**.
 
 ---
 
@@ -823,7 +823,7 @@ escalación mejor puntuada (6) pasó a `ANSWERED`; la 7 se cerró después como
 
 - E2E-14 sigue aparcado (§9.1).
 - Mejoras no bloqueantes: H-02 (transporte incluido) y H-05 (rechazos que disparan el guardrail).
-- Dashboard H-18/H-19 y los 20 casos de correlación TCP reales.
+- Los 20 casos de correlación TCP reales.
 
 ### 10.5 Estado de la BD de prueba (decisión del 2026-11-09)
 
@@ -964,5 +964,30 @@ pide, el turno lo resuelve y entonces sí aparece su precio real).
 historial del bot, la conservación literal del mensaje del cliente y el bloque
 `PRECIOS VIGENTES`; `GuardrailTests.test_stale_prices_are_redacted_from_bot_history`
 prueba la función aislada.
+
+### 10.11 Dashboard: día local y cards por estado (H-18 / H-19)
+
+| Archivo | Cambio |
+|---|---|
+| `domain/clock.py` | Nuevo helper: `now()` y `day_bounds()` devuelven la ventana UTC `[start, end)` del día en `America/Havana` (con caída a UTC si falta `tzdata`). |
+| `domain/sales.py` | `summary()` filtra “hoy” con `clock.day_bounds()` y añade `sales_pending_dispatch`. |
+| `api/routes_dashboard.py` | `messages_today`, `messages_inbound_today`, `avg_llm_ms` y `avg_stt_ms` usan la misma ventana; el docstring deja de decir “UTC”. |
+| `dashboard/src/panels/finance/finance_panel.tsx` | Cards: “Ventas hoy”, “Por aprobar”, **“Por despachar”**, **“En despacho”** (`DISPATCHED`+`CONFIRMED`) y “Entregadas por liquidar”; polling 15 s. |
+| `dashboard/src/types/api.ts` | `sales_pending_dispatch` en `FinanceSummary`. |
+
+**Evidencia (2026-11-10 03:03 UTC = 22:03 del 2026-11-09 en La Habana):** con el
+filtro UTC anterior `messages_today` valía **6**; con la ventana Havana vale **19**.
+Las ventas del 7 de noviembre siguen fuera de “hoy”, como corresponde.
+
+**Diseño:** los cards son fotos del estado actual (no históricos). Por eso
+“Por despachar” baja al despachar y “En despacho” baja al entregar; es el
+comportamiento esperado y ahora los nombres lo reflejan. El panel vuelve a
+consultar al enfocar la pestaña y cada 15 s, sin caché de servidor.
+
+**Tests:** **207 OK**. `ClockTests.test_early_utc_still_belongs_to_the_previous_havana_day`
+fija el borde (03:30 UTC del 15 → día Havana del 14); `SummaryTests` añade la
+ventana de hoy, la exclusión fuera de ella y el contador `sales_pending_dispatch`.
+El dashboard compiló con `npm run build`.
+
 
 
