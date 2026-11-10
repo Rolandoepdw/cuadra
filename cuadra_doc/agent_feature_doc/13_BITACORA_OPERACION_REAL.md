@@ -22,9 +22,9 @@ tags: [operacion, pruebas, end-to-end, telegram, ventas, tcp]
 > acciones destructivas (cancelar ventas, revertir mutaciones, borrar filas) se
 > piden antes de ejecutarse.
 
-> ⏳ **Pendiente de retomar: E2E-14** (cierre por inactividad). Aparcado a
-> petición del dueño el 2026-11-09; el procedimiento y las opciones están en
-> **§9.1**. Los otros 15 casos ya están ejecutados.
+> ✅ **E2E-14 ejecutado el 2026-11-10** (cierre por inactividad, ejecución
+> ajustada con una conversación descartable). Detalle y evidencias en **§9.1** y
+> **§10.12**. Los 16 casos E2E quedan ejecutados.
 
 ---
 
@@ -81,7 +81,7 @@ Leyenda: ✅ OK · ⚠️ OK con observación · ❌ falla · ⏳ pendiente · �
 - [x] **E2E-11** Audio del cliente
 - [x] **E2E-12** Reinicio a mitad de turno
 - [x] **E2E-13** Correlación TCP `[E-###]` / `[V-######]` *(explícita + subcaso ambiguo 2026-11-09: ✅)*
-- [ ] **E2E-14** Cierre por inactividad *(⏳ aparcado el 2026-11-09: ver **§9.1**)*
+- [x] **E2E-14** Cierre por inactividad *(ejecución ajustada 2026-11-10: ✅)*
 - [x] **E2E-15** Producto fuera de catálogo *(reintento 2026-11-09: ✅)*
 - [x] **E2E-16** Precio en CUP (moneda no-USD)
 
@@ -102,7 +102,7 @@ Leyenda: ✅ OK · ⚠️ OK con observación · ❌ falla · ⏳ pendiente · �
 | E2E-11 | Audio del cliente | ✅ OK | `messages` 49 (type `audio`, transcripción) y 50, `turns` 20 `DONE`, `audio_transcribed`, `llm_calls` 35, jobs 109–112 | Whisper transcribió «¿Cuánto cuesta el mouse inalámbrico?» (`es`, 0.987, 3.36 s); respondió **15 USD** y las 12 zonas. Latencia total nota → entrega: **38 s**. |
 | E2E-12 | Reinicio a mitad de turno | ✅ OK | `turns` 25 `DONE` (`attempts` del job 125 = 2), `messages` 61→62, `events` 380–385 (`jobs_requeued` count 1), `llm_calls` 42–45 | Corte forzado a los 6 s de entrar el mensaje, con el turno en `PROCESSING`. El nuevo core reencoló el job, rearmó el turno y respondió **una sola vez**; el mensaje del cliente ya estaba persistido (no se perdió). Observación **H-24** (un `compose` falló con `ReadError` y el reintento lo absorbió). |
 | E2E-13 | Correlación TCP | ✅ OK | `escalations` 1–4 (`case_id`), `sales` 1 ack `V-000001`, `catalog_mutation_log` 1–4; subcaso ambiguo 2026-11-09: `messages` 72, mutación 5 `PENDING_REVIEW` `ambiguous=1` → **`REJECTED`** desde Auditoría, `products` 3 y 4 intactos | Códigos explícitos al producto/venta correctos. Sin código y con 2 pendientes (6 Monitor, 7 Tablet): mutación 5 en revisión, **no se aplica**; al rechazarla se avisó al cliente (`messages` 73, evento `catalog_mutation_rejected_notified`). Observaciones: solo la escalación mejor puntuada (6) pasó a `ANSWERED`; la 7 se cerró después como `TIMEOUT`; el extractor añadió `garantia: "no especificado"` (ruido, sin aplicar). |
-| E2E-14 | Cierre por inactividad | ⏳ aparcado | — | Aparcado a petición del dueño el 2026-11-09 (umbral real de 72 h). Procedimiento y opciones en **§9.1**. |
+| E2E-14 | Cierre por inactividad | ✅ OK | Ejecución ajustada 2026-11-10 03:13 UTC: `conversations` 3 `CLOSED` (`closed_at` 03:13:21), `turns` 32 `CANCELLED`, evento 440 `conversations_closed_idle` (`count: 1`, `idle_hours: 72.0`); la conversación 1 quedó `ACTIVE` sin cambios | `updated_at` sembrado 73 h atrás; el job real `conversation_idle_close` (72 h) corrió 2 min tras el arranque. Al volver, `get_or_create_open_conversation` devolvió una conversación nueva (4, `ACTIVE`) con 0 mensajes, 0 turnos y 0 jobs nuevos; el perfil `E2E-14` se conservó. |
 | E2E-15 | Producto fuera de catálogo | ✅ OK | Reintento 2026-11-09: `turns` 29 `DONE`, `messages` 70–71, `llm_calls` 50 (`consulta_stock`, `nevera`, confianza 0.0), 0 escalaciones | Pide aclaración (`ask_which_product`): `product_id: null`, sin inventar producto ni precio, sin escalar el Monitor. **H-09 corregido** (fallback + `consulta_dato` + umbral semántico). Observaciones **H-10** y **H-26** (corregidas). |
 | E2E-16 | Precio en CUP | ✅ OK | `messages` 13–14, `llm_calls` 12 | **300 CUP** exacto, moneda preservada, zonas del proveedor correctas. |
 
@@ -736,35 +736,28 @@ estos lotes.
 - p95 y recall@3 con tráfico real.
 - UI de `sales.mode`, aviso al TCP al cancelar y `sale_followup`.
 
-### 9.1 ⏳ Aparcado — E2E-14 (cierre por inactividad)
+### 9.1 ✅ Ejecutado — E2E-14 (cierre por inactividad)
 
-**Estado:** aparcado a petición del dueño el **2026-11-09**. No se ejecuta hasta
-que él lo pida; al retomarlo, anotar aquí la fecha y el resultado.
+**Fecha:** 2026-11-10 03:11–03:13 UTC (22:11–22:13 en La Habana). Se usó la
+**opción 1**: cliente y conversación descartables con `updated_at` 73 h atrás y
+un turno `OPEN`, sin tocar la conversación 1.
 
-**Qué hay que probar:** que una conversación sin mensajes durante
-`CONVERSATION_IDLE_HOURS` (72 h por defecto) pasa a `CLOSED`, sus turnos `OPEN`
-se cancelan y un cliente que vuelve abre una conversación nueva (el perfil, las
-ventas y el ledger se conservan).
+**Resultado (job real `conversation_idle_close`, 2 min tras el arranque):**
 
-**Por qué se aplaza:** el umbral real es de 72 h y el cierre lo ejecuta el
-scheduler 2 min después de cada arranque y luego cada 24 h. Esperarlo exige
-dejar la máquina encendida tres días.
+| Comprobación | Evidencia |
+|---|---|
+| La conversación ociosa se cierra | `conversations` 3 → `CLOSED`, `closed_at = 2026-11-10 03:13:21` |
+| El turno abierto se cancela | `turns` 32 → `CANCELLED` a las 03:13:21 |
+| El scheduler deja evento | `events` 440 `conversations_closed_idle`, `details {"count": 1, "idle_hours": 72.0}` |
+| La conversación real no se toca | `conversations` 1 sigue `ACTIVE` y con su `updated_at` original |
+| El cliente que vuelve abre una nueva | `get_or_create_open_conversation(3, 'telegram')` → conversación 4 `ACTIVE`, con 0 mensajes y 0 turnos |
+| Sin efectos colaterales | `jobs` +0, `events` +0, `messages` +0; el perfil `E2E-14` (customer 3) se conserva |
 
-**Opciones para cuando se retome (elegir una):**
-
-1. **Conversación de prueba con fecha antigua** — crear un cliente y una
-   conversación descartables con `updated_at` 73 h atrás (y un turno `OPEN`),
-   reiniciar el core y esperar el job `conversation_idle_close` (~2 min). No
-   toca la conversación 1. *Recomendada.*
-2. **Umbral temporal** — reiniciar con `CUADRA_CONVERSATION_IDLE_HOURS=0.01`
-   (~36 s) sobre una conversación de prueba; documentarlo como ejecución
-   ajustada, igual que la alternativa de E2E-10.
-3. **Solo dominio** — llamar `conversations.close_idle(conn, hours=…)` desde un
-   script; valida la lógica pero no el scheduler (menos end-to-end).
-
-**Evidencia a recoger:** `conversations.status` y `closed_at`, `turns.status`
-(`CANCELLED` del turno abierto), el evento del scheduler, y que el mensaje
-posterior cree una `conversations` nueva con el mismo `customer_id`.
+**Observación:** el tiempo de inactividad se sembró (73 h) en vez de esperar tres
+días, pero el umbral de producción (72 h), la consulta de `close_idle` y el
+disparo real del scheduler no se modificaron. La conversación 4 de verificación
+se borró después de comprobar que estaba vacía; la conversación 3 cerrada queda
+como evidencia.
 
 ---
 
@@ -821,7 +814,7 @@ escalación mejor puntuada (6) pasó a `ANSWERED`; la 7 se cerró después como
 
 ### 10.4 Pendiente
 
-- E2E-14 sigue aparcado (§9.1).
+- E2E-14 ejecutado el 2026-11-10 (ver **§9.1** y **§10.12**).
 - Mejoras no bloqueantes: H-02 (transporte incluido) y H-05 (rechazos que disparan el guardrail).
 - Los 20 casos de correlación TCP reales.
 
@@ -988,6 +981,25 @@ consultar al enfocar la pestaña y cada 15 s, sin caché de servidor.
 fija el borde (03:30 UTC del 15 → día Havana del 14); `SummaryTests` añade la
 ventana de hoy, la exclusión fuera de ella y el contador `sales_pending_dispatch`.
 El dashboard compiló con `npm run build`.
+
+### 10.12 E2E-14: cierre por inactividad (ejecución ajustada)
+
+Se ejecutó la opción 1 de §9.1 el 2026-11-10: cliente `E2E-14` (customer 3) y
+conversación 3 con `updated_at = 2026-11-07 02:12:30` UTC (73 h atrás), mensaje
+80 y turno 32 `OPEN`. El core se reinició y el job `conversation_idle_close`
+corrió a los 2 min (03:13:21 UTC), sin cambiar el umbral de 72 h.
+
+| Comprobación | Antes | Después |
+|---|---|---|
+| `conversations` 3 | `ACTIVE`, `updated_at` 73 h atrás | `CLOSED`, `closed_at 2026-11-10 03:13:21` |
+| `turns` 32 | `OPEN` | `CANCELLED` |
+| `events` | 439 | 440 `conversations_closed_idle` (`count 1`, `idle_hours 72.0`) |
+| `conversations` 1 | `ACTIVE`, 71 mensajes | sin cambios |
+| Vuelta del cliente | — | `get_or_create_open_conversation(3, 'telegram')` → conversación nueva 4 `ACTIVE`, 0 mensajes/turnos, `jobs +0`, `events +0` |
+
+La conversación 4 se borró tras verificar que estaba vacía. La conversación 3,
+el mensaje 80, el turno 32 y el evento 440 quedan en la BD como evidencia.
+**Tests:** **207 OK** (sin cambios: E2E-14 es una prueba manual).
 
 
 
