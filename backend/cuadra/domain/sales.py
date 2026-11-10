@@ -14,7 +14,7 @@ import json
 import re
 from datetime import datetime, timezone
 
-from cuadra.domain import catalog, events
+from cuadra.domain import catalog, clock, events
 from cuadra.domain.errors import Invalid, NotFound
 
 SALE_STATUSES = (
@@ -773,12 +773,18 @@ def summary(conn) -> dict:
     in a different currency is counted in `conversion_pending` instead of being
     added to the wrong total (doc 02 §6.1).
     """
+    # H-18: "today" is the Havana business day, not the UTC day.
+    day_start, day_end = clock.day_bounds()
     today = conn.execute(
         """SELECT COUNT(*) FROM sales
-           WHERE date(created_at) = date('now') AND status != 'CANCELLED'"""
+           WHERE created_at >= ? AND created_at < ? AND status != 'CANCELLED'""",
+        (day_start, day_end),
     ).fetchone()[0]
     pending_approval = conn.execute(
         "SELECT COUNT(*) FROM sales WHERE status = 'PENDING_APPROVAL'"
+    ).fetchone()[0]
+    pending_dispatch = conn.execute(
+        "SELECT COUNT(*) FROM sales WHERE status = 'PENDING_DISPATCH'"
     ).fetchone()[0]
     dispatched = conn.execute(
         "SELECT COUNT(*) FROM sales WHERE status IN ('DISPATCHED', 'CONFIRMED')"
@@ -823,6 +829,7 @@ def summary(conn) -> dict:
         "mode": sale_mode(conn),
         "sales_today": int(today),
         "sales_pending_approval": int(pending_approval),
+        "sales_pending_dispatch": int(pending_dispatch),
         "sales_dispatched": int(dispatched),
         "sales_delivered_pending_settlement": int(delivered_pending),
         "sales_needs_operator": int(needs_operator),

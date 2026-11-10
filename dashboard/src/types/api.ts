@@ -408,6 +408,7 @@ export interface FinanceSummary {
   mode: SalesMode;
   sales_today: number;
   sales_pending_approval: number;
+  sales_pending_dispatch: number;
   sales_dispatched: number;
   sales_delivered_pending_settlement: number;
   sales_needs_operator: number;

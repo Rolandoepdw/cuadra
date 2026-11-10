@@ -11,6 +11,7 @@ from cuadra.api.auth import require_pin
 from cuadra.channels import rate_limit, telegram as telegram_channel
 from cuadra.channels import telegram_user
 from cuadra.ai import llm, llm_server, queue
+from cuadra.domain import clock
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_pin)])
 
@@ -74,10 +75,12 @@ def _avg_stt_ms(conn) -> float | None:
 
     STT latency lives in the event details (elapsed_s), not on the message.
     """
+    day_start, day_end = clock.day_bounds()
     rows = conn.execute(
         "SELECT details_json FROM events "
         "WHERE source = 'stt' AND type = 'audio_transcribed' "
-        "AND date(created_at) = date('now')"
+        "AND created_at >= ? AND created_at < ?",
+        (day_start, day_end),
     ).fetchall()
     samples = []
     for row in rows:
@@ -92,17 +95,21 @@ def _avg_stt_ms(conn) -> float | None:
 
 @router.get("/summary")
 async def summary() -> dict:
-    """Headline metrics for the General panel (today, UTC)."""
+    """Headline metrics for the General panel (today, Havana business day)."""
+    day_start, day_end = clock.day_bounds()
     conn = db.connect()
     try:
         messages_today = _scalar(
             conn,
-            "SELECT COUNT(*) FROM messages WHERE date(created_at) = date('now')",
+            "SELECT COUNT(*) FROM messages "
+            "WHERE created_at >= ? AND created_at < ?",
+            (day_start, day_end),
         )
         messages_in = _scalar(
             conn,
             "SELECT COUNT(*) FROM messages "
-            "WHERE date(created_at) = date('now') AND direction = 'INBOUND'",
+            "WHERE created_at >= ? AND created_at < ? AND direction = 'INBOUND'",
+            (day_start, day_end),
         )
         active_conversations = _scalar(
             conn,
@@ -116,7 +123,8 @@ async def summary() -> dict:
             conn,
             "SELECT AVG(latency_ms) FROM messages "
             "WHERE author = 'bot' AND direction = 'OUTBOUND' "
-            "AND date(created_at) = date('now') AND latency_ms IS NOT NULL",
+            "AND created_at >= ? AND created_at < ? AND latency_ms IS NOT NULL",
+            (day_start, day_end),
         )
         customers_total = _scalar(conn, "SELECT COUNT(*) FROM customers")
         products_active = _scalar(

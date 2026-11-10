@@ -88,11 +88,12 @@ export function FinancePanel() {
   const summary = useQuery({
     queryKey: ["finance-summary"],
     queryFn: getFinanceSummary,
-    refetchInterval: 30_000,
+    refetchInterval: 15_000,
   });
   const sales = useQuery({
     queryKey: ["finance-sales", status, currency],
     queryFn: () => listSales({ status, currency, limit: 100 }),
+    refetchInterval: 15_000,
   });
   const ledger = useQuery({
     queryKey: ["finance-ledger", currency],
@@ -351,7 +352,7 @@ export function FinancePanel() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -375,7 +376,17 @@ export function FinancePanel() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Despachadas
+              Por despachar
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="text-2xl font-semibold text-amber-600">
+            {data?.sales_pending_dispatch ?? "—"}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
+              En despacho
             </CardTitle>
           </CardHeader>
           <CardContent className="text-2xl font-semibold">

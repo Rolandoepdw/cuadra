@@ -7,11 +7,24 @@ Throwaway SQLite database, no model server, no network. Run from `backend/`:
 
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from cuadra import config, db
 from cuadra.ai import memory
-from cuadra.domain import catalog, conversations, sales
+from cuadra.domain import catalog, clock, conversations, sales
+
+
+class ClockTests(unittest.TestCase):
+    """H-18: the business day follows America/Havana, not UTC."""
+
+    def test_early_utc_still_belongs_to_the_previous_havana_day(self):
+        start, end = clock.day_bounds(
+            datetime(2026, 1, 15, 3, 30, tzinfo=timezone.utc)
+        )
+        self.assertEqual(start, "2026-01-14 05:00:00")
+        self.assertEqual(end, "2026-01-15 05:00:00")
 
 
 class Phase3TestCase(unittest.TestCase):
@@ -434,6 +447,39 @@ class SummaryTests(Phase3TestCase):
         self.assertEqual(summary["conversion_pending"], 1)
         self.assertEqual(summary["sales_today"], 3)
         self.assertEqual(summary["sales_pending_approval"], 3)
+
+    def test_sales_today_uses_the_havana_day_window(self):
+        sale = self.create_sale()
+        self.conn.execute(
+            "UPDATE sales SET created_at = '2026-01-15 03:30:00' WHERE id = ?",
+            (sale["id"],),
+        )
+        self.conn.commit()
+        window = ("2026-01-14 05:00:00", "2026-01-15 05:00:00")
+        with patch(
+            "cuadra.domain.sales.clock.day_bounds", return_value=window
+        ):
+            self.assertEqual(sales.summary(self.conn)["sales_today"], 1)
+
+    def test_sales_today_excludes_a_sale_outside_the_havana_day(self):
+        sale = self.create_sale()
+        self.conn.execute(
+            "UPDATE sales SET created_at = '2026-01-15 06:00:00' WHERE id = ?",
+            (sale["id"],),
+        )
+        self.conn.commit()
+        window = ("2026-01-14 05:00:00", "2026-01-15 05:00:00")
+        with patch(
+            "cuadra.domain.sales.clock.day_bounds", return_value=window
+        ):
+            self.assertEqual(sales.summary(self.conn)["sales_today"], 0)
+
+    def test_pending_dispatch_has_its_own_counter(self):
+        sale = self.create_sale()
+        sales.approve(self.conn, sale["id"])
+        summary = sales.summary(self.conn)
+        self.assertEqual(summary["sales_pending_dispatch"], 1)
+        self.assertEqual(summary["sales_pending_approval"], 0)
 
     def test_settling_moves_the_commission_from_pending_to_collected(self):
         sale = self.create_sale()
