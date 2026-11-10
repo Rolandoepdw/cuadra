@@ -162,6 +162,27 @@ def check_prices(reply: str, allowed: set[Decimal]) -> bool:
     return True
 
 
+def redact_stale_prices(text: str, allowed: set[Decimal]) -> str:
+    """Replace amounts that are not current catalog prices (H-23).
+
+    Old bot messages are fed back to the model as history, so a price that was
+    later changed or reverted ("el precio baja de 95 a 88 USD") could be copied
+    into a new reply. The guardrail would reject it and burn a retry; redacting
+    the stale amount keeps the history readable without handing the model a
+    number it may not quote. Customer messages are never rewritten.
+    """
+    def replace(match: re.Match) -> str:
+        raw = match.group("symbol_amount") or match.group("amount")
+        value = _normalize_amount(raw)
+        if value is not None and any(
+            abs(value - price) <= Decimal("0.01") for price in allowed
+        ):
+            return match.group(0)
+        return "[precio anterior]"
+
+    return _PRICE.sub(replace, text or "")
+
+
 def check_internal_terms(reply: str) -> bool:
     return _INTERNAL_TERMS.search(reply or "") is None
 

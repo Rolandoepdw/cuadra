@@ -105,6 +105,14 @@ class ContextBuilder:
                     ensure_ascii=False,
                 )
             )
+        if product is not None or candidates:
+            # H-23: history may still contain a price that was later changed or
+            # reverted. The current catalog rows are the only source of truth.
+            parts.append(
+                "PRECIOS VIGENTES: usa solo los precios de PRODUCTO EN JUEGO y "
+                "PRODUCTOS CANDIDATOS. Un precio dicho en un mensaje anterior "
+                "puede haber cambiado: no lo repitas."
+            )
         if candidates:
             parts.append(
                 "PRODUCTOS CANDIDATOS:\n"
@@ -121,11 +129,15 @@ class ContextBuilder:
     # --------------------------------------------------------------- history
 
     @staticmethod
-    def _history_messages(history: list[dict]) -> list[dict]:
+    def _history_messages(history: list[dict], allowed=None) -> list[dict]:
         messages = []
         for message in history:
             role = "user" if message["direction"] == "INBOUND" else "assistant"
             body = message["body"] or "[" + message["type"] + "]"
+            # H-23: only the bot's own words are rewritten; the customer's
+            # history must stay verbatim.
+            if role == "assistant" and allowed is not None:
+                body = guardrails.redact_stale_prices(body, allowed)
             messages.append(
                 {"role": role, "content": body[:MAX_MESSAGE_CHARS]}
             )
@@ -177,7 +189,16 @@ class ContextBuilder:
         head = {"role": "system", "content": system}
         tail = {"role": "user", "content": turn_text or ""}
 
-        recent = self._history_messages(history)[-config.HISTORY_WINDOW:]
+        # H-23: the bot may only quote prices that exist in this context, so any
+        # other amount in its own history is stale (an old or reverted price).
+        allowed = guardrails.allowed_prices(
+            {
+                "product": product,
+                "candidates": candidates,
+                "quoted_prices": self.context.get("quoted_prices") or [],
+            }
+        )
+        recent = self._history_messages(history, allowed)[-config.HISTORY_WINDOW:]
         fixed = self._tokens([head]) + self._tokens([tail]) + instruction_tokens
         while recent and fixed + self._tokens(recent) > self.budget:
             recent = recent[1:]

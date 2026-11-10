@@ -1017,6 +1017,52 @@ class PromptStateTests(Phase1TestCase):
         self.assertNotIn("comisión", system.lower())
 
 
+class HistoricalPriceTests(Phase1TestCase):
+    """H-23: bot history must never reintroduce a superseded price."""
+
+    def _messages(self, history: list[dict]) -> list[dict]:
+        info = self._ingest("hola")
+        conn = db.connect()
+        try:
+            conversation = conversations.get_conversation(
+                conn, info["conversation_id"]
+            )
+            product = catalog.get_product(conn, 1)
+            builder = context.ContextBuilder(
+                conn, conversation, context={"product_id": 1}
+            )
+            return builder.build(history, product=product)
+        finally:
+            conn.close()
+
+    def test_assistant_history_drops_a_superseded_price(self):
+        messages = self._messages(
+            [
+                {
+                    "direction": "OUTBOUND",
+                    "type": "text",
+                    "body": "El precio baja de 12.50 a 20 USD.",
+                }
+            ]
+        )
+        joined = "\n".join(message["content"] for message in messages)
+        self.assertIn("12.50", joined)
+        self.assertNotIn("20 USD", joined)
+        self.assertIn("[precio anterior]", joined)
+
+    def test_customer_history_keeps_its_words(self):
+        messages = self._messages(
+            [{"direction": "INBOUND", "type": "text", "body": "me dijiste 20 USD"}]
+        )
+        joined = "\n".join(message["content"] for message in messages)
+        self.assertIn("me dijiste 20 USD", joined)
+
+    def test_system_declares_only_current_prices(self):
+        system = self._messages([])[0]["content"]
+        self.assertIn("PRECIOS VIGENTES", system)
+        self.assertIn("puede haber cambiado", system)
+
+
 class SummarySanitizationTests(Phase1TestCase):
     """H-14: the rolling summary never carries internal economics."""
 
@@ -1076,6 +1122,15 @@ class GuardrailTests(unittest.TestCase):
         ok, reason = guardrails.validate_reply("Cuesta 99 USD.", self.context)
         self.assertFalse(ok)
         self.assertEqual(reason, "price")
+
+    def test_stale_prices_are_redacted_from_bot_history(self):
+        allowed = guardrails.allowed_prices(self.context)
+        text = guardrails.redact_stale_prices(
+            "Antes 20 USD, ahora 12.50 USD.", allowed
+        )
+        self.assertIn("12.50 USD", text)
+        self.assertNotIn("20 USD", text)
+        self.assertIn("[precio anterior]", text)
 
     def test_twenty_internal_leaks_are_all_blocked(self):
         terms = [
