@@ -39,6 +39,12 @@ BROADCAST_DEFAULTS = {
     BROADCAST_REPEAT_WINDOW_DAYS: 1,
 }
 
+# H-02: delivery wording is a business policy, not a per-product field. The
+# default is deliberately neutral: never claim transport is included or free.
+DELIVERY_TRANSPORT_POLICY = "delivery.transport_policy"
+TRANSPORT_POLICIES = ("coordinated", "included", "not_included")
+TRANSPORT_DEFAULT = "coordinated"
+
 
 def _now() -> str:
     # Match the schema's `datetime('now')` (UTC, no offset).
@@ -94,6 +100,24 @@ def broadcast_publishing_enabled(conn) -> bool:
 
 def set_broadcast_publishing(conn, enabled: bool) -> None:
     set(conn, BROADCAST_PUBLISHING, "1" if enabled else "0")
+
+
+def transport_policy(conn) -> str:
+    """How replies describe delivery (H-02).
+
+    The catalog has no transport field, so this single business policy is the
+    only source of truth. An unknown stored value falls back to the neutral
+    default instead of leaking a bad setting into a customer reply.
+    """
+    value = get(conn, DELIVERY_TRANSPORT_POLICY, TRANSPORT_DEFAULT)
+    return value if value in TRANSPORT_POLICIES else TRANSPORT_DEFAULT
+
+
+def set_transport_policy(conn, value: str) -> str:
+    if value not in TRANSPORT_POLICIES:
+        raise ValueError(f"invalid transport policy: {value}")
+    set(conn, DELIVERY_TRANSPORT_POLICY, value)
+    return value
 
 
 def _as_float(value, default: float) -> float:

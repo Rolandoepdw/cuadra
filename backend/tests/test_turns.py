@@ -28,7 +28,7 @@ from cuadra.ai import (
     prompts,
     queue,
 )
-from cuadra.domain import catalog, conversations, turns
+from cuadra.domain import catalog, conversations, settings, turns
 
 
 def _past() -> str:
@@ -965,6 +965,64 @@ class ReplyWordingTests(Phase1TestCase):
         body = self._outbound()[-1]
         self.assertIn("Entregamos en San Miguel", body)
         self.assertNotIn("Vedado", body)
+
+
+class TransportPolicyTests(Phase1TestCase):
+    """H-02: the price reply states the transport policy and never invents it."""
+
+    def _greeting(self, policy: str | None = None) -> str:
+        info = self._ingest("hola")
+        conn = db.connect()
+        try:
+            if policy is not None:
+                settings.set_transport_policy(conn, policy)
+            conversation = conversations.get_conversation(
+                conn, info["conversation_id"]
+            )
+            return pipeline._render_greeting(
+                conn, catalog.get_product(conn, 1), conversation
+            )
+        finally:
+            conn.close()
+
+    def test_default_is_coordinated_and_does_not_claim_inclusion(self):
+        body = self._greeting()
+        self.assertIn("El transporte se coordina al confirmar la entrega.", body)
+        self.assertNotIn("Incluye transporte", body)
+
+    def test_included_policy_says_transport_is_included(self):
+        body = self._greeting("included")
+        self.assertIn("Incluye transporte.", body)
+        self.assertNotIn("se coordina", body)
+
+    def test_not_included_policy_says_transport_is_charged_apart(self):
+        body = self._greeting("not_included")
+        self.assertIn("se cobra aparte", body)
+
+    def test_invalid_policy_is_rejected_and_falls_back_to_default(self):
+        conn = db.connect()
+        try:
+            with self.assertRaises(ValueError):
+                settings.set_transport_policy(conn, "free")
+            self.assertEqual(settings.transport_policy(conn), "coordinated")
+        finally:
+            conn.close()
+
+    def test_system_prompt_declares_the_transport_policy(self):
+        info = self._ingest("hola")
+        conn = db.connect()
+        try:
+            settings.set_transport_policy(conn, "included")
+            conversation = conversations.get_conversation(
+                conn, info["conversation_id"]
+            )
+            builder = context.ContextBuilder(conn, conversation, context={})
+            system = builder.build(
+                [], product=catalog.get_product(conn, 1)
+            )[0]["content"]
+        finally:
+            conn.close()
+        self.assertIn("TRANSPORTE: Incluye transporte.", system)
 
 
 class _FakeSummarizer:

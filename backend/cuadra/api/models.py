@@ -129,6 +129,12 @@ class BroadcastStrategyIn(BaseModel):
     repeat_window_days: int = Field(ge=1, le=30)
 
 
+class DeliverySettingsIn(BaseModel):
+    """H-02: how the bot describes transport when quoting a price."""
+
+    transport_policy: Literal["coordinated", "included", "not_included"]
+
+
 class BroadcastIn(BaseModel):
     channel: Literal["telegram", "whatsapp"] = "telegram"
     template: str = Field(min_length=1, max_length=4096)

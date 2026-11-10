@@ -16,6 +16,7 @@ import type {
   Category,
   CategoryIn,
   CategoryPatch,
+  DeliverySettings,
   FinanceSummary,
   Health,
   LedgerPage,
@@ -253,6 +254,15 @@ export const setBroadcastStrategy = (body: BroadcastStrategyIn) =>
       }),
     },
   );
+
+export const getDeliverySettings = () =>
+  request<DeliverySettings>("/api/settings/delivery");
+
+export const setDeliverySettings = (body: DeliverySettings) =>
+  request<DeliverySettings>("/api/settings/delivery", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
 
 // -------------------------------------------------------------------- finance
 

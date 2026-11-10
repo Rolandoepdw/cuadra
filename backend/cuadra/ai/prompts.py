@@ -102,12 +102,18 @@ Resume en 2 o 3 líneas la conversación anterior. Conserva: intención del clie
 producto en juego, datos ya confirmados (precio, zona, stock) y compromisos abiertos
 (p. ej. "cliente espera confirmación del proveedor"). Responde solo con el resumen."""
 
-# Reply templates with slots (doc 03 §3). Transport inclusion is unknown in the
-# schema, so {transporte_clause} stays empty — never invent it.
+# Reply templates with slots (doc 03 §3). Transport inclusion is a business
+# policy (`delivery.transport_policy`); the default is the honest "coordinated"
+# wording, so the bot never invents that transport is included or free (H-02).
+TRANSPORT_CLAUSES = {
+    "coordinated": " El transporte se coordina al confirmar la entrega.",
+    "included": " Incluye transporte.",
+    "not_included": " El transporte se cobra aparte; lo coordinamos al confirmar.",
+}
 TEMPLATES = {
     "greeting_product": (
-        "¡Buenas! Sí, tenemos {producto}. Está en {precio} {moneda}{transporte_clause}. "
-        "Entregamos en {zona}{zona_clause}."
+        "¡Buenas! Sí, tenemos {producto}. Está en {precio} {moneda}."
+        "{transporte_clause} Entregamos en {zona}{zona_clause}."
     ),
     "missing_data_escalate": (
         "Buenas. Ese detalle no lo tengo a mano, pero le consulto al almacén ahora mismo "

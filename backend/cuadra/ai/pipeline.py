@@ -14,7 +14,14 @@ import time
 from cuadra import config
 from cuadra.ai import guardrails, llm, memory, prompts, retrieval
 from cuadra.ai.context import ContextBuilder
-from cuadra.domain import catalog, conversations, events, sales as sales_domain, turns
+from cuadra.domain import (
+    catalog,
+    conversations,
+    events,
+    sales as sales_domain,
+    settings,
+    turns,
+)
 
 log = logging.getLogger("cuadra.pipeline")
 
@@ -178,11 +185,12 @@ def _comparison_products(conn, text: str, intent, product: dict | None) -> list[
 def _render_greeting(conn, product: dict, conversation: dict) -> str:
     info = catalog.llm_product_json(conn, product)
     zona, zona_clause = _reply_zone(conn, conversation, info)
+    policy = settings.transport_policy(conn)
     return prompts.TEMPLATES["greeting_product"].format(
         producto=info["nombre"],
         precio=f"{info['precio']:g}",
         moneda=info["moneda"],
-        transporte_clause="",
+        transporte_clause=prompts.TRANSPORT_CLAUSES[policy],
         zona=zona,
         zona_clause=zona_clause,
     )

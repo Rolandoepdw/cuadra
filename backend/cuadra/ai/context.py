@@ -14,7 +14,7 @@ import json
 
 from cuadra import config
 from cuadra.ai import guardrails, llm, memory, prompts
-from cuadra.domain import catalog, conversations
+from cuadra.domain import catalog, conversations, settings
 
 # Spanish text is closer to 3.5 chars/token than the optimistic 4.
 CHARS_PER_TOKEN = 3.5
@@ -124,6 +124,10 @@ class ContextBuilder:
                     ensure_ascii=False,
                 )
             )
+        # H-02: the schema has no per-product transport field, so the business
+        # policy is the only source of truth. Never let the model invent it.
+        policy = settings.transport_policy(self.conn)
+        parts.append("TRANSPORTE: " + prompts.TRANSPORT_CLAUSES[policy].strip())
         return "\n\n".join(parts)
 
     # --------------------------------------------------------------- history

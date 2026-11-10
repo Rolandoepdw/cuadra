@@ -244,6 +244,12 @@ export interface BroadcastStrategyIn extends BroadcastStrategy {
   apply_to_groups?: boolean;
 }
 
+export type TransportPolicy = "coordinated" | "included" | "not_included";
+
+export interface DeliverySettings {
+  transport_policy: TransportPolicy;
+}
+
 export interface BroadcastReevaluate {
   checked: number;
   queued: number;

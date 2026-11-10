@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Save } from "lucide-react";
-import { getBroadcastStrategy, setBroadcastStrategy } from "@/lib/api";
-import type { BroadcastStrategyIn } from "@/types/api";
+import { getBroadcastStrategy, getDeliverySettings, setBroadcastStrategy, setDeliverySettings } from "@/lib/api";
+import type { BroadcastStrategyIn, TransportPolicy } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 
 const EMPTY: BroadcastStrategyIn = {
   max_posts_per_day: 20,
@@ -37,6 +38,19 @@ export function StrategyPanel() {
     },
   });
 
+  const delivery = useQuery({
+    queryKey: ["delivery-settings"],
+    queryFn: getDeliverySettings,
+  });
+  const [policy, setPolicy] = useState<TransportPolicy>("coordinated");
+  useEffect(() => {
+    if (delivery.data) setPolicy(delivery.data.transport_policy);
+  }, [delivery.data]);
+  const saveDelivery = useMutation({
+    mutationFn: () => setDeliverySettings({ transport_policy: policy }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["delivery-settings"] }),
+  });
+
   const set = <K extends keyof BroadcastStrategyIn>(
     field: K,
     value: BroadcastStrategyIn[K],
@@ -49,7 +63,8 @@ export function StrategyPanel() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Estrategia</h1>
         <p className="text-sm text-muted-foreground">
-          Parámetros de publicación de difusiones. Los grupos pueden sobrescribirlos.
+          Ritmo de publicación de difusiones y política de entrega. Los grupos
+          pueden sobrescribir el ritmo.
         </p>
       </div>
 
@@ -151,6 +166,48 @@ export function StrategyPanel() {
           </p>
         )}
       </div>
+
+      <Card className="max-w-2xl">
+        <CardHeader>
+          <CardTitle className="text-base">Entrega y transporte</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <Label>Política de transporte</Label>
+            <Select
+              value={policy}
+              onChange={(e) => setPolicy(e.target.value as TransportPolicy)}
+            >
+              <option value="coordinated">Se coordina al confirmar (por defecto)</option>
+              <option value="included">Incluido en el precio</option>
+              <option value="not_included">Se cobra aparte</option>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Se usa al dar precios. “Se coordina al confirmar” no promete que el
+              transporte esté incluido; evita inventar condiciones.
+            </p>
+          </div>
+          <div>
+            <Button
+              onClick={() => saveDelivery.mutate()}
+              disabled={delivery.isLoading || saveDelivery.isPending}
+            >
+              <Save />
+              {saveDelivery.isPending ? "Guardando…" : "Guardar entrega"}
+            </Button>
+            {saveDelivery.error && (
+              <p className="mt-2 text-sm text-destructive">
+                {(saveDelivery.error as Error).message}
+              </p>
+            )}
+            {saveDelivery.isSuccess && (
+              <p className="mt-2 text-sm text-primary">
+                Política de transporte guardada.
+              </p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
