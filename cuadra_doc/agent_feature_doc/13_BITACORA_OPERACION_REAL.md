@@ -512,7 +512,7 @@ completa; el coste fue un reintento (~25 s).
 | H-20 | Media (UX) | `escalation_resolved_summary` termina siempre con “¿Te reservo {producto} y coordinamos la entrega?”, aunque el resumen diga que el producto se agotó. Evidencia: mensaje 40 (“quedan 0 unidades. ¿Te reservo Freidora de Aire…?”). | El bot se contradice y ofrece reservar algo sin stock. | **Corregido** el 2026-11-09: `_customer_reply` elige plantilla según `status`/`stock` y añade `escalation_resolved_out_of_stock` (aviso de reposición). Cubierto por 4 tests. |
 | H-21 | **Alta** (correctitud) | `normalize_extraction` descarta la moneda `MLC` pero conserva el `price`; el `new_state` de la mutación 3 guarda **4200 USD** aunque el TCP dijo 4200 MLC. Aprobar esa revisión escribiría 4200 USD. Además, `approve` reanuda al cliente pero `reject` y `revert` no le avisan. | Aprobar una revisión MLC corrompe el precio; un rechazo o un undo deja al cliente con un dato viejo sin corrección. | **Corregido** el 2026-11-09: si la moneda es inválida se descarta también el precio; `approve` valida el estado (`_validate_state`) y rechaza monedas no soportadas; `reject`/`revert` avisan al cliente (`notify_mutation_outcome`) y dejan evento `catalog_mutation_*_notified`. Cubierto por 6 tests. |
 | H-22 | Media (UX) | El resumen que recibe el cliente es una paráfrasis del modelo y pierde parte de la respuesta del TCP: E2E-06 omitió recetario y garantía; E2E-05 omitió el maletín. | El cliente preguntó por varios datos y solo recibe uno. | **Corregido** el 2026-11-09: el aviso al cliente usa la respuesta completa del TCP, saneada (sin códigos `[E-####]`, sin frases con términos internos y sin monedas ajenas al catálogo); el resumen del extractor queda como respaldo. El prompt del extractor exige cubrir todos los datos. Cubierto por 6 tests. |
-| H-23 | Media (correctitud) | El historial conserva los mensajes de escalación con precios que luego cambian (p. ej. el undo de 88 → 95). Ante un saludo, el modelo copió “el precio baja de 95 a 88 USD”; el guardrail lo bloqueó 2 veces y cayó al *fallback* de la Aspiradora. | Respuesta equivocada a un saludo, 2 llamadas extra (~5 s) y el *fallback* reutiliza el producto del contexto (**H-12**). | Inyectar el precio vigente en el contexto y marcar los mensajes históricos como “precio superado”; aislar los mensajes de escalación del historial de composición. |
+| H-23 | Media (correctitud) | El historial conserva los mensajes de escalación con precios que luego cambian (p. ej. el undo de 88 → 95). Ante un saludo, el modelo copió “el precio baja de 95 a 88 USD”; el guardrail lo bloqueó 2 veces y cayó al *fallback* de la Aspiradora. | Respuesta equivocada a un saludo, 2 llamadas extra (~5 s) y el *fallback* reutiliza el producto del contexto (**H-12**). | **Corregido** el 2026-11-09: `ContextBuilder` redacta del historial del bot cualquier monto que no sea un precio vigente del contexto (`[precio anterior]`), declara `PRECIOS VIGENTES` en el sistema y deja intactos los mensajes del cliente. Cubierto por 4 tests. |
 | H-24 | Baja (resiliencia) | El primer `compose` tras un reinicio forzado puede recibir `httpx.ReadError`: llama-server resetea la conexión de la petición que quedó huérfana al morir el core. | El turno se reintenta y responde igual, pero la recuperación suma ~25 s de *backoff*. | Reintentar `compose` una vez en el cliente antes de fallar el job (backoff corto), en lugar de esperar el *backoff* de la cola. |
 | H-25 | Baja (prompt) | `ESTADO DE LA CONVERSACIÓN` muestra `Producto en juego (id 19)` aunque el producto resuelto del turno sea otro (id 3); el bloque `PRODUCTO EN JUEGO` sí es correcto. | Ruido para el modelo; no cambió la respuesta en E2E-03, pero puede sesgar el NLU. | **Corregido** el 2026-11-09: el estado usa el id del producto resuelto del turno y solo cae al del contexto cuando el turno no resolvió ninguno. |
 | H-26 | Baja (UX) | `ask_which_product` empieza con “Claro que sí”; ante “¿Tienes neveras?” puede leerse como confirmación de disponibilidad. | Matiz de redacción en un caso de producto inexistente. | **Corregido** el 2026-11-09: la plantilla empieza “Dime cuál producto te interesa…” y el saludo del prompt ya no incluye “Claro que sí”. |
@@ -526,9 +526,9 @@ completa; el coste fue un reintento (~25 s).
 > corregidas y cubiertas por tests; H-08 se descartó al comprobar que las specs
 > venían de `products.description`. Después se corrigieron H-03, H-13 y H-26
 > (redacción), H-12, H-14 y H-25 (contexto/prompt), H-22 (aviso completo al
-> cliente) y H-04, H-10 y H-27 (NLU, confianza y resolución semántica). El detalle
-> técnico y los reintentos están en **§10**. La suite completa pasa con **199
-> tests**.
+> cliente), H-04, H-10 y H-27 (NLU, confianza y resolución semántica) y H-23
+> (precios superados en el historial). El detalle técnico y los reintentos están
+> en **§10**. La suite completa pasa con **203 tests**.
 
 ---
 
@@ -822,7 +822,7 @@ escalación mejor puntuada (6) pasó a `ANSWERED`; la 7 se cerró después como
 ### 10.4 Pendiente
 
 - E2E-14 sigue aparcado (§9.1).
-- Mejoras no bloqueantes: H-23 (precios históricos) y H-02 (transporte incluido).
+- Mejoras no bloqueantes: H-02 (transporte incluido) y H-05 (rechazos que disparan el guardrail).
 - Dashboard H-18/H-19 y los 20 casos de correlación TCP reales.
 
 ### 10.5 Estado de la BD de prueba (decisión del 2026-11-09)
@@ -941,4 +941,28 @@ corrigieron con los ejemplos de precio/dato.
 `test_semantic_candidate_without_lexical_support_is_ignored`;
 `EvalAgentTests` añade `test_summarize_counts_uncalibrated_confidence`; y
 `test_golden_set` valida los 58 casos.
+
+### 10.10 Precios superados en el historial (H-23)
+
+El historial de composición se enviaba tal cual. Cuando una escalación cambió un
+precio y luego se revirtió (Aspiradora 95 → 88 → 95), el mensaje 43 quedó como
+“El precio baja de 95 a **88 USD**”. Ante un saludo, el modelo copió ese 88, el
+guardrail de precio lo bloqueó dos veces y cayó al *fallback*.
+
+| Archivo | Cambio |
+|---|---|
+| `ai/guardrails.py` | `redact_stale_prices(text, allowed)` reemplaza por `[precio anterior]` cualquier monto que no esté en `allowed_prices(context)` (precios vigentes del producto, candidatos y `quoted_prices`). |
+| `ai/context.py` | `_history_messages` aplica esa redacción **solo a los mensajes del bot**; las palabras del cliente no se reescriben. `build_with_turn` calcula `allowed` con el producto resuelto y los candidatos del turno. El sistema añade el bloque `PRECIOS VIGENTES` cuando hay producto o candidatos. |
+
+**Comportamiento:** el mensaje 43 se envía al modelo como “El precio baja de 95
+a [precio anterior]”. El 95 vigente se conserva; el 88 superado no puede
+copiarse. Un precio de otro producto ajeno al contexto también se neutraliza: el
+modelo no debe cotizarlo sin que ese producto esté en juego (si el cliente lo
+pide, el turno lo resuelve y entonces sí aparece su precio real).
+
+**Tests:** **203 OK**. `HistoricalPriceTests` (3) cubre la redacción del
+historial del bot, la conservación literal del mensaje del cliente y el bloque
+`PRECIOS VIGENTES`; `GuardrailTests.test_stale_prices_are_redacted_from_bot_history`
+prueba la función aislada.
+
 
