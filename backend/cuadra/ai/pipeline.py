@@ -235,9 +235,23 @@ _NEGATIVE = re.compile(
 )
 _SALE_STAGES = ("CAPTURE_DATA", "CONFIRM")
 
+# H-12: a message that is *only* a greeting must start the conversation again;
+# answering it with the product of the previous turn makes the bot look deaf.
+_GREETING = re.compile(
+    r"^[\s¡!¿?.,]*(?:"
+    r"(?:hola|buenas(?:\s+(?:tardes|noches|d[ií]as))?|buenos\s+d[ií]as|"
+    r"qu[eé]\s+tal|saludos|hey|hi|hello)"
+    r"[\s¡!¿?.,]*)+$",
+    re.IGNORECASE,
+)
+
 # Below this the NLU is guessing (the unknown-product case often lands here), so
 # the engine must not inherit the product of the previous turn (H-09).
 LOW_CONFIDENCE = 0.35
+
+
+def _is_greeting(text: str) -> bool:
+    return bool(_GREETING.match((text or "").strip()))
 
 
 def _is_affirmative(text: str) -> bool:
@@ -511,6 +525,19 @@ async def _decide(
 ) -> tuple[str, bool, str, str | None]:
     """Returns (reply, escalate, generator, escalation_question)."""
     text = last_text if last_text is not None else (inbound["body"] or "")
+
+    # H-12: a bare greeting starts over; answering it with the product remembered
+    # from the previous turn ("Hola, buenas" -> Pan con Croqueta) looks deaf.
+    if product_source in ("", "context") and _is_greeting(text):
+        guard_context = _guard_context(None, None, context)
+        reply, generator = _safe_template(
+            conn,
+            conversation,
+            prompts.TEMPLATES["ask_which_product"],
+            guard_context,
+            "template",
+        )
+        return reply, False, generator, None
 
     if intent.intencion in ("consulta_precio", "consulta_stock", "comprar"):
         if product is None:

@@ -43,6 +43,7 @@ _PRICE = re.compile(
 _CODE_FENCE = re.compile(r"```")
 _MARKDOWN_HEADING = re.compile(r"^\s*#{1,6}\s", re.MULTILINE)
 _JSON_HINT = re.compile(r'^\s*[\{\[]|"intencion"\s*:', re.IGNORECASE)
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
 
 # A model that repeats its own prompt hands an attacker the whole rulebook, even
 # when it never quotes commission numbers. This is checked separately from the
@@ -123,6 +124,20 @@ def allowed_prices(context: dict) -> set[Decimal]:
         if value is not None:
             prices.add(value)
     return prices
+
+
+def redact_internal_terms(text: str) -> str:
+    """Drop the sentences that mention internal economics (H-14).
+
+    Rolling summaries are built from raw messages, so a customer attack that
+    names "comisión" can leak into later prompts and make the model repeat it.
+    Removing those sentences keeps the summary useful without priming it.
+    """
+    text = (text or "").strip()
+    if not text:
+        return ""
+    sentences = [part.strip() for part in _SENTENCE_SPLIT.split(text) if part.strip()]
+    return " ".join(part for part in sentences if not _INTERNAL_TERMS.search(part))
 
 
 def prices_in_text(reply: str) -> list[Decimal]:

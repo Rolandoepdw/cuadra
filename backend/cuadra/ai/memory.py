@@ -19,7 +19,7 @@ import re
 import sqlite3
 
 from cuadra import config
-from cuadra.ai import llm
+from cuadra.ai import guardrails, llm
 from cuadra.domain import catalog, conversations, sales as sales_domain
 
 log = logging.getLogger("cuadra.memory")
@@ -476,17 +476,30 @@ async def maybe_summarize(conn, conversation, *, llm_client=None) -> bool:
         return False
 
     client = llm_client or llm
+    clean_delta = []
+    for row in delta:
+        item = dict(row)
+        # H-14: never feed internal economics to the summarizer.
+        item["body"] = guardrails.redact_internal_terms(item.get("body") or "")
+        if item["body"]:
+            clean_delta.append(item)
+    if not clean_delta:
+        # Everything in the delta was internal chatter; skip the model call but
+        # advance the marker so the same messages are not reprocessed forever.
+        context["summary_through_message_id"] = delta[-1]["id"]
+        conversations.set_context(conn, conversation_id, context)
+        return False
     try:
         summary = await client.summarize(
             context.get("summary"),
-            [dict(row) for row in delta],
+            clean_delta,
             conversation_id=conversation_id,
         )
     except (llm.LLMUnavailable, llm.LLMInvalidOutput):
         log.warning("summary failed for conversation %s; keeping previous", conversation_id)
         return False
 
-    summary = (summary or "").strip()
+    summary = guardrails.redact_internal_terms((summary or "").strip())
     if not summary:
         return False
 

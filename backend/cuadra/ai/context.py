@@ -13,7 +13,7 @@ summary, the conversation state and the task instructions are never dropped.
 import json
 
 from cuadra import config
-from cuadra.ai import llm, memory, prompts
+from cuadra.ai import guardrails, llm, memory, prompts
 from cuadra.domain import catalog, conversations
 
 # Spanish text is closer to 3.5 chars/token than the optimistic 4.
@@ -56,7 +56,8 @@ class ContextBuilder:
     def _system(self, product, candidates) -> str:
         parts = [prompts.SYSTEM_PROMPT]
 
-        summary = self.context.get("summary")
+        # H-14: a legacy summary may still carry internal terms; never inject them.
+        summary = guardrails.redact_internal_terms(self.context.get("summary") or "")
         if summary:
             parts.append("RESUMEN DE LA CONVERSACIÓN HASTA AHORA:\n" + summary)
 
@@ -85,10 +86,14 @@ class ContextBuilder:
                 "Hay una consulta pendiente al almacén: no prometas un dato que "
                 "todavía no confirmó el proveedor."
             )
-        if self.context.get("product_id"):
-            state.append(
-                f"Producto en juego (id {self.context['product_id']})."
-            )
+        # H-25: the state must mirror the product resolved for this turn, not the
+        # one remembered from the previous turn (the PRODUCTO block was already
+        # correct, which made the two sections contradict each other).
+        turn_product_id = (
+            product["id"] if product is not None else self.context.get("product_id")
+        )
+        if turn_product_id:
+            state.append(f"Producto en juego (id {turn_product_id}).")
         if state:
             parts.append("ESTADO DE LA CONVERSACIÓN:\n" + "\n".join(state))
 

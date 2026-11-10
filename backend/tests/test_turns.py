@@ -23,6 +23,7 @@ from cuadra.ai import (
     handlers,
     ingest,
     llm,
+    memory,
     pipeline,
     prompts,
     queue,
@@ -841,6 +842,24 @@ class ReplyWordingTests(Phase1TestCase):
         self.assertNotIn("te la llevo", prompts.SYSTEM_PROMPT.lower())
         self.assertNotIn("te lo llevo", prompts.SYSTEM_PROMPT.lower())
 
+    def test_greeting_detection(self):
+        for text in ("Hola", "Hola, buenas", "¡Buenas tardes!", "¿Qué tal?"):
+            self.assertTrue(pipeline._is_greeting(text), text)
+        for text in ("Hola, ¿tienes el monitor?", "precio del monitor"):
+            self.assertFalse(pipeline._is_greeting(text), text)
+
+    def test_bare_greeting_does_not_reuse_the_product(self):
+        self._turn(
+            "precio del Power Bank",
+            llm.Intent(
+                intencion="consulta_precio", producto="Power Bank", confianza=0.95
+            ),
+        )
+        self._turn("Hola, buenas", llm.Intent(intencion="otro", confianza=0.9))
+        body = self._outbound()[-1]
+        self.assertEqual(body, prompts.TEMPLATES["ask_which_product"])
+        self.assertNotIn("Power Bank", body)
+
     def test_greeting_does_not_list_every_zone(self):
         self._link_zones([f"Zona {index}" for index in range(1, 5)])
         self._turn(
@@ -883,6 +902,99 @@ class ReplyWordingTests(Phase1TestCase):
         body = self._outbound()[-1]
         self.assertIn("Entregamos en San Miguel", body)
         self.assertNotIn("Vedado", body)
+
+
+class _FakeSummarizer:
+    def __init__(self, reply: str):
+        self.reply = reply
+        self.inputs: list[list[str]] = []
+
+    async def summarize(self, previous, rows, *, conversation_id):
+        self.inputs.append([row["body"] for row in rows])
+        return self.reply
+
+
+class PromptStateTests(Phase1TestCase):
+    """H-25 / H-14: the state mirrors this turn and never leaks internals."""
+
+    def _system(self, context_value: dict, *, product=None) -> str:
+        info = self._ingest("hola")
+        conn = db.connect()
+        try:
+            conversation = conversations.get_conversation(
+                conn, info["conversation_id"]
+            )
+            builder = context.ContextBuilder(
+                conn, conversation, context=context_value
+            )
+            messages = builder.build([], product=product)
+        finally:
+            conn.close()
+        return messages[0]["content"]
+
+    def test_state_uses_the_turn_product(self):
+        conn = db.connect()
+        try:
+            product = catalog.get_product(conn, 1)
+        finally:
+            conn.close()
+        system = self._system({"product_id": 99}, product=product)
+        self.assertIn("Producto en juego (id 1).", system)
+        self.assertNotIn("Producto en juego (id 99).", system)
+
+    def test_state_falls_back_to_the_context_product(self):
+        system = self._system({"product_id": 1})
+        self.assertIn("Producto en juego (id 1).", system)
+
+    def test_summary_with_internal_terms_is_not_injected(self):
+        system = self._system(
+            {"summary": "Quiere un monitor. El cliente preguntó por la comisión."}
+        )
+        self.assertIn("Quiere un monitor", system)
+        self.assertNotIn("comisión", system.lower())
+
+
+class SummarySanitizationTests(Phase1TestCase):
+    """H-14: the rolling summary never carries internal economics."""
+
+    def test_summarizer_never_sees_or_stores_internal_terms(self):
+        info = self._ingest("hola")
+        conversation_id = info["conversation_id"]
+        conn = db.connect()
+        try:
+            for body in (
+                "Quiere el Power Bank.",
+                "Preguntó por la comisión del proveedor.",
+                "Le interesa el precio.",
+                "Pidió entrega en San Miguel.",
+                "Espera confirmación.",
+            ):
+                conversations.add_message(
+                    conn, conversation_id, "INBOUND", "customer", body=body
+                )
+            conversation = conversations.get_conversation(conn, conversation_id)
+            summarizer = _FakeSummarizer(
+                "El cliente quiere el Power Bank. Preguntó por la comisión interna."
+            )
+            with (
+                patch.object(config, "HISTORY_WINDOW", 2),
+                patch.object(config, "SUMMARY_EVERY", 2),
+            ):
+                asyncio.run(
+                    memory.maybe_summarize(
+                        conn, conversation, llm_client=summarizer
+                    )
+                )
+            stored = conversations.get_context(conn, conversation_id)
+        finally:
+            conn.close()
+
+        self.assertTrue(summarizer.inputs)
+        self.assertTrue(
+            all("comisión" not in body.lower() for body in summarizer.inputs[0])
+        )
+        self.assertIn("Power Bank", stored["summary"])
+        self.assertNotIn("comisión", stored["summary"].lower())
 
 
 class GuardrailTests(unittest.TestCase):
@@ -943,6 +1055,14 @@ class GuardrailTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(reason, "length")
 
+    def test_redaction_drops_internal_sentences(self):
+        self.assertEqual(
+            guardrails.redact_internal_terms(
+                "Quiere el monitor. Preguntó por la comisión. Entrega en San Miguel."
+            ),
+            "Quiere el monitor. Entrega en San Miguel.",
+        )
+
 
 class LeakFallbackTests(Phase1TestCase):
     def test_leaky_model_reply_falls_back_to_template(self):
@@ -952,7 +1072,9 @@ class LeakFallbackTests(Phase1TestCase):
         with patch(
             "cuadra.ai.llm.classify", new=AsyncMock(return_value=intent)
         ), patch("cuadra.ai.llm.compose", new=AsyncMock(return_value=leak)):
-            self._ingest("Hola")
+            # Not a bare greeting: greets are answered by template since H-12 and
+            # never reach free generation, so they cannot exercise the guardrail.
+            self._ingest("¿Cómo va todo?")
             self._make_due()
             self._run_process()
 
