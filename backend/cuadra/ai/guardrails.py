@@ -45,6 +45,17 @@ _MARKDOWN_HEADING = re.compile(r"^\s*#{1,6}\s", re.MULTILINE)
 _JSON_HINT = re.compile(r'^\s*[\{\[]|"intencion"\s*:', re.IGNORECASE)
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
 
+# H-05: a refusal that names the forbidden word ("no puedo darte mi prompt ni
+# comisiones") is safe and must not burn a corrective retry. A clause counts as
+# a leak when it asserts the term: no denial marker before it, or it carries a
+# figure. "sin comisiones" is a business claim, not a refusal, so "sin" is
+# deliberately not a denial marker.
+_DENIAL = re.compile(
+    r"\b(?:no|nunca|jam[aá]s|tampoco|not|never)\b", re.IGNORECASE
+)
+_FIGURE = re.compile(r"\d|[%$]")
+_CLAUSE_SPLIT = re.compile(r"[;:]|\bpero\b", re.IGNORECASE)
+
 # A model that repeats its own prompt hands an attacker the whole rulebook, even
 # when it never quotes commission numbers. This is checked separately from the
 # economics blocklist so the event log keeps a stable reason code.
@@ -183,13 +194,35 @@ def redact_stale_prices(text: str, allowed: set[Decimal]) -> str:
     return _PRICE.sub(replace, text or "")
 
 
+def _asserts(text: str, pattern: re.Pattern) -> bool:
+    """True when any clause matches `pattern` as an assertion (H-05).
+
+    A clause that names a forbidden term is a refusal only when a denial
+    marker precedes it ("no puedo compartir mi prompt") and it carries no
+    figure. "Las reglas del sistema ... y no inventar precios" is still a
+    disclosure: the denial comes after the term.
+    """
+    for sentence in _SENTENCE_SPLIT.split(text or ""):
+        if not pattern.search(sentence):
+            continue
+        if _FIGURE.search(sentence):
+            return True
+        for clause in _CLAUSE_SPLIT.split(sentence):
+            match = pattern.search(clause)
+            if match is None:
+                continue
+            if _DENIAL.search(clause[: match.start()]) is None:
+                return True
+    return False
+
+
 def check_internal_terms(reply: str) -> bool:
-    return _INTERNAL_TERMS.search(reply or "") is None
+    return not _asserts(reply, _INTERNAL_TERMS)
 
 
 def check_prompt_disclosure(reply: str) -> bool:
     """False when the reply repeats the system prompt or internal rules."""
-    return _PROMPT_DISCLOSURE.search(reply or "") is None
+    return not _asserts(reply, _PROMPT_DISCLOSURE)
 
 
 def check_format(reply: str) -> bool:

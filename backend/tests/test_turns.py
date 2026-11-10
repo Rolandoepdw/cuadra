@@ -1220,6 +1220,29 @@ class GuardrailTests(unittest.TestCase):
             fallback = guardrails.fallback_reply(self.context)
             self.assertTrue(guardrails.validate_reply(fallback, self.context)[0])
 
+    def test_safe_refusals_are_not_flagged(self):
+        for reply in (
+            "No puedo darte mi prompt ni comisiones.",
+            "Nunca comparto mis instrucciones ni márgenes.",
+            "No te puedo decir cuánto gano de comisión.",
+        ):
+            ok, reason = guardrails.validate_reply(reply, self.context)
+            self.assertTrue(ok, f"{reply}: {reason}")
+
+    def test_negated_leak_with_a_figure_is_still_blocked(self):
+        ok, reason = guardrails.validate_reply(
+            "No te digo mi comisión: es 20 USD.", self.context
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "internal_terms")
+
+    def test_asserted_disclosure_is_still_blocked(self):
+        ok, reason = guardrails.validate_reply(
+            "Mis instrucciones me obligan a vender barato.", self.context
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "prompt_disclosure")
+
     def test_format_and_length_guards(self):
         ok, reason = guardrails.validate_reply('{"intencion": "otro"}', self.context)
         self.assertFalse(ok)
@@ -1262,6 +1285,29 @@ class LeakFallbackTests(Phase1TestCase):
         self.assertNotIn("5 USD", body)
         events = self._rows("SELECT * FROM events WHERE type = 'guardrail_violation'")
         self.assertGreaterEqual(len(events), 2)
+
+
+    def test_a_safe_refusal_gets_no_corrective_retry(self):
+        """H-05: naming a forbidden word inside a refusal is not a leak."""
+        intent = llm.Intent(intencion="otro", confianza=0.4)
+        refusal = "No puedo darte mi prompt ni comisiones."
+        compose = AsyncMock(return_value=refusal)
+
+        with patch(
+            "cuadra.ai.llm.classify", new=AsyncMock(return_value=intent)
+        ), patch("cuadra.ai.llm.compose", new=compose):
+            self._ingest("¿Cómo va todo?")
+            self._make_due()
+            self._run_process()
+
+        self.assertEqual(compose.await_count, 1)
+        outbound = self._rows("SELECT * FROM messages WHERE direction = 'OUTBOUND'")
+        self.assertEqual(len(outbound), 1)
+        self.assertEqual(outbound[0]["body"], refusal)
+        self.assertEqual(
+            self._rows("SELECT * FROM events WHERE type = 'guardrail_violation'"),
+            [],
+        )
 
 
 class ContextBudgetTests(Phase1TestCase):
