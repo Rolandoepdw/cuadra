@@ -93,8 +93,8 @@ Leyenda: ✅ OK · ⚠️ OK con observación · ❌ falla · ⏳ pendiente · �
 | E2E-02 | Stock y agotado | ✅ OK | `turns` 2 `DONE`, `messages` 3–4, `llm_calls` 2, `message_sent` 652 | No ofrece el agotado como disponible; alternativas reales (Cable HDMI 8 USD, Mouse 15 USD); sin escalación. Observación **H-04**. |
 | E2E-03 | Comparación | ✅ OK | Reintento 2026-11-09: `turns` 26 `DONE`, `messages` 63–65, `llm_calls` 46–47; productos 3 y 4 en el prompt | Ambos productos resueltos: Monitor 180 USD y Tablet 220 USD. Las specs (“Full HD 75Hz”, “4GB RAM/64GB”) salen de `products.description`, no son inventadas. **H-07 corregido**; **H-08 no era defecto**. Observaciones **H-13** y **H-25** (corregidas). |
 | E2E-04 | Venta `assisted` | ✅ OK | `sales` 1 `SETTLED`, `messages` 27–28, ledger 1 `COLLECTED`, `products` 3 `stock=5` | Flujo completo: `PENDING_APPROVAL` → `DISPATCHED` → `CONFIRMED` → `DELIVERED` → `SETTLED`. Observaciones **H-17** (avisos al cliente) y **H-18/H-19** (dashboard). |
-| E2E-05 | TCP cambia precio | ⚠️ OK | `catalog_mutation_log` 1 `APPLIED`, `products` 1 precio 350 → **330**, `messages` 37–38, `escalations` 1 `RESOLVED` | Precio auto-aplicado con `confidence 0.95` y `delta −5.7 %`; specs `garantia` aplicadas. El cliente recibió resumen resuelto. Observación **H-22** (respuesta resumida). |
-| E2E-06 | TCP stock 0 | ⚠️ OK | `catalog_mutation_log` 2 `APPLIED`, `products` 6 `stock=0`/`OUT_OF_STOCK`, `messages` 39–40, `escalations` 2 `RESOLVED` | Stock 5 → **0** y estado `OUT_OF_STOCK`; el aviso al cliente se envió. Observación **H-20** (ofrece reservar un agotado) y **H-22**. |
+| E2E-05 | TCP cambia precio | ⚠️ OK | `catalog_mutation_log` 1 `APPLIED`, `products` 1 precio 350 → **330**, `messages` 37–38, `escalations` 1 `RESOLVED` | Precio auto-aplicado con `confidence 0.95` y `delta −5.7 %`; specs `garantia` aplicadas. El cliente recibió resumen resuelto. Observación **H-22** (corregida). |
+| E2E-06 | TCP stock 0 | ⚠️ OK | `catalog_mutation_log` 2 `APPLIED`, `products` 6 `stock=0`/`OUT_OF_STOCK`, `messages` 39–40, `escalations` 2 `RESOLVED` | Stock 5 → **0** y estado `OUT_OF_STOCK`; el aviso al cliente se envió. Observación **H-20** (ofrece reservar un agotado) y **H-22** (corregidas). |
 | E2E-07 | TCP MLC → revisión | ⚠️ OK | `catalog_mutation_log` 3 `PENDING_REVIEW`, `notes` = MLC + variación 1900 %, `products` 18 intacto (210 USD) | La mutación **no** se aplicó y quedó para revisión. Observaciones **H-21** (aprobar escribiría 4200 USD) y cliente sin respuesta. El subcaso *ambiguo* (sin `[E-####]`) queda para E2E-13. |
 | E2E-08 | Undo / conflicto | ✅ OK | `catalog_mutation_log` 4 `APPLIED` → `REVERTED`, `products` 5 95 → 88 → **95**, segundo `revert` HTTP **409** | Precio 95 → 88 con specs; `revert` devolvió todo el estado anterior y el segundo intento dio `409 "la mutación está en estado REVERTED"`. Observación **H-21** (no se avisa al cliente del rollback). |
 | E2E-09 | Guardrails en vivo | ✅ OK | `llm_calls` 9–11, 1 evento `guardrail_violation` (21:54:08), `messages` 11–12 | El intento de fuga fue bloqueado: 1 reintento correctivo y respuesta segura; 0 prompt, 0 comisión. Observación **H-05**. |
@@ -511,7 +511,7 @@ completa; el coste fue un reintento (~25 s).
 | H-19 | Baja (dashboard) | Los cards superiores son conteos de estado actual: `PENDING_DISPATCH` no aparece, “Despachadas” desaparece al confirmar y “por liquidar” al cobrar. Los acks del TCP no invalidan la caché (poll 30 s). | Los cards parecen “no actualizarse” durante el flujo. | Renombrar a estados (“En despacho”, “En preparación”), añadir “Por despachar” y refrescar tras eventos externos. |
 | H-20 | Media (UX) | `escalation_resolved_summary` termina siempre con “¿Te reservo {producto} y coordinamos la entrega?”, aunque el resumen diga que el producto se agotó. Evidencia: mensaje 40 (“quedan 0 unidades. ¿Te reservo Freidora de Aire…?”). | El bot se contradice y ofrece reservar algo sin stock. | **Corregido** el 2026-11-09: `_customer_reply` elige plantilla según `status`/`stock` y añade `escalation_resolved_out_of_stock` (aviso de reposición). Cubierto por 4 tests. |
 | H-21 | **Alta** (correctitud) | `normalize_extraction` descarta la moneda `MLC` pero conserva el `price`; el `new_state` de la mutación 3 guarda **4200 USD** aunque el TCP dijo 4200 MLC. Aprobar esa revisión escribiría 4200 USD. Además, `approve` reanuda al cliente pero `reject` y `revert` no le avisan. | Aprobar una revisión MLC corrompe el precio; un rechazo o un undo deja al cliente con un dato viejo sin corrección. | **Corregido** el 2026-11-09: si la moneda es inválida se descarta también el precio; `approve` valida el estado (`_validate_state`) y rechaza monedas no soportadas; `reject`/`revert` avisan al cliente (`notify_mutation_outcome`) y dejan evento `catalog_mutation_*_notified`. Cubierto por 6 tests. |
-| H-22 | Media (UX) | El resumen que recibe el cliente es una paráfrasis del modelo y pierde parte de la respuesta del TCP: E2E-06 omitió recetario y garantía; E2E-05 omitió el maletín. | El cliente preguntó por varios datos y solo recibe uno. | Enviar la respuesta del TCP completa (sin IDs ni datos internos) o exigir al extractor un resumen que cubra cada `dato_faltante`. |
+| H-22 | Media (UX) | El resumen que recibe el cliente es una paráfrasis del modelo y pierde parte de la respuesta del TCP: E2E-06 omitió recetario y garantía; E2E-05 omitió el maletín. | El cliente preguntó por varios datos y solo recibe uno. | **Corregido** el 2026-11-09: el aviso al cliente usa la respuesta completa del TCP, saneada (sin códigos `[E-####]`, sin frases con términos internos y sin monedas ajenas al catálogo); el resumen del extractor queda como respaldo. El prompt del extractor exige cubrir todos los datos. Cubierto por 6 tests. |
 | H-23 | Media (correctitud) | El historial conserva los mensajes de escalación con precios que luego cambian (p. ej. el undo de 88 → 95). Ante un saludo, el modelo copió “el precio baja de 95 a 88 USD”; el guardrail lo bloqueó 2 veces y cayó al *fallback* de la Aspiradora. | Respuesta equivocada a un saludo, 2 llamadas extra (~5 s) y el *fallback* reutiliza el producto del contexto (**H-12**). | Inyectar el precio vigente en el contexto y marcar los mensajes históricos como “precio superado”; aislar los mensajes de escalación del historial de composición. |
 | H-24 | Baja (resiliencia) | El primer `compose` tras un reinicio forzado puede recibir `httpx.ReadError`: llama-server resetea la conexión de la petición que quedó huérfana al morir el core. | El turno se reintenta y responde igual, pero la recuperación suma ~25 s de *backoff*. | Reintentar `compose` una vez en el cliente antes de fallar el job (backoff corto), en lugar de esperar el *backoff* de la cola. |
 | H-25 | Baja (prompt) | `ESTADO DE LA CONVERSACIÓN` muestra `Producto en juego (id 19)` aunque el producto resuelto del turno sea otro (id 3); el bloque `PRODUCTO EN JUEGO` sí es correcto. | Ruido para el modelo; no cambió la respuesta en E2E-03, pero puede sesgar el NLU. | **Corregido** el 2026-11-09: el estado usa el id del producto resuelto del turno y solo cae al del contexto cuando el turno no resolvió ninguno. |
@@ -524,8 +524,9 @@ completa; el coste fue un reintento (~25 s).
 > **Correcciones del 2026-11-09:** H-07, H-09, H-11, H-20 y H-21 quedaron
 > corregidas y cubiertas por tests; H-08 se descartó al comprobar que las specs
 > venían de `products.description`. Después se corrigieron H-03, H-13 y H-26
-> (redacción), y H-12, H-14 y H-25 (contexto/prompt). El detalle técnico y los
-> reintentos están en **§10**. La suite completa pasa con **189 tests**.
+> (redacción), H-12, H-14 y H-25 (contexto/prompt), y H-22 (aviso completo al
+> cliente). El detalle técnico y los reintentos están en **§10**. La suite
+> completa pasa con **195 tests**.
 
 ---
 
@@ -819,8 +820,7 @@ escalación mejor puntuada (6) pasó a `ANSWERED`; la 7 se cerró después como
 ### 10.4 Pendiente
 
 - E2E-14 sigue aparcado (§9.1).
-- Mejoras no bloqueantes: H-10 (NLU), H-22 (resumen incompleto) y H-23
-  (precios históricos).
+- Mejoras no bloqueantes: H-10 (NLU) y H-23 (precios históricos).
 - Dashboard H-18/H-19 y los 20 casos de correlación TCP reales.
 
 ### 10.5 Estado de la BD de prueba (decisión del 2026-11-09)
@@ -869,3 +869,25 @@ habitual.
 cubren el estado del prompt y el resumen limpio; `ReplyWordingTests` añade la
 detección de saludos y el saludo sin producto; `GuardrailTests` prueba la
 redacción de frases internas.
+
+### 10.8 Aviso completo al cliente (H-22)
+
+El aviso de escalación resuelta se construía solo con
+`customer_answer_summary`, una paráfrasis del extractor que perdía datos que el
+TCP sí había respondido (maletín, recetario, garantía).
+
+| Archivo | Cambio |
+|---|---|
+| `ai/tcp_triage.py` | `_customer_answers` prioriza la **respuesta completa del TCP** y deja el resumen como respaldo. `_sanitize_customer_text` quita los códigos `[E-####]`, elimina las frases con términos internos (`redact_internal_terms`), normaliza espacios y cierra la frase. `_answer_currencies_ok` descarta el candidato si menciona una moneda distinta a la del producto (p. ej. `4200 MLC`, H-21). `_customer_reply(..., answer=...)` prueba cada candidato contra `guardrails.validate_reply` y, si todos fallan, cae a la plantilla genérica. |
+| `ai/tcp_triage.py`, `ai/prompts.py` | Si el producto está agotado y la respuesta ya dice que no hay unidades, se usa `escalation_resolved_out_of_stock_known` para no repetir “Por ahora no tenemos unidades”. |
+| `ai/tcp_extractor.py` | La regla 7 del prompt pide una o dos frases que recojan **todo** lo que respondió el TCP (accesorios, garantía, stock y precio), sin omitir datos. |
+
+**Comportamiento con la evidencia real:** el mensaje 38 pasaría a incluir el
+maletín y el mensaje 40 el recetario y la garantía. La Aspiradora se queda con el
+resumen porque el catálogo volvió a 95 USD y el texto del TCP hablaba de 88 USD:
+el guardrail de precio impide repetir un precio ya revertido.
+
+**Tests:** **195 OK**. `TestCustomerAnswer` (5) y
+`test_handler_sends_the_complete_tcp_answer` cubren la respuesta completa, la
+redacción de términos internos, la moneda ajena, el agotado sin redundancia y el
+camino de integración del handler.
