@@ -258,12 +258,22 @@ def summarize(nlu: list[dict], compose: list[dict]) -> dict:
     ok_nlu = [r for r in nlu if "error" not in r]
     ok_compose = [r for r in compose if "error" not in r]
     latencies = [r["elapsed_ms"] for r in ok_nlu + ok_compose]
+    confidences = [
+        r["confianza"]
+        for r in ok_nlu
+        if isinstance(r.get("confianza"), (int, float))
+    ]
     return {
         "nlu_total": len(nlu),
         "nlu_errors": len(nlu) - len(ok_nlu),
         "json_ok": sum(1 for r in ok_nlu if r["json_ok"]),
         "schema_ok": sum(1 for r in ok_nlu if r["schema_ok"]),
         "intent_ok": sum(1 for r in ok_nlu if r["intent_ok"]),
+        # H-04 / H-10: zero or near-zero confidence on a classifiable message
+        # means the rubric is being misused, not that the intent was unclear.
+        "zero_confidence": sum(1 for value in confidences if value == 0.0),
+        "low_confidence": sum(1 for value in confidences if value < 0.5),
+        "confidence_cases": len(confidences),
         "compose_total": len(compose),
         "compose_errors": len(compose) - len(ok_compose),
         "bot_word_hits": sum(1 for r in ok_compose if r["bot_words"]),
@@ -287,8 +297,15 @@ def print_report(summary: dict, nlu: list[dict], compose: list[dict], out_path: 
 
     print("")
     print(f"PROMPT {prompt_fingerprint()}")
-    print(f"NLU    json_ok={ratio('json_ok')}  schema_ok={ratio('schema_ok')}  "
-          f"intent_ok={ratio('intent_ok')}")
+    print(
+        f"NLU    json_ok={ratio('json_ok')}  schema_ok={ratio('schema_ok')}  "
+        f"intent_ok={ratio('intent_ok')}"
+    )
+    print(
+        f"CONF   zero={summary['zero_confidence']}  "
+        f"low={summary['low_confidence']}  "
+        f"n={summary['confidence_cases']}"
+    )
     print(
         f"TEXT   cases={summary['compose_total']}  bot_words={summary['bot_word_hits']}  "
         f"leaks={summary['leak_cases']}  price_flags={summary['price_flags']}"
@@ -329,6 +346,8 @@ _COMPARE_METRICS = (
     ("json_ok", "NLU json ok"),
     ("schema_ok", "NLU schema ok"),
     ("nlu_errors", "NLU errors"),
+    ("zero_confidence", "zero confidence"),
+    ("low_confidence", "low confidence"),
     ("bot_word_hits", "bot words"),
     ("leak_cases", "leaks"),
     ("price_flags", "invented prices"),

@@ -63,6 +63,24 @@ def _retrieve_candidates(conn, query: str, *, limit: int = 4) -> list[dict]:
     return products
 
 
+def _lexically_supported(conn, query: str, product: dict) -> bool:
+    """The fuzzy scorer must also recognise the product (H-27).
+
+    The embedding model is small: "cargador" scores 0.56 against "Moto
+    Eléctrica Cargo", so semantic recall alone would answer about a motorbike.
+    Semantic recall is useful to fill gaps, but naming a single product needs
+    lexical evidence too. The fuzzy scorer's ratio term still accepts plurals
+    and near spellings ("tablet", "neveras").
+    """
+    try:
+        matches = catalog.search_products(
+            conn, query, limit=5, statuses=("ACTIVE", "OUT_OF_STOCK")
+        )
+    except Exception:  # noqa: BLE001 - resolution must never break the reply
+        return False
+    return any(int(match["id"]) == int(product["id"]) for match in matches)
+
+
 def _find_product_in_text(conn, text: str) -> dict | None:
     """Fuzzy match the whole turn, then each line (consolidated bursts dilute it)."""
     text = (text or "").strip()
@@ -104,14 +122,22 @@ def _resolve_product(
         product = catalog.find_product(conn, intent.producto)
         if product is not None:
             return product, "intent"
-        # Semantic/lexical fallback for paraphrases the fuzzy matcher misses.
-        candidates = _retrieve_candidates(conn, intent.producto, limit=1)
-        if candidates:
-            return candidates[0], "intent"
+        # Semantic/lexical fallback for paraphrases the fuzzy matcher misses,
+        # but only when the fuzzy scorer also recognises the product (H-27).
+        candidates = _retrieve_candidates(conn, intent.producto, limit=2)
+        for candidate in candidates:
+            if _lexically_supported(conn, intent.producto, candidate):
+                return candidate, "intent"
     if text:
         product = _find_product_in_text(conn, text)
         if product is not None:
             return product, "text"
+    if intent.producto:
+        # H-10: the customer named a product and the NLU echoed that name, but
+        # nothing in the catalog matches it. Falling back to the product of the
+        # previous turn would answer about a different item ("¿Tienes neveras?"
+        # -> Monitor LED 24), so this turn has no product.
+        return None, ""
     if context.get("product_id"):
         try:
             return catalog.get_product(conn, context["product_id"]), "context"

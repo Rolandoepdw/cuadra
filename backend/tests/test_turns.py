@@ -665,6 +665,69 @@ class ProductResolutionTests(Phase1TestCase):
         self.assertIn('"product_id": null', event["details_json"])
         self.assertIn('"escalate": false', event["details_json"])
 
+    def test_named_unknown_product_does_not_use_the_context_product(self):
+        """H-10: a named product the catalog lacks must not resolve to the context."""
+        self._first_turn(
+            llm.Intent(
+                intencion="consulta_precio", producto="Power Bank", confianza=0.95
+            )
+        )
+        unknown = llm.Intent(
+            intencion="consulta_stock", producto="neveras", confianza=0.95
+        )
+        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=unknown)):
+            self._ingest("¿Tienes neveras?")
+            self._make_due()
+            self._run_process()
+
+        outbound = self._rows(
+            "SELECT body FROM messages WHERE direction = 'OUTBOUND' ORDER BY id"
+        )
+        self.assertEqual(len(outbound), 2)
+        self.assertEqual(outbound[1]["body"], prompts.TEMPLATES["ask_which_product"])
+        self.assertNotIn("Power Bank", outbound[1]["body"])
+        self.assertEqual(self._scalar("SELECT COUNT(*) FROM escalations"), 0)
+
+    def test_lexical_support_filters_semantically_close_strangers(self):
+        """H-27: "cargador" must not resolve to "Moto Eléctrica Cargo"."""
+        self._add_product(2, "Moto Eléctrica Cargo", 1000.0)
+        conn = db.connect()
+        try:
+            moto = catalog.get_product(conn, 2)
+            power_bank = catalog.get_product(conn, 1)
+            self.assertFalse(pipeline._lexically_supported(conn, "cargador", moto))
+            self.assertTrue(
+                pipeline._lexically_supported(conn, "power bank", power_bank)
+            )
+            self.assertTrue(
+                pipeline._lexically_supported(conn, "power banks", power_bank)
+            )
+        finally:
+            conn.close()
+
+    def test_semantic_candidate_without_lexical_support_is_ignored(self):
+        self._add_product(2, "Moto Eléctrica Cargo", 1000.0)
+        conn = db.connect()
+        try:
+            moto = catalog.get_product(conn, 2)
+            with patch(
+                "cuadra.ai.pipeline._retrieve_candidates", return_value=[moto]
+            ):
+                product, source = pipeline._resolve_product(
+                    conn,
+                    llm.Intent(
+                        intencion="consulta_stock",
+                        producto="cargador",
+                        confianza=0.95,
+                    ),
+                    {"product_id": 1},
+                    "¿Tienes cargadores?",
+                )
+        finally:
+            conn.close()
+        self.assertIsNone(product)
+        self.assertEqual(source, "")
+
     def test_high_confidence_followup_keeps_the_context_product(self):
         self._first_turn(
             llm.Intent(

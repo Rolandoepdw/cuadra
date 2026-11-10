@@ -47,16 +47,41 @@ NLU_TASK = """\
 Clasifica el último mensaje del cliente. Responde SOLO con JSON:
 {"intencion": "consulta_precio|consulta_stock|consulta_dato|comparar|comprar|queja|otro",
  "producto": "<nombre detectado o null>",
- "datos_faltantes": ["<dato que no está en el contexto>"],
+ "datos_faltantes": ["<dato que el cliente pregunta y no está en el contexto>"],
  "confianza": 0.0-1.0}
 
-Criterios:
-- consulta_precio: pregunta cuánto cuesta. consulta_stock: disponibilidad.
-- consulta_dato: pide un detalle que no conoces (garantía, si incluye algo, medidas...).
-- comparar: compara dos o más productos. comprar: quiere cerrar la compra.
+Intenciones:
+- consulta_precio: pregunta cuánto cuesta algo (precio, cuánto sale, cuánto vale,
+  a cómo está).
+- consulta_stock: pregunta si hay, si tienes, si venden o si está disponible,
+  aunque el producto no exista en el catálogo ("¿Tienes neveras?").
+- consulta_dato: pide un detalle (garantía, medidas, qué incluye, accesorios) o
+  confirma una característica ("¿es de 1 metro?").
+- comparar: compara dos o más productos. comprar: quiere cerrar la compra
+  ("me lo llevo", "resérvame", "quiero 2").
 - queja: reclama o está molesto. otro: saludo, charla o tema ajeno al catálogo.
-- "producto": el nombre tal como aparezca en el mensaje (o null). "datos_faltantes":
-  solo datos que el cliente pregunta y NO están en el contexto.
+
+Producto:
+- "producto" es el nombre que escribió el cliente, aunque no esté en el catálogo
+  ("neveras", "lavadora"). No lo sustituyas por el producto del contexto.
+- Usa null solo si el mensaje no nombra ningún producto ("¿y el precio?",
+  "¿qué garantía trae?").
+
+Confianza:
+- Mide SOLO la seguridad de la intención: no si el producto existe ni si el dato
+  está en el contexto. Un producto desconocido no baja la confianza.
+- 0.9-1.0 intención clara; 0.6-0.89 probable; 0.3-0.59 ambigua; <0.3 no se
+  entiende. Nunca uses 0.0 si el mensaje se puede clasificar.
+
+Ejemplos:
+"¿Tienes neveras?" -> {"intencion": "consulta_stock", "producto": "neveras", "datos_faltantes": [], "confianza": 0.95}
+"venden lavadoras" -> {"intencion": "consulta_stock", "producto": "lavadoras", "datos_faltantes": [], "confianza": 0.95}
+"el cargador trae garantía" -> {"intencion": "consulta_dato", "producto": "cargador", "datos_faltantes": ["garantía"], "confianza": 0.95}
+"¿y el precio?" -> {"intencion": "consulta_precio", "producto": null, "datos_faltantes": [], "confianza": 0.9}
+"a cómo está el cable" -> {"intencion": "consulta_precio", "producto": "cable", "datos_faltantes": [], "confianza": 0.9}
+"¿es de 1 metro el cable?" -> {"intencion": "consulta_dato", "producto": "cable", "datos_faltantes": [], "confianza": 0.9}
+"me llevo la tablet" -> {"intencion": "comprar", "producto": "tablet", "datos_faltantes": [], "confianza": 0.95}
+"hola buenas" -> {"intencion": "otro", "producto": null, "datos_faltantes": [], "confianza": 1.0}
 """
 
 COMPOSE_INSTRUCTION = """\

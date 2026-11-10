@@ -76,6 +76,24 @@ class EvalAgentTests(unittest.TestCase):
         rows = self.eval_agent.compare_summaries({"intent_ok": 1}, {"intent_ok": 1})
         self.assertEqual([row[0] for row in rows], ["NLU intent ok"])
 
+    def test_summarize_counts_uncalibrated_confidence(self):
+        def row(confianza: float) -> dict:
+            return {
+                "intent_ok": True,
+                "json_ok": True,
+                "schema_ok": True,
+                "confianza": confianza,
+                "elapsed_ms": 10,
+                "tok_s": 1.0,
+            }
+
+        summary = self.eval_agent.summarize(
+            [row(0.0), row(0.4), row(0.95)], []
+        )
+        self.assertEqual(summary["zero_confidence"], 1)
+        self.assertEqual(summary["low_confidence"], 2)
+        self.assertEqual(summary["confidence_cases"], 3)
+
     def test_print_compare_reads_the_summary_block_of_full_reports(self):
         import contextlib
         import io
