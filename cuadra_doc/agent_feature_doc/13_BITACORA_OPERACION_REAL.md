@@ -91,7 +91,7 @@ Leyenda: ✅ OK · ⚠️ OK con observación · ❌ falla · ⏳ pendiente · �
 |---|---|---|---|---|
 | E2E-01 | Consulta de precio | ⚠️ OK | `conversations` 1 (`identity=userbot`), `turns` 1 `DONE`, `messages` 1–2, `llm_calls` 1, evento `message_sent` | Precio **180 USD** exacto y 12 zonas de entrega; sin comisión; respondió la cuenta correcta. Observaciones **H-01** y **H-02**. |
 | E2E-02 | Stock y agotado | ✅ OK | `turns` 2 `DONE`, `messages` 3–4, `llm_calls` 2, `message_sent` 652 | No ofrece el agotado como disponible; alternativas reales (Cable HDMI 8 USD, Mouse 15 USD); sin escalación. Observación **H-04**. |
-| E2E-03 | Comparación | ✅ OK | Reintento 2026-11-09: `turns` 26 `DONE`, `messages` 63–65, `llm_calls` 46–47; productos 3 y 4 en el prompt | Ambos productos resueltos: Monitor 180 USD y Tablet 220 USD. Las specs (“Full HD 75Hz”, “4GB RAM/64GB”) salen de `products.description`, no son inventadas. **H-07 corregido**; **H-08 no era defecto**. Observaciones **H-13** (corregido) y **H-25**. |
+| E2E-03 | Comparación | ✅ OK | Reintento 2026-11-09: `turns` 26 `DONE`, `messages` 63–65, `llm_calls` 46–47; productos 3 y 4 en el prompt | Ambos productos resueltos: Monitor 180 USD y Tablet 220 USD. Las specs (“Full HD 75Hz”, “4GB RAM/64GB”) salen de `products.description`, no son inventadas. **H-07 corregido**; **H-08 no era defecto**. Observaciones **H-13** y **H-25** (corregidas). |
 | E2E-04 | Venta `assisted` | ✅ OK | `sales` 1 `SETTLED`, `messages` 27–28, ledger 1 `COLLECTED`, `products` 3 `stock=5` | Flujo completo: `PENDING_APPROVAL` → `DISPATCHED` → `CONFIRMED` → `DELIVERED` → `SETTLED`. Observaciones **H-17** (avisos al cliente) y **H-18/H-19** (dashboard). |
 | E2E-05 | TCP cambia precio | ⚠️ OK | `catalog_mutation_log` 1 `APPLIED`, `products` 1 precio 350 → **330**, `messages` 37–38, `escalations` 1 `RESOLVED` | Precio auto-aplicado con `confidence 0.95` y `delta −5.7 %`; specs `garantia` aplicadas. El cliente recibió resumen resuelto. Observación **H-22** (respuesta resumida). |
 | E2E-06 | TCP stock 0 | ⚠️ OK | `catalog_mutation_log` 2 `APPLIED`, `products` 6 `stock=0`/`OUT_OF_STOCK`, `messages` 39–40, `escalations` 2 `RESOLVED` | Stock 5 → **0** y estado `OUT_OF_STOCK`; el aviso al cliente se envió. Observación **H-20** (ofrece reservar un agotado) y **H-22**. |
@@ -501,9 +501,9 @@ completa; el coste fue un reintento (~25 s).
 | H-09 | **Alta** (correctitud) | El *fallback* usa el producto viejo del contexto: preguntaron por neveras y ofreció el Monitor LED 24. | Respuesta fuera de tema y confusa. | **Corregido** el 2026-11-09 en tres capas: (1) `fallback_reply` no reutiliza un producto heredado (`product_from_turn`); (2) `consulta_dato` sin producto pide aclaración en vez de escalar; (3) si el NLU va con confianza < 0.35 y el producto solo venía del contexto, se descarta. Además, el umbral semántico evita que “nevera” case con “Pan con Croqueta”. Validado en E2E-15. |
 | H-10 | Media (NLU) | “¿Tienes neveras?” → `otro`/`consulta_dato` con `producto: null` y confianza 0.0; debía ser `consulta_stock` con el producto desconocido. | Pierde el camino determinista y cae en generación libre. | **Mitigado** el 2026-11-09 por el motor determinista (la respuesta ya es correcta). Sigue abierto como mejora del prompt del clasificador. |
 | H-11 | **Alta** (correctitud) | Con `intent.producto = null`, `_resolve_product()` ignora el texto: `find_product("del teclado mecánico")` acierta, pero se usa el producto del contexto. | Niega productos que existen (“el teclado mecánico no está en el catálogo”). | **Corregido** el 2026-11-09: el texto del turno se prueba antes del contexto (con fallback por líneas para ráfagas). Validado en E2E-03 y E2E-15. |
-| H-12 | Media (UX) | Un saludo suelto responde con el producto anterior (“Hola, buenas” → Pan con Croqueta). | Parece que el bot no escucha. | Si el turno es saludo/otro sin producto, saludar y preguntar qué busca, sin reutilizar el contexto. |
+| H-12 | Media (UX) | Un saludo suelto responde con el producto anterior (“Hola, buenas” → Pan con Croqueta). | Parece que el bot no escucha. | **Corregido** el 2026-11-09: `_is_greeting` detecta saludos puros y `_decide` responde con `ask_which_product` sin reutilizar el producto del contexto. |
 | H-13 | Baja (UX) | Concordancia de género: “¿Te **la** llevo?” para monitor y teclado. | Detalle de redacción. | **Corregido** el 2026-11-09: el prompt pide frases neutras (“¿te lo reservo y coordinamos la entrega?”, “¿cerramos el pedido?”) y se quitó el artículo del cierre de `comprar` (“¿Te reservo Tablet Android 10?”). |
-| H-14 | Media (correctitud) | El resumen interno (mensajes 1–12) conserva la frase “comisión o costos adicionales” y se inyecta en prompts posteriores. | El modelo puede repetir el término prohibido y disparar el guardrail `internal_terms` de forma evitable. | Regenerar el resumen cuando cambie el tema, o filtrar términos internos al construirlo. |
+| H-14 | Media (correctitud) | El resumen interno (mensajes 1–12) conserva la frase “comisión o costos adicionales” y se inyecta en prompts posteriores. | El modelo puede repetir el término prohibido y disparar el guardrail `internal_terms` de forma evitable. | **Corregido** el 2026-11-09: `guardrails.redact_internal_terms` elimina las frases con términos internos antes de resumir y al guardar el resumen; `ContextBuilder` también filtra resúmenes antiguos al inyectarlos. |
 | H-15 | **Alta** (bloqueante) | `dispatch_sale` envía siempre con el adaptador `bot`, aunque la venta venga de una conversación `userbot`. Además, los TCP están guardados como `@usuario` y el Bot API solo acepta ids numéricos: `chat not found`. | La venta no llega al proveedor y queda en `NEEDS_OPERATOR`. | **Corregido** el 2026-11-08: identidad `userbot` + resolución del peer; la venta `V-000001` quedó `DISPATCHED`. |
 | H-16 | **Alta** (bloqueante) | `find_supplier_by_telegram_id` compara el id numérico entrante contra `suppliers.telegram_id`, que guarda `@usuario`. Los mensajes `RECIBIDO`/`ENTREGADO` del TCP se ingieren como si fueran de un cliente. | El ack del proveedor nunca se correlaciona con la venta. | **Corregido** el 2026-11-08: columna `telegram_peer_id` y búsqueda por handle o peer. |
 | H-17 | **Alta** (correctitud) | `tcp_process` hacía `return` dentro del `try` del ack: el bloque que llama a `_notify_sale_ack()` nunca se ejecutaba. | El cliente no recibe “Confirmado” ni “Entregado”; solo ve “pedido registrado”. | **Corregido** el 2026-11-08: notificación antes del `return` + prueba `test_ack_creates_the_customer_notification`. |
@@ -514,7 +514,7 @@ completa; el coste fue un reintento (~25 s).
 | H-22 | Media (UX) | El resumen que recibe el cliente es una paráfrasis del modelo y pierde parte de la respuesta del TCP: E2E-06 omitió recetario y garantía; E2E-05 omitió el maletín. | El cliente preguntó por varios datos y solo recibe uno. | Enviar la respuesta del TCP completa (sin IDs ni datos internos) o exigir al extractor un resumen que cubra cada `dato_faltante`. |
 | H-23 | Media (correctitud) | El historial conserva los mensajes de escalación con precios que luego cambian (p. ej. el undo de 88 → 95). Ante un saludo, el modelo copió “el precio baja de 95 a 88 USD”; el guardrail lo bloqueó 2 veces y cayó al *fallback* de la Aspiradora. | Respuesta equivocada a un saludo, 2 llamadas extra (~5 s) y el *fallback* reutiliza el producto del contexto (**H-12**). | Inyectar el precio vigente en el contexto y marcar los mensajes históricos como “precio superado”; aislar los mensajes de escalación del historial de composición. |
 | H-24 | Baja (resiliencia) | El primer `compose` tras un reinicio forzado puede recibir `httpx.ReadError`: llama-server resetea la conexión de la petición que quedó huérfana al morir el core. | El turno se reintenta y responde igual, pero la recuperación suma ~25 s de *backoff*. | Reintentar `compose` una vez en el cliente antes de fallar el job (backoff corto), en lugar de esperar el *backoff* de la cola. |
-| H-25 | Baja (prompt) | `ESTADO DE LA CONVERSACIÓN` muestra `Producto en juego (id 19)` aunque el producto resuelto del turno sea otro (id 3); el bloque `PRODUCTO EN JUEGO` sí es correcto. | Ruido para el modelo; no cambió la respuesta en E2E-03, pero puede sesgar el NLU. | Renderizar en el estado el id del producto resuelto del turno, no el del contexto anterior. |
+| H-25 | Baja (prompt) | `ESTADO DE LA CONVERSACIÓN` muestra `Producto en juego (id 19)` aunque el producto resuelto del turno sea otro (id 3); el bloque `PRODUCTO EN JUEGO` sí es correcto. | Ruido para el modelo; no cambió la respuesta en E2E-03, pero puede sesgar el NLU. | **Corregido** el 2026-11-09: el estado usa el id del producto resuelto del turno y solo cae al del contexto cuando el turno no resolvió ninguno. |
 | H-26 | Baja (UX) | `ask_which_product` empieza con “Claro que sí”; ante “¿Tienes neveras?” puede leerse como confirmación de disponibilidad. | Matiz de redacción en un caso de producto inexistente. | **Corregido** el 2026-11-09: la plantilla empieza “Dime cuál producto te interesa…” y el saludo del prompt ya no incluye “Claro que sí”. |
 
 > H-01 quedó corregido en la BD y en la fuente. El nombre antiguo solo estaba en
@@ -524,8 +524,8 @@ completa; el coste fue un reintento (~25 s).
 > **Correcciones del 2026-11-09:** H-07, H-09, H-11, H-20 y H-21 quedaron
 > corregidas y cubiertas por tests; H-08 se descartó al comprobar que las specs
 > venían de `products.description`. Después se corrigieron H-03, H-13 y H-26
-> (redacción). El detalle técnico y los reintentos están en **§10**. La suite
-> completa pasa con **182 tests**.
+> (redacción), y H-12, H-14 y H-25 (contexto/prompt). El detalle técnico y los
+> reintentos están en **§10**. La suite completa pasa con **189 tests**.
 
 ---
 
@@ -819,9 +819,8 @@ escalación mejor puntuada (6) pasó a `ANSWERED`; la 7 se cerró después como
 ### 10.4 Pendiente
 
 - E2E-14 sigue aparcado (§9.1).
-- Mejoras no bloqueantes: H-10 (NLU), H-12 (saludos), H-14 (resumen
-  contaminado), H-22 (resumen incompleto), H-23 (precios históricos) y H-25
-  (id del estado).
+- Mejoras no bloqueantes: H-10 (NLU), H-22 (resumen incompleto) y H-23
+  (precios históricos).
 - Dashboard H-18/H-19 y los 20 casos de correlación TCP reales.
 
 ### 10.5 Estado de la BD de prueba (decisión del 2026-11-09)
@@ -857,3 +856,16 @@ procedimiento:
 **Tests:** **182 OK**. `ReplyWordingTests` (4 casos) cubre la plantilla de
 aclaración, el cierre neutro, la lista larga de zonas y el uso de la zona
 habitual.
+
+### 10.7 Contexto y prompt (H-12 / H-14 / H-25)
+
+| Hallazgo | Archivo | Cambio |
+|---|---|---|
+| H-12 | `ai/pipeline.py` | `_is_greeting` reconoce saludos puros (“Hola, buenas”, “¡Buenas tardes!”, “¿Qué tal?”); `_decide` responde con `ask_which_product` sin reutilizar el producto del contexto. Si el mensaje incluye un producto (“Hola, ¿tienes el monitor?”), se resuelve normalmente. |
+| H-14 | `ai/guardrails.py`, `ai/memory.py`, `ai/context.py` | `redact_internal_terms` elimina las frases con términos internos. Se aplica a los mensajes que recibe el sumarizador, al resumen antes de guardarlo y a los resúmenes antiguos al inyectarlos en el prompt (defensa en profundidad). |
+| H-25 | `ai/context.py` | `ESTADO DE LA CONVERSACIÓN` usa el id del producto resuelto del turno; solo usa el del contexto cuando el turno no resolvió ninguno. |
+
+**Tests:** **189 OK**. `PromptStateTests` (3) y `SummarySanitizationTests` (1)
+cubren el estado del prompt y el resumen limpio; `ReplyWordingTests` añade la
+detección de saludos y el saludo sin producto; `GuardrailTests` prueba la
+redacción de frases internas.
