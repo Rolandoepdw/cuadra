@@ -103,7 +103,7 @@ Leyenda: ✅ OK · ⚠️ OK con observación · ❌ falla · ⏳ pendiente · �
 | E2E-12 | Reinicio a mitad de turno | ✅ OK | `turns` 25 `DONE` (`attempts` del job 125 = 2), `messages` 61→62, `events` 380–385 (`jobs_requeued` count 1), `llm_calls` 42–45 | Corte forzado a los 6 s de entrar el mensaje, con el turno en `PROCESSING`. El nuevo core reencoló el job, rearmó el turno y respondió **una sola vez**; el mensaje del cliente ya estaba persistido (no se perdió). Observación **H-24** (un `compose` falló con `ReadError` y el reintento lo absorbió). |
 | E2E-13 | Correlación TCP | ✅ OK | `escalations` 1–4 (`case_id`), `sales` 1 ack `V-000001`, `catalog_mutation_log` 1–4; subcaso ambiguo 2026-11-09: `messages` 72, mutación 5 `PENDING_REVIEW` `ambiguous=1` → **`REJECTED`** desde Auditoría, `products` 3 y 4 intactos | Códigos explícitos al producto/venta correctos. Sin código y con 2 pendientes (6 Monitor, 7 Tablet): mutación 5 en revisión, **no se aplica**; al rechazarla se avisó al cliente (`messages` 73, evento `catalog_mutation_rejected_notified`). Observaciones: solo la escalación mejor puntuada (6) pasó a `ANSWERED`; la 7 se cerró después como `TIMEOUT`; el extractor añadió `garantia: "no especificado"` (ruido, sin aplicar). |
 | E2E-14 | Cierre por inactividad | ⏳ aparcado | — | Aparcado a petición del dueño el 2026-11-09 (umbral real de 72 h). Procedimiento y opciones en **§9.1**. |
-| E2E-15 | Producto fuera de catálogo | ✅ OK | Reintento 2026-11-09: `turns` 29 `DONE`, `messages` 70–71, `llm_calls` 50 (`consulta_stock`, `nevera`, confianza 0.0), 0 escalaciones | Pide aclaración (`ask_which_product`): `product_id: null`, sin inventar producto ni precio, sin escalar el Monitor. **H-09 corregido** (fallback + `consulta_dato` + umbral semántico). Observaciones **H-10** y **H-26** (corregido). |
+| E2E-15 | Producto fuera de catálogo | ✅ OK | Reintento 2026-11-09: `turns` 29 `DONE`, `messages` 70–71, `llm_calls` 50 (`consulta_stock`, `nevera`, confianza 0.0), 0 escalaciones | Pide aclaración (`ask_which_product`): `product_id: null`, sin inventar producto ni precio, sin escalar el Monitor. **H-09 corregido** (fallback + `consulta_dato` + umbral semántico). Observaciones **H-10** y **H-26** (corregidas). |
 | E2E-16 | Precio en CUP | ✅ OK | `messages` 13–14, `llm_calls` 12 | **300 CUP** exacto, moneda preservada, zonas del proveedor correctas. |
 
 ---
@@ -307,8 +307,8 @@ ver **§10**.
 en vez de no responder producto; **H-10** el NLU clasificó “¿Tienes neveras?”
 como `otro` con `producto: null` en lugar de `consulta_stock`. El guardrail de
 precio funcionó; el problema es qué se responde después. **H-09 corregido el
-2026-11-09** (ver §10); **H-10** sigue abierto como mejora del clasificador
-(la confianza 0.0 ya no produce una respuesta incorrecta).
+2026-11-09** (ver §10); **H-10 corregido el 2026-11-09** con la rúbrica NLU y
+`_resolve_product` (ver §10.9).
 
 ---
 
@@ -493,13 +493,13 @@ completa; el coste fue un reintento (~25 s).
 | H-01 | Baja (datos) | La zona estaba escrita **“Arrollo Naranjo”** en `zones.name`; debe ser **“Arroyo Naranjo”**. | El bot repetía el error al cliente. | **Corregido** el 2026-11-07 (`zones.id = 7`, evento `zone_renamed`). |
 | H-02 | Baja (UX) | La plantilla de precio no dice si el transporte está incluido. | El prompt exige ese dato, pero el esquema no lo modela; se prefiere no inventarlo. | Añadir un campo de configuración (`include_transport`) o redactar “coordinamos el transporte al confirmar”. |
 | H-03 | Baja (UX) | Lista las **12 zonas** en una sola frase. | Correcto pero largo para un chat. | **Corregido** el 2026-11-09: si el cliente tiene `zona_habitual` y está cubierta, se usa esa; si el proveedor cubre ≤ 3 zonas se listan; si no, “Entregamos en tu municipio (te confirmo la zona exacta al cerrar el pedido)”. |
-| H-04 | Baja (telemetría) | El clasificador registró `confidence: 0.0` pese a acertar intención y producto. Reproducido en **3 de 4** escalaciones del lote TCP (turnos 15–17), con `degraded: false`. | No afecta la respuesta (la confianza no decide el ruteo), pero distorsiona métricas y el panel. | Revisar el parseo/prompt de `confianza`; comparar con más muestras antes de tocar el modelo. |
+| H-04 | Baja (telemetría) | El clasificador registró `confidence: 0.0` pese a acertar intención y producto. Reproducido en **3 de 4** escalaciones del lote TCP (turnos 15–17), con `degraded: false`. | No afecta la respuesta (la confianza no decide el ruteo), pero distorsiona métricas y el panel. | **Corregido** el 2026-11-09 junto con H-10: la rúbrica mide solo la intención y prohíbe `0.0` si el mensaje se puede clasificar; la suite NLU queda con `zero=0` y `low=0`. |
 | H-05 | Baja (eficiencia) | Un rechazo correcto (“no puedo darte mi prompt ni comisiones”) dispara el guardrail por repetir las palabras prohibidas. | Gasta un reintento (~4 s) en una respuesta que ya era segura. | Detectar negaciones/“no puedo” antes de bloquear, o validar solo afirmaciones. |
 | H-06 | Media (UX) | Primera llamada tras inactividad: **21 s** (`prompt eval` a 50 tok/s; el resto va a 600 tok/s). | El cliente espera ~28 s por una consulta simple. | *Warm-up* periódico del modelo o mantenerlo residente; medir p95 por hora. |
 | H-07 | **Alta** (correctitud) | `comparar` recupera candidatos solo con `intent.producto`, no con el texto del cliente. | Omite el segundo producto y el bot afirma que no existe. | **Corregido** el 2026-11-09: `_comparison_products` parte el texto por “con/y/vs/…” y resuelve cada producto nombrado; la recuperación híbrida solo rellena huecos. Validado con Monitor + Tablet (E2E-03). |
 | H-08 | **Alta** (correctitud) | El guardrail no valida especificaciones: se creyó que inventaba “Full HD 75Hz con HDMI y VGA” con `specifications_json = {}`. | Datos falsos al cliente. | **Descartado** el 2026-11-09: las specs estaban en `products.description`. Se mantiene la recomendación de validar datos técnicos si algún día solo viven en `specifications_json`. |
 | H-09 | **Alta** (correctitud) | El *fallback* usa el producto viejo del contexto: preguntaron por neveras y ofreció el Monitor LED 24. | Respuesta fuera de tema y confusa. | **Corregido** el 2026-11-09 en tres capas: (1) `fallback_reply` no reutiliza un producto heredado (`product_from_turn`); (2) `consulta_dato` sin producto pide aclaración en vez de escalar; (3) si el NLU va con confianza < 0.35 y el producto solo venía del contexto, se descarta. Además, el umbral semántico evita que “nevera” case con “Pan con Croqueta”. Validado en E2E-15. |
-| H-10 | Media (NLU) | “¿Tienes neveras?” → `otro`/`consulta_dato` con `producto: null` y confianza 0.0; debía ser `consulta_stock` con el producto desconocido. | Pierde el camino determinista y cae en generación libre. | **Mitigado** el 2026-11-09 por el motor determinista (la respuesta ya es correcta). Sigue abierto como mejora del prompt del clasificador. |
+| H-10 | Media (NLU) | La confianza medía “¿es sobre el producto del contexto?” en vez de “¿qué intención es?”: con Monitor en juego, “¿Tienes neveras?” → `otro`/`consulta_stock` con confianza 1.0/0.0 y “el cargador trae garantía” atribuía `producto: "Monitor LED 24"`. | Pierde el camino determinista, hereda el producto equivocado y ensucia la telemetría. | **Corregido** el 2026-11-09: `NLU_TASK` define cada intención, exige el nombre escrito por el cliente (aunque no exista) y una rúbrica de confianza que nunca da `0.0` si se puede clasificar; `_resolve_product` devuelve `(None, "")` cuando el producto nombrado no existe, en vez de caer al del contexto. Suite NLU **58/58**, `zero=0`, `low=0`. |
 | H-11 | **Alta** (correctitud) | Con `intent.producto = null`, `_resolve_product()` ignora el texto: `find_product("del teclado mecánico")` acierta, pero se usa el producto del contexto. | Niega productos que existen (“el teclado mecánico no está en el catálogo”). | **Corregido** el 2026-11-09: el texto del turno se prueba antes del contexto (con fallback por líneas para ráfagas). Validado en E2E-03 y E2E-15. |
 | H-12 | Media (UX) | Un saludo suelto responde con el producto anterior (“Hola, buenas” → Pan con Croqueta). | Parece que el bot no escucha. | **Corregido** el 2026-11-09: `_is_greeting` detecta saludos puros y `_decide` responde con `ask_which_product` sin reutilizar el producto del contexto. |
 | H-13 | Baja (UX) | Concordancia de género: “¿Te **la** llevo?” para monitor y teclado. | Detalle de redacción. | **Corregido** el 2026-11-09: el prompt pide frases neutras (“¿te lo reservo y coordinamos la entrega?”, “¿cerramos el pedido?”) y se quitó el artículo del cierre de `comprar` (“¿Te reservo Tablet Android 10?”). |
@@ -516,6 +516,7 @@ completa; el coste fue un reintento (~25 s).
 | H-24 | Baja (resiliencia) | El primer `compose` tras un reinicio forzado puede recibir `httpx.ReadError`: llama-server resetea la conexión de la petición que quedó huérfana al morir el core. | El turno se reintenta y responde igual, pero la recuperación suma ~25 s de *backoff*. | Reintentar `compose` una vez en el cliente antes de fallar el job (backoff corto), en lugar de esperar el *backoff* de la cola. |
 | H-25 | Baja (prompt) | `ESTADO DE LA CONVERSACIÓN` muestra `Producto en juego (id 19)` aunque el producto resuelto del turno sea otro (id 3); el bloque `PRODUCTO EN JUEGO` sí es correcto. | Ruido para el modelo; no cambió la respuesta en E2E-03, pero puede sesgar el NLU. | **Corregido** el 2026-11-09: el estado usa el id del producto resuelto del turno y solo cae al del contexto cuando el turno no resolvió ninguno. |
 | H-26 | Baja (UX) | `ask_which_product` empieza con “Claro que sí”; ante “¿Tienes neveras?” puede leerse como confirmación de disponibilidad. | Matiz de redacción en un caso de producto inexistente. | **Corregido** el 2026-11-09: la plantilla empieza “Dime cuál producto te interesa…” y el saludo del prompt ya no incluye “Claro que sí”. |
+| H-27 | **Alta** (correctitud) | Descubierto al corregir H-10: `cargador`/`cargadores` resolvía por similitud semántica a **“Moto Eléctrica Cargo”** (coseno 0.558 ≥ `RETRIEVAL_MIN_SEMANTIC_SCORE` 0.4), aunque el catálogo no tiene cargadores. | El bot habría respondido sobre una moto a quien preguntaba por un cargador. | **Corregido** el 2026-11-09: `_lexically_supported` exige que el buscador difuso también reconozca el candidato semántico antes de nombrarlo; la recuperación híbrida sigue rellenando huecos, pero no inventa un producto. Cubierto por 2 tests. |
 
 > H-01 quedó corregido en la BD y en la fuente. El nombre antiguo solo estaba en
 > `seed_demo_data.py` (corregido y commiteado el 2026-11-09); se comprobó que
@@ -524,9 +525,10 @@ completa; el coste fue un reintento (~25 s).
 > **Correcciones del 2026-11-09:** H-07, H-09, H-11, H-20 y H-21 quedaron
 > corregidas y cubiertas por tests; H-08 se descartó al comprobar que las specs
 > venían de `products.description`. Después se corrigieron H-03, H-13 y H-26
-> (redacción), H-12, H-14 y H-25 (contexto/prompt), y H-22 (aviso completo al
-> cliente). El detalle técnico y los reintentos están en **§10**. La suite
-> completa pasa con **195 tests**.
+> (redacción), H-12, H-14 y H-25 (contexto/prompt), H-22 (aviso completo al
+> cliente) y H-04, H-10 y H-27 (NLU, confianza y resolución semántica). El detalle
+> técnico y los reintentos están en **§10**. La suite completa pasa con **199
+> tests**.
 
 ---
 
@@ -820,7 +822,7 @@ escalación mejor puntuada (6) pasó a `ANSWERED`; la 7 se cerró después como
 ### 10.4 Pendiente
 
 - E2E-14 sigue aparcado (§9.1).
-- Mejoras no bloqueantes: H-10 (NLU) y H-23 (precios históricos).
+- Mejoras no bloqueantes: H-23 (precios históricos) y H-02 (transporte incluido).
 - Dashboard H-18/H-19 y los 20 casos de correlación TCP reales.
 
 ### 10.5 Estado de la BD de prueba (decisión del 2026-11-09)
@@ -891,3 +893,52 @@ el guardrail de precio impide repetir un precio ya revertido.
 `test_handler_sends_the_complete_tcp_answer` cubren la respuesta completa, la
 redacción de términos internos, la moneda ajena, el agotado sin redundancia y el
 camino de integración del handler.
+
+### 10.9 NLU: intención, producto y confianza (H-04 / H-10 / H-27)
+
+**Causa raíz.** El contexto del clasificador incluía el bloque `PRODUCTO EN JUEGO`
+y el prompt pedía `datos_faltantes` “que no están en el contexto”. Con un Monitor
+en juego, el modelo interpretó la confianza como “¿el mensaje trata del producto
+del contexto?”:
+
+| Mensaje (con Monitor en juego) | Antes | Después |
+|---|---|---|
+| “¿Tienes neveras?” | `otro` / `null` / `1.0` | `consulta_stock` / `neveras` / `0.95` |
+| “venden refrigeradores” | `otro` / `null` / `1.0` | `consulta_stock` / `refrigeradores` / `0.95` |
+| “el cargador trae garantía” | `consulta_dato` / `Monitor LED 24` / `0.95` | `consulta_dato` / `cargador` / `0.95` |
+| “quiero la tablet” | `consulta_stock` / `tablet` / `0.0` | `comprar` / `tablet` / `0.95` |
+
+| Archivo | Cambio |
+|---|---|
+| `ai/prompts.py` | `NLU_TASK` define cada intención con ejemplos; `producto` es **el nombre que escribió el cliente**, aunque no exista en el catálogo, y `null` solo cuando no nombra ninguno; la rúbrica de confianza mide **solo la intención** y prohíbe `0.0` si el mensaje se puede clasificar. Se añadieron ejemplos para desambiguar “a cómo está” (precio) y “¿es de 1 metro?” (dato). |
+| `ai/pipeline.py` | `_resolve_product`: si `intent.producto` existe pero no resuelve, devuelve `(None, "")` en vez de caer al producto del contexto (H-10). |
+| `ai/pipeline.py` | `_lexically_supported`: un candidato semántico solo se nombra si el buscador difuso también lo reconoce (H-27). “cargador” puntúa 0.558 contra “Moto Eléctrica Cargo” y antes ganaba; ahora se descarta. La recuperación híbrida sigue rellenando huecos reales (tablet, monitor). |
+| `scripts/eval_agent.py` | Métricas `zero_confidence`, `low_confidence` y `confidence_cases`, línea `CONF` y comparación entre reportes. |
+| `tests/golden/nlu.jsonl` | 55 → **58** casos (`n01`–`n03`: productos inexistentes). |
+
+**Resolución real contra la BD (`_resolve_product`, contexto = Monitor id 3):**
+
+| Entrada | Producto | Fuente |
+|---|---|---|
+| “¿Tienes neveras?” | `null` | `''` |
+| “venden refrigeradores” | `null` | `''` |
+| “el cargador trae garantía” | `null` | `''` |
+| “¿Tienes cargadores disponibles?” | `null` | `''` |
+| “¿Tienes el monitor?” | `Monitor LED 24` | `intent` |
+| “¿cuánto cuesta la tablet?” | `Tablet Android 10` | `intent` |
+| “¿Qué garantía trae?” | `Monitor LED 24` | `context` |
+| “¿y el precio?” | `Monitor LED 24` | `context` |
+
+**Goldens (modelo `NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf`):**
+`eval_agent.py --suite nlu --tag h10b` → `intent_ok=58/58`, `zero=0`, `low=0`,
+p50 2607 ms, p95 3027 ms; reporte en `data/logs/eval_h10b.json`. El intento
+intermedio (`--tag h10`) dio 56/58; las dos confusiones (`p02`, `d05`) se
+corrigieron con los ejemplos de precio/dato.
+
+**Tests:** **199 OK**. `ProductResolutionTests` añade
+`test_named_unknown_product_does_not_use_the_context_product`,
+`test_lexical_support_filters_semantically_close_strangers` y
+`test_semantic_candidate_without_lexical_support_is_ignored`;
+`EvalAgentTests` añade `test_summarize_counts_uncalibrated_confidence`; y
+`test_golden_set` valida los 58 casos.
+
