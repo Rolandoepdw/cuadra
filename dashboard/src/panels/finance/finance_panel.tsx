@@ -1,14 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Check, RefreshCw, Send, Wallet, X } from "lucide-react";
+import { Check, RefreshCw, Save, Send, Wallet, X } from "lucide-react";
 import {
   approveSale,
   cancelSale,
   dispatchSale,
   getFinanceSummary,
+  getSalesSettings,
   listLedger,
   listSales,
+  setSalesSettings,
   settleSale,
 } from "@/lib/api";
 import { formatDateTime, formatMoney } from "@/lib/format";
@@ -23,6 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 import { DataTable } from "@/components/data_table";
 import { ConfirmDialog } from "@/components/confirm_dialog";
 
@@ -57,6 +60,15 @@ const MODE_LABELS: Record<SalesMode, string> = {
   assisted: "Asistido",
   hybrid: "Híbrido",
   autonomous: "Autónomo",
+};
+
+const MODE_DESCRIPTIONS: Record<SalesMode, string> = {
+  assisted:
+    "El bot prepara la venta y tú apruebas, despachas y cobras. Es el modo seguro por defecto.",
+  hybrid:
+    "El bot despacha solo si el producto es reciente y el TCP está disponible; si no, pasa a aprobación.",
+  autonomous:
+    "El bot despacha sin aprobación y tú cobras al final. Úsalo solo con el catálogo validado.",
 };
 
 const LEDGER_STATUS_LABELS: Record<LedgerStatus, string> = {
@@ -111,6 +123,29 @@ export function FinancePanel() {
     setActionError(null);
     refresh();
   };
+
+  const salesSettings = useQuery({
+    queryKey: ["sales-settings"],
+    queryFn: getSalesSettings,
+  });
+  const [mode, setMode] = useState<SalesMode>("assisted");
+  useEffect(() => {
+    if (salesSettings.data) setMode(salesSettings.data.mode);
+  }, [salesSettings.data]);
+  const [pendingMode, setPendingMode] = useState<SalesMode | null>(null);
+  const saveMode = useMutation({
+    mutationFn: () => setSalesSettings({ mode }),
+    onSuccess: () => {
+      setActionError(null);
+      setPendingMode(null);
+      qc.invalidateQueries({ queryKey: ["sales-settings"] });
+      refresh();
+    },
+    onError: (error) => {
+      setPendingMode(null);
+      onActionError(error);
+    },
+  });
 
   const approve = useMutation({
     mutationFn: approveSale,
@@ -405,6 +440,40 @@ export function FinancePanel() {
         </Card>
       </div>
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Modo de venta</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+            <div className="flex w-full flex-col gap-2 sm:w-64">
+              <Label>Modo</Label>
+              <Select
+                value={mode}
+                onChange={(event) => setMode(event.target.value as SalesMode)}
+              >
+                {(Object.keys(MODE_LABELS) as SalesMode[]).map((value) => (
+                  <option key={value} value={value}>
+                    {MODE_LABELS[value]}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <Button
+              onClick={() => setPendingMode(mode)}
+              disabled={
+                salesSettings.isLoading ||
+                !salesSettings.data ||
+                mode === salesSettings.data.mode
+              }
+            >
+              <Save /> Guardar modo
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">{MODE_DESCRIPTIONS[mode]}</p>
+        </CardContent>
+      </Card>
+
       {!!data?.sales_needs_operator && (
         <p className="text-sm text-amber-600">
           {data.sales_needs_operator} venta(s) requieren tu decisión (TCP agotado o error de despacho).
@@ -498,6 +567,21 @@ export function FinancePanel() {
           empty={ledger.isLoading ? "Cargando…" : "Todavía no hay comisiones."}
         />
       </section>
+
+      <ConfirmDialog
+        open={pendingMode !== null}
+        onOpenChange={(open) => !open && setPendingMode(null)}
+        title={`Cambiar modo a ${pendingMode ? MODE_LABELS[pendingMode] : ""}`}
+        description={
+          pendingMode
+            ? `${MODE_DESCRIPTIONS[pendingMode]} El cambio aplica a las ventas nuevas; las que ya están abiertas siguen su flujo.`
+            : undefined
+        }
+        confirmLabel="Cambiar modo"
+        destructive={pendingMode === "autonomous"}
+        loading={saveMode.isPending}
+        onConfirm={() => saveMode.mutate()}
+      />
 
       <ConfirmDialog
         open={cancelTarget !== null}

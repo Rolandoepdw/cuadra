@@ -4,8 +4,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from cuadra import db
 from cuadra.api.auth import require_pin
-from cuadra.api.models import BroadcastStrategyIn, DeliverySettingsIn
-from cuadra.domain import broadcasts, events, settings
+from cuadra.api.models import (
+    BroadcastStrategyIn,
+    DeliverySettingsIn,
+    SalesSettingsIn,
+)
+from cuadra.domain import broadcasts, events, sales, settings
 
 router = APIRouter(prefix="/api/settings", dependencies=[Depends(require_pin)])
 
@@ -82,6 +86,34 @@ def set_delivery_settings(payload: DeliverySettingsIn) -> dict:
             details={"transport_policy": value},
         )
         return {"transport_policy": value}
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@router.get("/sales")
+def get_sales_settings() -> dict:
+    conn = db.connect()
+    try:
+        return {"mode": sales.sale_mode(conn)}
+    finally:
+        conn.close()
+
+
+@router.put("/sales")
+def set_sales_settings(payload: SalesSettingsIn) -> dict:
+    conn = db.connect()
+    try:
+        value = sales.set_sale_mode(conn, payload.mode)
+        events.log(
+            conn,
+            "dashboard",
+            "sales_settings_saved",
+            entity="settings",
+            details={"mode": value},
+        )
+        return {"mode": value}
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     finally:

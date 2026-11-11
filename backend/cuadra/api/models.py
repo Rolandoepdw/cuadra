@@ -135,6 +135,12 @@ class DeliverySettingsIn(BaseModel):
     transport_policy: Literal["coordinated", "included", "not_included"]
 
 
+class SalesSettingsIn(BaseModel):
+    """Fase 3 pending: operator-selectable sales mode."""
+
+    mode: Literal["assisted", "hybrid", "autonomous"]
+
+
 class BroadcastIn(BaseModel):
     channel: Literal["telegram", "whatsapp"] = "telegram"
     template: str = Field(min_length=1, max_length=4096)

@@ -14,7 +14,7 @@ import json
 import re
 from datetime import datetime, timezone
 
-from cuadra.domain import catalog, clock, events
+from cuadra.domain import catalog, clock, events, settings
 from cuadra.domain.errors import Invalid, NotFound
 
 SALE_STATUSES = (
@@ -122,6 +122,18 @@ def hybrid_max_age_hours(conn) -> float:
         return float(row["value"]) if row is not None else 24.0
     except Exception:  # noqa: BLE001 - pre-migration or malformed setting
         return 24.0
+
+
+def set_sale_mode(conn, value: str) -> str:
+    """Persist the operating mode chosen from the dashboard (Fase 3 pending).
+
+    `sale_mode` already falls back to `assisted` on an unknown stored value, so
+    the API rejects anything outside SALES_MODES instead of storing garbage.
+    """
+    if value not in SALES_MODES:
+        raise ValueError(f"invalid sales mode: {value}")
+    settings.set(conn, MODE_KEY, value)
+    return value
 
 
 # ---------------------------------------------------------------- commission

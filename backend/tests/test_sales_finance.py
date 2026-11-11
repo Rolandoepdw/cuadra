@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from cuadra import config, db
 from cuadra.ai import memory
-from cuadra.domain import catalog, clock, conversations, sales
+from cuadra.domain import catalog, clock, conversations, sales, settings
 
 
 class ClockTests(unittest.TestCase):
@@ -332,6 +332,29 @@ class StateMachineTests(Phase3TestCase):
         )
         self.conn.commit()
         self.assertEqual(self.create_sale()["status"], "PENDING_APPROVAL")
+
+
+class SalesModeSettingsTests(Phase3TestCase):
+    """Fase 3 pending: the dashboard can change `sales.mode` safely."""
+
+    def test_default_mode_is_assisted(self):
+        self.assertEqual(sales.sale_mode(self.conn), "assisted")
+        self.assertEqual(sales.summary(self.conn)["mode"], "assisted")
+
+    def test_set_mode_persists_and_reaches_the_summary(self):
+        self.assertEqual(sales.set_sale_mode(self.conn, "hybrid"), "hybrid")
+        self.assertEqual(sales.sale_mode(self.conn), "hybrid")
+        self.assertEqual(sales.summary(self.conn)["mode"], "hybrid")
+
+    def test_invalid_mode_is_rejected_without_changing_the_setting(self):
+        sales.set_sale_mode(self.conn, "assisted")
+        with self.assertRaises(ValueError):
+            sales.set_sale_mode(self.conn, "free")
+        self.assertEqual(sales.sale_mode(self.conn), "assisted")
+
+    def test_unknown_stored_mode_falls_back_to_assisted(self):
+        settings.set(self.conn, sales.MODE_KEY, "manual")
+        self.assertEqual(sales.sale_mode(self.conn), "assisted")
 
 
 class TcpAckTests(Phase3TestCase):

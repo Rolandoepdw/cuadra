@@ -365,6 +365,10 @@ export type SaleStatus =
 export type SalesMode = "assisted" | "hybrid" | "autonomous";
 export type LedgerStatus = "PENDING" | "COLLECTED" | "VOID";
 
+export interface SalesSettings {
+  mode: SalesMode;
+}
+
 export interface Sale {
   id: number;
   order_code: string | null;

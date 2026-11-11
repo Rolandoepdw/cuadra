@@ -32,6 +32,7 @@ import type {
   ProductPatch,
   Sale,
   SalesPage,
+  SalesSettings,
   Summary,
   Supplier,
   SupplierIn,
@@ -260,6 +261,15 @@ export const getDeliverySettings = () =>
 
 export const setDeliverySettings = (body: DeliverySettings) =>
   request<DeliverySettings>("/api/settings/delivery", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+
+export const getSalesSettings = () =>
+  request<SalesSettings>("/api/settings/sales");
+
+export const setSalesSettings = (body: SalesSettings) =>
+  request<SalesSettings>("/api/settings/sales", {
     method: "PUT",
     body: JSON.stringify(body),
   });
