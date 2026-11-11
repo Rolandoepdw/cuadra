@@ -11,6 +11,7 @@ The LLM never decides by free generation what to answer for the common cases —
 the pipeline does (doc 01 §6). Here we only talk to the model and validate output.
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -24,6 +25,9 @@ from cuadra.ai import prompts, tracing
 from cuadra.domain import settings
 
 log = logging.getLogger("cuadra.llm")
+
+# H-24: short pause before retrying a compose whose TCP connection was reset.
+COMPOSE_RETRY_DELAY_S = 1.0
 
 
 INTENTS = (
@@ -289,7 +293,17 @@ async def compose(
         *base_messages,
         {"role": "user", "content": f"{instruction}\n\nMENSAJE DEL CLIENTE:\n{last_message}"},
     ]
-    return await chat(messages, purpose="compose", conversation_id=conversation_id)
+    try:
+        return await chat(messages, purpose="compose", conversation_id=conversation_id)
+    except LLMUnavailable as exc:
+        # H-24: after a hard restart the server may reset the connection of the
+        # request orphaned by the dead core. One short retry avoids paying the
+        # job queue's long backoff for a transport hiccup.
+        if not isinstance(exc.__cause__, httpx.TransportError):
+            raise
+        log.warning("compose transport error (%s); retrying once", exc.__cause__)
+        await asyncio.sleep(COMPOSE_RETRY_DELAY_S)
+        return await chat(messages, purpose="compose", conversation_id=conversation_id)
 
 
 async def summarize(

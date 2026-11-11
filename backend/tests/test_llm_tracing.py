@@ -15,6 +15,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import httpx
+
 from cuadra import config, db
 from cuadra.ai import llm, redact, tracing
 
@@ -190,6 +192,56 @@ class TraceTestCase(unittest.TestCase):
         self.assertEqual((row["prompt_tokens"], row["output_tokens"]), (12, 4))
         self.assertIsNotNone(row["latency_ms"])
         self.assertEqual(row["completion_text"], "respuesta")
+
+
+class ComposeRetryTests(unittest.TestCase):
+    """H-24: one short retry when the model server resets the connection."""
+
+    def _unavailable(self, cause: BaseException) -> llm.LLMUnavailable:
+        try:
+            raise llm.LLMUnavailable("llm request failed") from cause
+        except llm.LLMUnavailable as error:
+            return error
+
+    def test_transport_error_is_retried_once(self):
+        chat = AsyncMock(
+            side_effect=[self._unavailable(httpx.ReadError("reset")), "respuesta"]
+        )
+        with (
+            patch.object(llm, "chat", chat),
+            patch.object(llm, "COMPOSE_RETRY_DELAY_S", 0),
+        ):
+            reply = asyncio.run(llm.compose([], "hola"))
+
+        self.assertEqual(reply, "respuesta")
+        self.assertEqual(chat.await_count, 2)
+
+    def test_transport_error_is_not_retried_forever(self):
+        chat = AsyncMock(
+            side_effect=[
+                self._unavailable(httpx.ReadError("reset")),
+                self._unavailable(httpx.ReadError("reset again")),
+            ]
+        )
+        with (
+            patch.object(llm, "chat", chat),
+            patch.object(llm, "COMPOSE_RETRY_DELAY_S", 0),
+        ):
+            with self.assertRaises(llm.LLMUnavailable):
+                asyncio.run(llm.compose([], "hola"))
+
+        self.assertEqual(chat.await_count, 2)
+
+    def test_non_transport_errors_are_not_retried(self):
+        chat = AsyncMock(side_effect=self._unavailable(ValueError("bad request")))
+        with (
+            patch.object(llm, "chat", chat),
+            patch.object(llm, "COMPOSE_RETRY_DELAY_S", 0),
+        ):
+            with self.assertRaises(llm.LLMUnavailable):
+                asyncio.run(llm.compose([], "hola"))
+
+        self.assertEqual(chat.await_count, 1)
 
 
 if __name__ == "__main__":
