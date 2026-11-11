@@ -32,6 +32,46 @@ try {
         throw "No encuentro el entorno virtual en $python. Crea el venv en backend\.venv primero."
     }
 
+    # Never launch a second core. The instance guard would reject it and print a
+    # raw traceback, and in -Background mode the health poll would then report a
+    # success that belongs to the previous process. Check health first, then the
+    # lock file so a core that is still starting is reported instead of cloned.
+    $healthUrl = "http://127.0.0.1:$Port/api/health"
+    $coreIsUp = $false
+    try {
+        # The health endpoint inspects the LLM/GPU and can take ~5 s on this
+        # laptop, so a 2 s probe would misread a healthy core as missing.
+        $resp = Invoke-WebRequest -Uri $healthUrl -Headers @{ "X-PIN" = "0000" } -UseBasicParsing -TimeoutSec 10
+        $coreIsUp = ($resp.StatusCode -eq 200)
+    } catch { }
+
+    $lockPath = Join-Path $backend "data\cuadra.lock"
+    if ($coreIsUp) {
+        $holderPid = "?"
+        if (Test-Path $lockPath) {
+            $firstLine = Get-Content $lockPath -TotalCount 1 -ErrorAction SilentlyContinue
+            if ($firstLine) { $holderPid = $firstLine.Trim() }
+        }
+        Write-Host ""
+        Write-Host "  Ya hay un cuadra-core respondiendo en http://127.0.0.1:$Port (pid $holderPid)." -ForegroundColor Yellow
+        Write-Host "  No arranco una segunda instancia." -ForegroundColor Yellow
+        Write-Host "  Para reiniciarlo:  .\stop_cuadra.ps1  y luego este script." -ForegroundColor DarkGray
+        Write-Host ""
+        return
+    }
+    if (Test-Path $lockPath) {
+        $lockPid = 0
+        $firstLine = Get-Content $lockPath -TotalCount 1 -ErrorAction SilentlyContinue
+        [void][int]::TryParse("$firstLine".Trim(), [ref]$lockPid)
+        if ($lockPid -gt 0 -and (Get-Process -Id $lockPid -ErrorAction SilentlyContinue)) {
+            Write-Host ""
+            Write-Host "  Ya hay un cuadra-core arrancando o activo (pid $lockPid), pero todavía no responde en el puerto $Port." -ForegroundColor Yellow
+            Write-Host "  Espera unos segundos; si no responde, usa .\stop_cuadra.ps1 y reintenta." -ForegroundColor DarkGray
+            Write-Host ""
+            return
+        }
+    }
+
     $webIndex = Join-Path $backend "cuadra\web_dashboard\index.html"
     if (-not (Test-Path $webIndex)) {
         Write-Host "El dashboard no está compilado. Ejecutando build_dashboard.ps1..." -ForegroundColor Yellow
@@ -80,7 +120,7 @@ try {
         for ($i = 0; $i -lt 30; $i++) {
             Start-Sleep -Seconds 1
             try {
-                $resp = Invoke-WebRequest -Uri $health -Headers @{ "X-PIN" = "0000" } -UseBasicParsing -TimeoutSec 3
+                $resp = Invoke-WebRequest -Uri $health -Headers @{ "X-PIN" = "0000" } -UseBasicParsing -TimeoutSec 10
                 if ($resp.StatusCode -eq 200) { $ready = $true; break }
             } catch { }
         }
