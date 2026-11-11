@@ -742,10 +742,10 @@ estos lotes.
 - 20 casos de correlación TCP con mensajes reales anonimizados.
 - Set etiquetado de slots (F1) y de ventas end-to-end (≥ 80 %).
 - p95 y recall@3 con tráfico real.
-- `sale_followup`.
 - *(Cerrado el 2026-11-11: selector de `sales.mode` en Finanzas, ver **§10.15**;
   aviso al TCP al cancelar, ver **§10.16**; aviso al cliente al cancelar, ver
-  **§10.18**.)*
+  **§10.18**; seguimiento de ventas (`sale_followup`) en el dashboard, ver
+  **§10.19**. El recordatorio automático al cliente queda para la v2.)*
 
 ### 9.1 ✅ Ejecutado — E2E-14 (cierre por inactividad)
 
@@ -1196,6 +1196,45 @@ la conversación 4 **sin** fila en `customer_channels`, y la venta `V-000005`
 | Ningún cliente real fue molestado | log `no channel identifier for conversation 4`: el envío termina sin tocar Telegram |
 
 **Tests:** **235 OK** (6 nuevos). El dashboard compiló con `npm run build`.
+
+### 10.19 Seguimiento de ventas (`sale_followup`, solo dashboard)
+
+El plan de la Fase 3 nombraba un job `sale_followup`, pero el documento `02` no
+define su contenido y D6-A prohíbe avisar al operador por Telegram. Se cierra
+como recordatorio **exclusivo del panel**: el operador ve qué ventas llevan
+demasiado tiempo abiertas y decide. **No se envía nada al cliente.**
+
+**Política:** se listan las ventas en estados abiertos (`PENDING_APPROVAL`,
+`PENDING_DISPATCH`, `DISPATCHED`, `CONFIRMED`) y en `NEEDS_OPERATOR` cuyo
+`updated_at` supera el umbral (24 h por defecto, configurable en la UI: 12, 24,
+48 o 72 h). Se ordenan de más antigua a más reciente y el cálculo usa la hora
+UTC de SQLite, igual que el resto de las fechas.
+
+| Archivo | Cambio |
+|---|---|
+| `domain/sales.py` | `FOLLOWUP_STATUSES` y `followups(conn, hours=24, limit=50)`: ventas estancadas con `product_name`, `supplier_name` y `age_hours`. |
+| `api/routes_finance.py` | `GET /api/finance/followups?hours=&limit=` devuelve `{hours, items}`. |
+| `dashboard/src/types/api.ts`, `lib/api.ts` | Tipos `SaleFollowup`/`FollowupPage` y cliente `listFollowups`. |
+| `dashboard/src/panels/finance/finance_panel.tsx` | Card **Seguimiento** con selector de umbral y lista de ventas; se refresca cada 15 s. El texto aclara que no se escribe al cliente. |
+| `tests/test_sales_finance.py` | `FollowupTests` (6): venta reciente fuera, venta estancada con edad y enlaces, canceladas fuera, `NEEDS_OPERATOR` dentro, umbral y orden, contrato de la API. |
+
+**Evidencia en vivo (2026-11-11, BD real, core reiniciado):** la venta
+`V-000006` (producto desechable 90, conversación 4 sin destino real) se creó y
+se envejeció 30 h en `updated_at`:
+
+| Comprobación | Evidencia |
+|---|---|
+| Aparece con el umbral de 24 h | `GET /api/finance/followups?hours=24` → 1 item, `status PENDING_APPROVAL`, `age_hours 30.0`, `product_name` y `supplier_name` resueltos |
+| El umbral la excluye | `?hours=48` → 0 items |
+| Deja de aparecer al cerrarla | `POST /api/finance/cancel/6` → `CANCELLED`; `?hours=24` → 0 items |
+| Sin efectos colaterales | El aviso de cancelación almacenó `messages` 82 (`sale-cancelled-6`) y completó los jobs 150/151; ningún cliente real fue contactado |
+
+**Tests:** **241 OK** (6 nuevos). El dashboard compiló con `npm run build`.
+
+**Para la v2:** recordatorio automático al cliente por el *outbox* cuando una
+venta lleve X horas sin movimiento. Antes de implementarlo hay que definir el
+texto, el umbral, la ventana horaria y la política anti-spam (una sola vez por
+venta, idempotente por `external_id`).
 
 
 

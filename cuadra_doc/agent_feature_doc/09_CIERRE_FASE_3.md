@@ -62,8 +62,9 @@ Settings nuevos (en `settings`, no en `.env`):
 - **Resumen sin `domain/finance.py`**: las métricas viven en `sales.summary()` para
   no duplicar consultas ni abrir una capa vacía. El panel consume el mismo contrato
   descrito en `02` §7.1.
-- **Sin `sale_followup`**: el documento `02` no define su comportamiento y D6-A
-  prohíbe notificar al operador por Telegram. El recordatorio queda en el dashboard.
+- **`sale_followup` sin job**: el documento `02` no define el contenido del job y
+  D6-A prohíbe notificar al operador por Telegram. El recordatorio vive solo en
+  el dashboard (`GET /api/finance/followups` y la card **Seguimiento**).
 
 ---
 
@@ -197,8 +198,10 @@ settings existen y `PRAGMA quick_check` devuelve `ok`. **La base real no se toc�
 - **Aviso al cliente al cancelar**: implementado el 2026-11-11 (bitácora §10.18).
   Siempre que la venta tenga conversación, el cliente recibe `sale_cancelled` por
   el *outbox* de respuestas; el mensaje es idempotente por venta.
-- **Sin `sale_followup`**: no hay recordatorio automático porque `02` no define su
-  contenido y D6-A mantiene las alertas en el dashboard.
+- **`sale_followup` solo en el dashboard**: la card **Seguimiento** lista las
+  ventas abiertas sin cambios en 12/24/48/72 h (bitácora §10.19). No hay
+  recordatorio automático al cliente; queda anotado para la v2, donde habrá que
+  definir texto, umbral y política anti-spam.
 - **Cancelar después de `DELIVERED`**: no se permite por API; requiere decisión
   manual del operador, tal como pide §5. La venta entregada ya movió stock físico.
 - **Conversión de moneda**: no hay tabla de tasas. Las comisiones cruzadas quedan
