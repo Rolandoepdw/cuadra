@@ -517,7 +517,7 @@ completa; el coste fue un reintento (~25 s).
 | H-21 | **Alta** (correctitud) | `normalize_extraction` descarta la moneda `MLC` pero conserva el `price`; el `new_state` de la mutación 3 guarda **4200 USD** aunque el TCP dijo 4200 MLC. Aprobar esa revisión escribiría 4200 USD. Además, `approve` reanuda al cliente pero `reject` y `revert` no le avisan. | Aprobar una revisión MLC corrompe el precio; un rechazo o un undo deja al cliente con un dato viejo sin corrección. | **Corregido** el 2026-11-09: si la moneda es inválida se descarta también el precio; `approve` valida el estado (`_validate_state`) y rechaza monedas no soportadas; `reject`/`revert` avisan al cliente (`notify_mutation_outcome`) y dejan evento `catalog_mutation_*_notified`. Cubierto por 6 tests. |
 | H-22 | Media (UX) | El resumen que recibe el cliente es una paráfrasis del modelo y pierde parte de la respuesta del TCP: E2E-06 omitió recetario y garantía; E2E-05 omitió el maletín. | El cliente preguntó por varios datos y solo recibe uno. | **Corregido** el 2026-11-09: el aviso al cliente usa la respuesta completa del TCP, saneada (sin códigos `[E-####]`, sin frases con términos internos y sin monedas ajenas al catálogo); el resumen del extractor queda como respaldo. El prompt del extractor exige cubrir todos los datos. Cubierto por 6 tests. |
 | H-23 | Media (correctitud) | El historial conserva los mensajes de escalación con precios que luego cambian (p. ej. el undo de 88 → 95). Ante un saludo, el modelo copió “el precio baja de 95 a 88 USD”; el guardrail lo bloqueó 2 veces y cayó al *fallback* de la Aspiradora. | Respuesta equivocada a un saludo, 2 llamadas extra (~5 s) y el *fallback* reutiliza el producto del contexto (**H-12**). | **Corregido** el 2026-11-09: `ContextBuilder` redacta del historial del bot cualquier monto que no sea un precio vigente del contexto (`[precio anterior]`), declara `PRECIOS VIGENTES` en el sistema y deja intactos los mensajes del cliente. Cubierto por 4 tests. |
-| H-24 | Baja (resiliencia) | El primer `compose` tras un reinicio forzado puede recibir `httpx.ReadError`: llama-server resetea la conexión de la petición que quedó huérfana al morir el core. | El turno se reintenta y responde igual, pero la recuperación suma ~25 s de *backoff*. | Reintentar `compose` una vez en el cliente antes de fallar el job (backoff corto), en lugar de esperar el *backoff* de la cola. |
+| H-24 | Baja (resiliencia) | El primer `compose` tras un reinicio forzado puede recibir `httpx.ReadError`: llama-server resetea la conexión de la petición que quedó huérfana al morir el core. | El turno se reintenta y responde igual, pero la recuperación suma ~25 s de *backoff*. | **Corregido** el 2026-11-11: `llm.compose` reintenta una vez tras 1 s si la causa es un `httpx.TransportError`; cualquier otro error falla al primer intento. Cubierto por 3 tests (ver §10.20). |
 | H-25 | Baja (prompt) | `ESTADO DE LA CONVERSACIÓN` muestra `Producto en juego (id 19)` aunque el producto resuelto del turno sea otro (id 3); el bloque `PRODUCTO EN JUEGO` sí es correcto. | Ruido para el modelo; no cambió la respuesta en E2E-03, pero puede sesgar el NLU. | **Corregido** el 2026-11-09: el estado usa el id del producto resuelto del turno y solo cae al del contexto cuando el turno no resolvió ninguno. |
 | H-26 | Baja (UX) | `ask_which_product` empieza con “Claro que sí”; ante “¿Tienes neveras?” puede leerse como confirmación de disponibilidad. | Matiz de redacción en un caso de producto inexistente. | **Corregido** el 2026-11-09: la plantilla empieza “Dime cuál producto te interesa…” y el saludo del prompt ya no incluye “Claro que sí”. |
 | H-27 | **Alta** (correctitud) | Descubierto al corregir H-10: `cargador`/`cargadores` resolvía por similitud semántica a **“Moto Eléctrica Cargo”** (coseno 0.558 ≥ `RETRIEVAL_MIN_SEMANTIC_SCORE` 0.4), aunque el catálogo no tiene cargadores. | El bot habría respondido sobre una moto a quien preguntaba por un cargador. | **Corregido** el 2026-11-09: `_lexically_supported` exige que el buscador difuso también reconozca el candidato semántico antes de nombrarlo; la recuperación híbrida sigue rellenando huecos, pero no inventa un producto. Cubierto por 2 tests. |
@@ -1235,6 +1235,33 @@ se envejeció 30 h en `updated_at`:
 venta lleve X horas sin movimiento. Antes de implementarlo hay que definir el
 texto, el umbral, la ventana horaria y la política anti-spam (una sola vez por
 venta, idempotente por `external_id`).
+
+### 10.20 Reintento de `compose` tras un reinicio (H-24)
+
+En E2E-12 el primer `compose` después de matar el core recibió
+`httpx.ReadError`: llama-server reseteaba la conexión de la petición que quedó
+huérfana al morir el proceso. El job se recuperaba igual, pero pagaba el
+*backoff* de la cola (~25 s) y el cliente esperaba de más.
+
+**Política:** `llm.compose` reintenta **una sola vez**, tras 1 s, únicamente si
+la excepción envuelta por `LLMUnavailable` es un `httpx.TransportError` (incluye
+`ReadError`, `ConnectError` y `RemoteProtocolError`). Un error de validación, un
+4xx o un fallo del propio código falla al primer intento: no se oculta un
+problema real. Cada intento queda registrado en `llm_calls`, así que el fallo y
+el éxito del reintento son auditables.
+
+| Archivo | Cambio |
+|---|---|
+| `ai/llm.py` | `COMPOSE_RETRY_DELAY_S = 1.0`; `compose` captura `LLMUnavailable`, comprueba `__cause__` y reintenta una vez el mismo `chat`. |
+| `tests/test_llm_tracing.py` | `ComposeRetryTests` (3): el error de transporte se reintenta, el segundo fallo se propaga (sin bucle) y un error no-transporte no se reintenta. |
+
+**Verificación:** los tests reproducen el `httpx.ReadError` observado en vivo y
+comprueban el número exacto de llamadas. No se repitió el corte del core en vivo
+para no interrumpir el servicio; la evidencia del fallo original está en
+E2E-12 y en `llm_calls` de esa prueba.
+
+**Tests:** **244 OK** (3 nuevos).
+
 
 
 
