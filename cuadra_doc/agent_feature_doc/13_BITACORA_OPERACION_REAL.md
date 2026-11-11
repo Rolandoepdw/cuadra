@@ -742,10 +742,10 @@ estos lotes.
 - 20 casos de correlación TCP con mensajes reales anonimizados.
 - Set etiquetado de slots (F1) y de ventas end-to-end (≥ 80 %).
 - p95 y recall@3 con tráfico real.
-- `sale_followup` y el aviso al cliente cuando el operador cancela
-  (`sale_cancelled` existe en las plantillas pero nadie lo envía).
+- `sale_followup`.
 - *(Cerrado el 2026-11-11: selector de `sales.mode` en Finanzas, ver **§10.15**;
-  aviso al TCP al cancelar, ver **§10.16**.)*
+  aviso al TCP al cancelar, ver **§10.16**; aviso al cliente al cancelar, ver
+  **§10.18**.)*
 
 ### 9.1 ✅ Ejecutado — E2E-14 (cierre por inactividad)
 
@@ -1128,8 +1128,8 @@ para no escribirle a un TCP real se creó el proveedor desechable
 | `V-000003` en `PENDING_APPROVAL`, cancelada por la API | `CANCELLED`; **0** jobs `notify_tcp_cancel` para esa venta. |
 
 La ruta de envío real (adaptador, target y texto) queda cubierta por el test con
-adaptador falso, igual que el despacho. El aviso al cliente al cancelar sigue
-pendiente: la plantilla `sale_cancelled` existe pero nadie la envía.
+adaptador falso, igual que el despacho. El aviso al cliente al cancelar se
+implementó después: ver **§10.18**.
 
 **Tests:** **229 OK** (9 nuevos). El dashboard compiló con `npm run build`.
 
@@ -1157,6 +1157,46 @@ con `-Port 8399` → detecta el lock vivo y avisa; tras `stop` + `start
 
 **Tests:** comprobación manual de los tres caminos (el arranque no tiene tests
 unitarios).
+
+### 10.18 Aviso al cliente al cancelar (pendiente de Fase 3)
+
+Cancelar una venta avisaba al TCP (§10.16), pero el cliente se quedaba sin
+saber que su pedido ya no existía. Ahora recibe un mensaje con el código de la
+orden por el mismo *outbox* que el resto de las respuestas.
+
+**Política:** se avisa **siempre** que la venta tenga `conversation_id`, sin
+importar el estado previo. Se reutiliza el job `send_message` (prioridad de
+cliente) en vez de enviar desde el handler de cancelación, para conservar el
+*pacing*, el reintento y la recuperación tras un reinicio. El mensaje se
+persiste con `external_id = sale-cancelled-{sale_id}`: la clave única parcial
+de `messages` hace idempotente un reintento y `_ensure_send_job` recupera el
+envío si el job se perdió en una caída.
+
+| Archivo | Cambio |
+|---|---|
+| `api/routes_finance.py` | El cancel encola `notify_sale_cancelled` (prioridad `PRIORITY_CUSTOMER`) si la venta tiene conversación. |
+| `ai/handlers.py` | `notify_sale_cancelled`: revalida `CANCELLED` y la conversación, inserta un único `OUTBOUND` con `external_id` determinista, registra `sale_cancelled_notified` si es nuevo y asegura el job `send_message`. |
+| `ai/prompts.py` | Se usa la plantilla `sale_cancelled`, que ya existía. |
+| `domain/events.py` | `sale_cancelled_notified` en `CONVERSATION_EVENTS`. |
+| `dashboard/src/panels/finance/finance_panel.tsx` | El diálogo de cancelación avisa de que se notificará al cliente (y al TCP si la venta ya estaba despachada o confirmada). |
+| `tests/test_sales_finance.py` | `CancelCustomerNoticeTests` (6): encolado con conversación y sin encolado sin ella, 1 mensaje + 1 job, recuperación del job perdido, ignorado si no está cancelada o no tiene conversación. |
+
+**Evidencia en vivo (2026-11-11, BD real, core reiniciado con el código nuevo):**
+para no escribirle a un cliente real se creó `E2E-CANCEL-CLIENT2` (customer 4),
+la conversación 4 **sin** fila en `customer_channels`, y la venta `V-000005`
+(producto desechable 90). La cancelación se hizo por
+`POST /api/finance/cancel/5` con motivo `E2E aviso al cliente`.
+
+| Comprobación | Evidencia |
+|---|---|
+| La API encola el aviso | job 148 `notify_sale_cancelled` **COMPLETED** (prioridad 10), `payload {"sale_id": 5}` |
+| Se crea un único mensaje | `messages` 81 `OUTBOUND`, texto "Tu pedido V-000005 quedó cancelado. Si quieres, miramos otra opción.", `external_id = sale-cancelled-5` |
+| Se encola el envío real | job 149 `send_message` **COMPLETED**, `payload {"conversation_id": 4, "message_id": 81}` |
+| Se registra el evento | evento 460 `sale_cancelled_notified` (`message_id: 81`) |
+| Ningún cliente real fue molestado | log `no channel identifier for conversation 4`: el envío termina sin tocar Telegram |
+
+**Tests:** **235 OK** (6 nuevos). El dashboard compiló con `npm run build`.
+
 
 
 

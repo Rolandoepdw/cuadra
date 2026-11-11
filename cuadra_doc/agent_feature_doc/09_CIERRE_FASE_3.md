@@ -194,6 +194,9 @@ settings existen y `PRAGMA quick_check` devuelve `ok`. **La base real no se toc�
 - **Notificación al TCP al cancelar**: implementada el 2026-11-11 (bitácora
   §10.16). Se avisa por Telegram solo si la orden ya había llegado al TCP
   (`DISPATCHED`/`CONFIRMED`); antes del despacho no hay nada que cancelar.
+- **Aviso al cliente al cancelar**: implementado el 2026-11-11 (bitácora §10.18).
+  Siempre que la venta tenga conversación, el cliente recibe `sale_cancelled` por
+  el *outbox* de respuestas; el mensaje es idempotente por venta.
 - **Sin `sale_followup`**: no hay recordatorio automático porque `02` no define su
   contenido y D6-A mantiene las alertas en el dashboard.
 - **Cancelar después de `DELIVERED`**: no se permite por API; requiere decisión
