@@ -208,4 +208,11 @@ TEMPLATES = {
         "• AGOTADO   → no tienes disponibilidad\n"
         "• ENTREGADO → ya la entregaste y cobraste"
     ),
+    "tcp_cancel": (
+        "❌ ORDEN CANCELADA — Ref: {order_code}\n\n"
+        "Producto: {producto}\n"
+        "Cantidad: {cantidad}\n"
+        "Motivo: {motivo}\n\n"
+        "No la prepares ni la entregues. No hace falta que respondas."
+    ),
 }

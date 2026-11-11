@@ -587,7 +587,12 @@ export function FinancePanel() {
         open={cancelTarget !== null}
         onOpenChange={(open) => !open && setCancelTarget(null)}
         title={`Cancelar ${cancelTarget?.order_code ?? "venta"}`}
-        description="Se libera el stock reservado y la comisión queda anulada. No se puede deshacer."
+        description={
+          cancelTarget &&
+          (cancelTarget.status === "DISPATCHED" || cancelTarget.status === "CONFIRMED")
+            ? "Se libera el stock reservado y la comisión queda anulada. También se avisará al TCP para que no la prepare. No se puede deshacer."
+            : "Se libera el stock reservado y la comisión queda anulada. No se puede deshacer."
+        }
         confirmLabel="Cancelar venta"
         destructive
         loading={cancel.isPending}

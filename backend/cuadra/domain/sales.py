@@ -36,6 +36,9 @@ OPEN_STATUSES = (
     "CONFIRMED",
 )
 BEFORE_DELIVERY = OPEN_STATUSES + ("NEEDS_OPERATOR",)
+# Statuses in which the TCP already has the order in its chat. Only those need
+# a cancellation notice: before a successful dispatch there is nothing to undo.
+TCP_AWARE_STATUSES = ("DISPATCHED", "CONFIRMED")
 COMMISSION_TYPES = ("FIXED", "PERCENT")
 SALES_MODES = ("assisted", "hybrid", "autonomous")
 

@@ -651,6 +651,183 @@ class SupplierPeerTests(Phase3TestCase):
         self.assertEqual(adapter.sent[0][0], "777888999")
         self.assertIn(sale["order_code"], adapter.sent[0][1])
 
+    def test_dispatch_pacing_parks_the_job_instead_of_flagging_the_operator(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from cuadra.ai import handlers, queue
+        from cuadra.channels import telegram_user
+
+        sale = self.create_sale()
+        sales.approve(self.conn, sale["id"])
+
+        with (
+            patch.object(telegram_user, "available", return_value=True),
+            patch.object(
+                telegram_user, "resolve_peer", new=AsyncMock(return_value="111222333")
+            ),
+            patch.object(handlers.channels, "get_adapter", return_value=object()),
+            patch.object(
+                handlers,
+                "_respect_userbot_gap",
+                side_effect=queue.RateLimited(
+                    30, "userbot send gap", account=False, penalize=False
+                ),
+            ),
+        ):
+            with self.assertRaises(queue.RateLimited):
+                asyncio.run(handlers.dispatch_sale({"sale_id": sale["id"]}))
+
+        updated = sales.get_sale(self.conn, sale["id"])
+        self.assertEqual(updated["status"], "PENDING_DISPATCH")
+
+
+class CancelTcpNoticeTests(Phase3TestCase):
+    """The TCP is told when an order already in its chat is cancelled."""
+
+    def _cancel_jobs(self) -> int:
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE type = 'notify_tcp_cancel'"
+        ).fetchone()[0]
+
+    def _event_count(self, event_type: str) -> int:
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE type = ?", (event_type,)
+        ).fetchone()[0]
+
+    def _dispatched_sale(self):
+        sale = self.create_sale()
+        self.dispatch(sale["id"])
+        return sale
+
+    def _cancelled_dispatched_sale(self, reason="cliente cambió de idea"):
+        sale = self._dispatched_sale()
+        sales.cancel(self.conn, sale["id"], reason)
+        return sale
+
+    def test_cancelling_a_dispatched_sale_queues_the_notice(self):
+        from cuadra.api import routes_finance
+
+        sale = self._dispatched_sale()
+        cancelled = routes_finance.cancel_sale(sale["id"])
+
+        self.assertEqual(cancelled["status"], "CANCELLED")
+        self.assertEqual(self._cancel_jobs(), 1)
+
+    def test_cancelling_a_confirmed_sale_queues_the_notice(self):
+        from cuadra.api import routes_finance
+
+        sale = self._dispatched_sale()
+        sales.apply_tcp_ack(self.conn, 1, f"RECIBIDO {sale['order_code']}")
+        self.assertEqual(sales.get_sale(self.conn, sale["id"])["status"], "CONFIRMED")
+
+        routes_finance.cancel_sale(sale["id"])
+        self.assertEqual(self._cancel_jobs(), 1)
+
+    def test_cancelling_before_the_tcp_saw_the_order_does_not_queue_a_notice(self):
+        from cuadra.api import routes_finance
+
+        sale = self.create_sale()
+        routes_finance.cancel_sale(sale["id"])
+
+        self.assertEqual(self._cancel_jobs(), 0)
+
+    def test_cancelling_a_failed_dispatch_does_not_queue_a_notice(self):
+        from cuadra.api import routes_finance
+
+        sale = self.create_sale()
+        sales.approve(self.conn, sale["id"])
+        sales.mark_needs_operator(self.conn, sale["id"], "dispatch failed: chat not found")
+        routes_finance.cancel_sale(sale["id"])
+
+        self.assertEqual(self._cancel_jobs(), 0)
+
+    def _run_notice(self, sale_id, repeat=True):
+        import asyncio
+        from unittest.mock import patch
+
+        from cuadra.ai import handlers
+        from cuadra.channels import telegram_user
+
+        class FakeAdapter:
+            def __init__(self):
+                self.sent = []
+
+            async def typing(self, target):
+                return None
+
+            async def send_text(self, target, text):
+                self.sent.append((target, text))
+                return "9001"
+
+        adapter = FakeAdapter()
+        with (
+            patch.object(telegram_user, "available", return_value=True),
+            patch.object(handlers.channels, "get_adapter", return_value=adapter),
+            patch.object(handlers, "_human_delay", return_value=0),
+        ):
+            asyncio.run(handlers.notify_tcp_cancel({"sale_id": sale_id}))
+            if repeat:
+                # A requeued job must not send the notice twice.
+                asyncio.run(handlers.notify_tcp_cancel({"sale_id": sale_id}))
+        return adapter
+
+    def test_handler_sends_the_notice_once_with_the_reason(self):
+        sale = self._cancelled_dispatched_sale()
+
+        adapter = self._run_notice(sale["id"])
+
+        self.assertEqual(len(adapter.sent), 1)
+        target, text = adapter.sent[0]
+        self.assertEqual(target, "111222333")
+        self.assertIn(sale["order_code"], text)
+        self.assertIn("cliente cambió de idea", text)
+        self.assertEqual(self._event_count("tcp_cancel_notified"), 1)
+
+    def test_handler_ignores_a_sale_that_is_not_cancelled(self):
+        sale = self._dispatched_sale()
+
+        adapter = self._run_notice(sale["id"])
+
+        self.assertEqual(adapter.sent, [])
+        self.assertEqual(self._event_count("tcp_cancel_notified"), 0)
+
+    def test_handler_skips_without_a_telegram_target(self):
+        sale = self._cancelled_dispatched_sale()
+        self.conn.execute(
+            "UPDATE suppliers SET telegram_id = NULL, telegram_peer_id = NULL WHERE id = 1"
+        )
+        self.conn.commit()
+
+        adapter = self._run_notice(sale["id"], repeat=False)
+
+        self.assertEqual(adapter.sent, [])
+        self.assertEqual(self._event_count("tcp_cancel_skipped"), 1)
+
+    def test_handler_lets_pacing_requeue_the_job(self):
+        import asyncio
+        from unittest.mock import patch
+
+        from cuadra.ai import handlers, queue
+        from cuadra.channels import telegram_user
+
+        sale = self._cancelled_dispatched_sale()
+        with (
+            patch.object(telegram_user, "available", return_value=True),
+            patch.object(handlers.channels, "get_adapter", return_value=object()),
+            patch.object(
+                handlers,
+                "_respect_userbot_gap",
+                side_effect=queue.RateLimited(
+                    30, "userbot send gap", account=False, penalize=False
+                ),
+            ),
+        ):
+            with self.assertRaises(queue.RateLimited):
+                asyncio.run(handlers.notify_tcp_cancel({"sale_id": sale["id"]}))
+
+        self.assertEqual(self._event_count("tcp_cancel_failed"), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

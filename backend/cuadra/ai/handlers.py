@@ -42,6 +42,7 @@ def register() -> None:
     # Jobs queued by older versions/restarts keep working after the refactor.
     queue.register_handler("tcp_reply", tcp_process)
     queue.register_handler("dispatch_sale", dispatch_sale)
+    queue.register_handler("notify_tcp_cancel", notify_tcp_cancel)
     queue.register_handler("send_broadcast", send_broadcast)
     queue.register_handler("reindex_product", reindex_product)
     queue.register_handler("reindex_all_products", reindex_all_products)
@@ -767,6 +768,10 @@ async def dispatch_sale(payload: dict) -> None:
         await adapter.typing(target)
         await asyncio.sleep(_human_delay())
         tcp_message_id = await adapter.send_text(target, text)
+    except queue.RateLimited:
+        # Pacing is not a dispatch failure: let the queue park the job and retry
+        # instead of asking the operator to intervene (see notify_tcp_cancel).
+        raise
     except Exception as exc:  # noqa: BLE001 - operator takes over on any send error
         log.exception("sale %s dispatch failed", sale_id)
         conn = db.connect()
@@ -781,6 +786,108 @@ async def dispatch_sale(payload: dict) -> None:
     conn = db.connect()
     try:
         sales_domain.mark_dispatched(conn, sale_id, tcp_message_id)
+    finally:
+        conn.close()
+
+
+def _tcp_cancel_notified(conn, sale_id: int) -> bool:
+    row = conn.execute(
+        """SELECT 1 FROM events
+           WHERE type = 'tcp_cancel_notified' AND entity = 'sales' AND entity_id = ?
+           LIMIT 1""",
+        (sale_id,),
+    ).fetchone()
+    return row is not None
+
+
+def _log_cancel_skip(sale_id: int, reason: str) -> None:
+    conn = db.connect()
+    try:
+        events.log(
+            conn,
+            "bot",
+            "tcp_cancel_skipped",
+            entity="sales",
+            entity_id=sale_id,
+            details={"reason": reason},
+        )
+    finally:
+        conn.close()
+
+
+async def notify_tcp_cancel(payload: dict) -> None:
+    """Tell the TCP that an order already in its chat was cancelled.
+
+    Idempotent by the `tcp_cancel_notified` event, so a requeued job never
+    sends the notice twice. Pacing (`RateLimited`) propagates to the queue,
+    which parks the job without spending an attempt; a real send error is
+    logged and left as an audit event instead of blocking the operator.
+    """
+    sale_id = int(payload["sale_id"])
+    conn = db.connect()
+    try:
+        sale = sales_domain.get_sale(conn, sale_id)
+        if sale["status"] != "CANCELLED":
+            log.debug("sale %s is %s, not notifying cancellation", sale_id, sale["status"])
+            return
+        if _tcp_cancel_notified(conn, sale_id):
+            log.debug("cancellation of sale %s already notified", sale_id)
+            return
+        supplier = catalog.get_supplier(conn, sale["supplier_id"])
+        conversation = conversations.get_conversation(conn, sale["conversation_id"])
+        identity = _tcp_identity((conversation or {}).get("identity"))
+        product_name = _sale_product_name(sale)
+    finally:
+        conn.close()
+
+    target = supplier.get("telegram_peer_id") or supplier.get("telegram_id")
+    if not target:
+        _log_cancel_skip(sale_id, "supplier has no telegram target")
+        return
+    adapter = channels.get_adapter("telegram", identity)
+    if adapter is None:
+        _log_cancel_skip(sale_id, "telegram bot adapter unavailable")
+        return
+
+    text = prompts.TEMPLATES["tcp_cancel"].format(
+        order_code=sale["order_code"],
+        producto=product_name,
+        cantidad=sale["quantity"],
+        motivo=sale["notes"] or "cancelada por el operador",
+    )
+    try:
+        _respect_userbot_gap(adapter)
+        await adapter.typing(target)
+        await asyncio.sleep(_human_delay())
+        await adapter.send_text(target, text)
+    except queue.RateLimited:
+        raise
+    except Exception as exc:  # noqa: BLE001 - a notice must not break the queue
+        log.warning("sale %s cancellation notice failed", sale_id, exc_info=True)
+        conn = db.connect()
+        try:
+            events.log(
+                conn,
+                "bot",
+                "tcp_cancel_failed",
+                entity="sales",
+                entity_id=sale_id,
+                details={"error": str(exc)[:300]},
+            )
+        finally:
+            conn.close()
+        return
+
+    conn = db.connect()
+    try:
+        events.log(
+            conn,
+            "bot",
+            "tcp_cancel_notified",
+            entity="sales",
+            entity_id=sale_id,
+            details={"order_code": sale["order_code"], "supplier_id": sale["supplier_id"]},
+        )
     finally:
         conn.close()
 

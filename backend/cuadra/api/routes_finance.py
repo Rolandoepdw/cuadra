@@ -133,4 +133,15 @@ def settle_sale(sale_id: int) -> dict:
 @router.post("/finance/cancel/{sale_id}")
 def cancel_sale(sale_id: int, payload: CancelSaleIn | None = None) -> dict:
     reason = payload.reason if payload is not None else ""
-    return _run(sales.cancel, sale_id, reason)
+
+    def _cancel(conn):
+        before = sales.get_sale(conn, sale_id)
+        return before, sales.cancel(conn, sale_id, reason)
+
+    before, sale = _run(_cancel)
+    # Only the TCP that already received the order needs the cancellation.
+    if before["status"] in sales.TCP_AWARE_STATUSES:
+        queue.enqueue(
+            "notify_tcp_cancel", {"sale_id": sale_id}, priority=config.PRIORITY_TCP
+        )
+    return sale
