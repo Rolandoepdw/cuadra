@@ -64,6 +64,7 @@ CONVERSATION_EVENTS = frozenset(
         "tcp_cancel_notified",
         "tcp_cancel_skipped",
         "tcp_cancel_failed",
+        "sale_cancelled_notified",
         "tcp_sale_ack",
         "commission_settled",
     }

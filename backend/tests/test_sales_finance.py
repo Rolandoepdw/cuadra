@@ -5,6 +5,7 @@ Throwaway SQLite database, no model server, no network. Run from `backend/`:
     .venv\\Scripts\\python.exe -m unittest discover -s tests -v
 """
 
+import json
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -827,6 +828,111 @@ class CancelTcpNoticeTests(Phase3TestCase):
                 asyncio.run(handlers.notify_tcp_cancel({"sale_id": sale["id"]}))
 
         self.assertEqual(self._event_count("tcp_cancel_failed"), 0)
+
+
+class CancelCustomerNoticeTests(Phase3TestCase):
+    """A cancelled sale tells the customer, through the regular outbox."""
+
+    def _customer_jobs(self) -> int:
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE type = 'notify_sale_cancelled'"
+        ).fetchone()[0]
+
+    def _send_jobs(self) -> int:
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE type = 'send_message'"
+        ).fetchone()[0]
+
+    def _outbound_messages(self):
+        return self.conn.execute(
+            "SELECT * FROM messages WHERE direction = 'OUTBOUND' ORDER BY id"
+        ).fetchall()
+
+    def _event_count(self, event_type: str) -> int:
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE type = ?", (event_type,)
+        ).fetchone()[0]
+
+    def _run_notice(self, sale_id, repeat=True):
+        import asyncio
+
+        from cuadra.ai import handlers
+
+        asyncio.run(handlers.notify_sale_cancelled({"sale_id": sale_id}))
+        if repeat:
+            # A requeued job must not duplicate the message nor its send job.
+            asyncio.run(handlers.notify_sale_cancelled({"sale_id": sale_id}))
+
+    def test_cancelling_a_sale_with_a_conversation_queues_the_notice(self):
+        from cuadra.api import routes_finance
+
+        sale = self.create_sale()
+        routes_finance.cancel_sale(sale["id"])
+
+        self.assertEqual(self._customer_jobs(), 1)
+
+    def test_cancelling_a_sale_without_a_conversation_queues_nothing(self):
+        from cuadra.api import routes_finance
+
+        sale = self.create_sale(conversation_id=None)
+        routes_finance.cancel_sale(sale["id"])
+
+        self.assertEqual(self._customer_jobs(), 0)
+
+    def test_handler_stores_one_message_and_one_send_job(self):
+        from cuadra.api import routes_finance
+
+        sale = self.create_sale()
+        routes_finance.cancel_sale(sale["id"])
+
+        self._run_notice(sale["id"])
+
+        messages = self._outbound_messages()
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["conversation_id"], 1)
+        self.assertEqual(messages[0]["external_id"], f"sale-cancelled-{sale['id']}")
+        self.assertIn(sale["order_code"], messages[0]["body"])
+        job = self.conn.execute(
+            "SELECT payload_json, status FROM jobs WHERE type = 'send_message'"
+        ).fetchone()
+        self.assertEqual(job["status"], "PENDING")
+        self.assertEqual(
+            json.loads(job["payload_json"])["message_id"], messages[0]["id"]
+        )
+        self.assertEqual(self._send_jobs(), 1)
+        self.assertEqual(self._event_count("sale_cancelled_notified"), 1)
+
+    def test_handler_recovers_a_message_whose_send_job_was_lost(self):
+        from cuadra.api import routes_finance
+
+        sale = self.create_sale()
+        routes_finance.cancel_sale(sale["id"])
+        self._run_notice(sale["id"], repeat=False)
+        self.conn.execute("DELETE FROM jobs WHERE type = 'send_message'")
+        self.conn.commit()
+
+        self._run_notice(sale["id"])
+
+        self.assertEqual(len(self._outbound_messages()), 1)
+        self.assertEqual(self._send_jobs(), 1)
+
+    def test_handler_ignores_a_sale_that_is_not_cancelled(self):
+        sale = self.create_sale()
+
+        self._run_notice(sale["id"])
+
+        self.assertEqual(self._outbound_messages(), [])
+        self.assertEqual(self._send_jobs(), 0)
+        self.assertEqual(self._event_count("sale_cancelled_notified"), 0)
+
+    def test_handler_ignores_a_cancelled_sale_without_a_conversation(self):
+        sale = self.create_sale(conversation_id=None)
+        sales.cancel(self.conn, sale["id"], "cliente cambió de idea")
+
+        self._run_notice(sale["id"])
+
+        self.assertEqual(self._outbound_messages(), [])
+        self.assertEqual(self._send_jobs(), 0)
 
 
 if __name__ == "__main__":

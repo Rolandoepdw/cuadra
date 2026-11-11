@@ -144,4 +144,10 @@ def cancel_sale(sale_id: int, payload: CancelSaleIn | None = None) -> dict:
         queue.enqueue(
             "notify_tcp_cancel", {"sale_id": sale_id}, priority=config.PRIORITY_TCP
         )
+    if sale.get("conversation_id"):
+        queue.enqueue(
+            "notify_sale_cancelled",
+            {"sale_id": sale_id},
+            priority=config.PRIORITY_CUSTOMER,
+        )
     return sale

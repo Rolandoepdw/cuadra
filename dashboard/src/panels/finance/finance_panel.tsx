@@ -590,8 +590,8 @@ export function FinancePanel() {
         description={
           cancelTarget &&
           (cancelTarget.status === "DISPATCHED" || cancelTarget.status === "CONFIRMED")
-            ? "Se libera el stock reservado y la comisión queda anulada. También se avisará al TCP para que no la prepare. No se puede deshacer."
-            : "Se libera el stock reservado y la comisión queda anulada. No se puede deshacer."
+            ? "Se libera el stock reservado y la comisión queda anulada. Se avisará al cliente y también al TCP para que no la prepare. No se puede deshacer."
+            : "Se libera el stock reservado y la comisión queda anulada. Se avisará al cliente de la cancelación. No se puede deshacer."
         }
         confirmLabel="Cancelar venta"
         destructive

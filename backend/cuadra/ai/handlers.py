@@ -43,6 +43,7 @@ def register() -> None:
     queue.register_handler("tcp_reply", tcp_process)
     queue.register_handler("dispatch_sale", dispatch_sale)
     queue.register_handler("notify_tcp_cancel", notify_tcp_cancel)
+    queue.register_handler("notify_sale_cancelled", notify_sale_cancelled)
     queue.register_handler("send_broadcast", send_broadcast)
     queue.register_handler("reindex_product", reindex_product)
     queue.register_handler("reindex_all_products", reindex_all_products)
@@ -888,6 +889,44 @@ async def notify_tcp_cancel(payload: dict) -> None:
             entity_id=sale_id,
             details={"order_code": sale["order_code"], "supplier_id": sale["supplier_id"]},
         )
+    finally:
+        conn.close()
+
+
+async def notify_sale_cancelled(payload: dict) -> None:
+    """Tell the customer that an operator-cancelled order was cancelled.
+
+    Uses the regular outbound outbox (`send_message`) so the message keeps the
+    same pacing, persistence and restart recovery as every other reply. A
+    deterministic `external_id`, plus `_ensure_send_job`, makes a retried job
+    neither duplicate the message nor lose its send job.
+    """
+    sale_id = int(payload["sale_id"])
+    conn = db.connect()
+    try:
+        sale = sales_domain.get_sale(conn, sale_id)
+        if sale["status"] != "CANCELLED" or not sale["conversation_id"]:
+            log.debug("sale %s is not a cancelled sale with a conversation", sale_id)
+            return
+        text = prompts.TEMPLATES["sale_cancelled"].format(order_code=sale["order_code"])
+        message, created = conversations.add_message_with_status(
+            conn,
+            sale["conversation_id"],
+            "OUTBOUND",
+            "bot",
+            body=text,
+            external_id=f"sale-cancelled-{sale_id}",
+        )
+        if created:
+            events.log(
+                conn,
+                "bot",
+                "sale_cancelled_notified",
+                entity="sales",
+                entity_id=sale_id,
+                details={"order_code": sale["order_code"], "message_id": message["id"]},
+            )
+        _ensure_send_job(conn, sale["conversation_id"], message["id"])
     finally:
         conn.close()
 
