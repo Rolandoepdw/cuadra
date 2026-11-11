@@ -521,6 +521,7 @@ completa; el coste fue un reintento (~25 s).
 | H-25 | Baja (prompt) | `ESTADO DE LA CONVERSACIÓN` muestra `Producto en juego (id 19)` aunque el producto resuelto del turno sea otro (id 3); el bloque `PRODUCTO EN JUEGO` sí es correcto. | Ruido para el modelo; no cambió la respuesta en E2E-03, pero puede sesgar el NLU. | **Corregido** el 2026-11-09: el estado usa el id del producto resuelto del turno y solo cae al del contexto cuando el turno no resolvió ninguno. |
 | H-26 | Baja (UX) | `ask_which_product` empieza con “Claro que sí”; ante “¿Tienes neveras?” puede leerse como confirmación de disponibilidad. | Matiz de redacción en un caso de producto inexistente. | **Corregido** el 2026-11-09: la plantilla empieza “Dime cuál producto te interesa…” y el saludo del prompt ya no incluye “Claro que sí”. |
 | H-27 | **Alta** (correctitud) | Descubierto al corregir H-10: `cargador`/`cargadores` resolvía por similitud semántica a **“Moto Eléctrica Cargo”** (coseno 0.558 ≥ `RETRIEVAL_MIN_SEMANTIC_SCORE` 0.4), aunque el catálogo no tiene cargadores. | El bot habría respondido sobre una moto a quien preguntaba por un cargador. | **Corregido** el 2026-11-09: `_lexically_supported` exige que el buscador difuso también reconozca el candidato semántico antes de nombrarlo; la recuperación híbrida sigue rellenando huecos, pero no inventa un producto. Cubierto por 2 tests. |
+| H-28 | Baja (resiliencia) | Al implementar el aviso de cancelación se vio que `dispatch_sale` trataba `RateLimited` (la pausa de cortesía del userbot) como un fallo de envío y marcaba la venta `NEEDS_OPERATOR`. | Una espera de segundos pedía intervención del operador. | **Corregido** el 2026-11-11: `RateLimited` se re-lanza para que la cola aparque el job sin gastar intentos. Cubierto por 1 test. |
 
 > H-01 quedó corregido en la BD y en la fuente. El nombre antiguo solo estaba en
 > `seed_demo_data.py` (corregido y commiteado el 2026-11-09); se comprobó que
@@ -532,9 +533,9 @@ completa; el coste fue un reintento (~25 s).
 > (redacción), H-12, H-14 y H-25 (contexto/prompt), H-22 (aviso completo al
 > cliente), H-04, H-10 y H-27 (NLU, confianza y resolución semántica), H-23
 > (precios superados en el historial), H-18/H-19 (dashboard), H-02 (transporte) y
-> H-05 (rechazos y guardrail). También se cerró el pendiente del selector de
-> `sales.mode`. El detalle técnico y los reintentos están en **§10**. La suite
-> completa pasa con **220 tests**.
+> H-05 (rechazos y guardrail). También se cerraron el selector de `sales.mode` y
+> el aviso al TCP al cancelar. El detalle técnico y los reintentos están en
+> **§10**. La suite completa pasa con **229 tests**.
 
 ---
 
@@ -740,8 +741,10 @@ estos lotes.
 - 20 casos de correlación TCP con mensajes reales anonimizados.
 - Set etiquetado de slots (F1) y de ventas end-to-end (≥ 80 %).
 - p95 y recall@3 con tráfico real.
-- Aviso al TCP al cancelar y `sale_followup`.
-- *(Cerrado el 2026-11-11: selector de `sales.mode` en Finanzas, ver **§10.15**.)*
+- `sale_followup` y el aviso al cliente cuando el operador cancela
+  (`sale_cancelled` existe en las plantillas pero nadie lo envía).
+- *(Cerrado el 2026-11-11: selector de `sales.mode` en Finanzas, ver **§10.15**;
+  aviso al TCP al cancelar, ver **§10.16**.)*
 
 ### 9.1 ✅ Ejecutado — E2E-14 (cierre por inactividad)
 
@@ -1089,6 +1092,45 @@ Eventos 443/444 `sales_settings_saved` (`hybrid`, `assisted`). La BD quedó en
 `assisted`.
 
 **Tests:** **220 OK** (4 nuevos). El dashboard compiló con `npm run build`.
+
+### 10.16 Aviso al TCP al cancelar (pendiente de Fase 3)
+
+Cancelar una venta liberaba el stock y anulaba la comisión, pero el TCP seguía
+con la orden en su chat y podía prepararla o entregarla. Ahora, si la orden ya
+le había llegado, recibe un aviso de cancelación por Telegram.
+
+**Política:** solo se avisa si el estado previo era `DISPATCHED` o `CONFIRMED`
+(`sales.TCP_AWARE_STATUSES`). Antes del despacho, o tras un despacho fallido
+(`NEEDS_OPERATOR`), el TCP nunca vio la orden y no se le escribe nada. El job es
+idempotente por el evento `tcp_cancel_notified`, así que un reintento no duplica
+el mensaje. No se notifica al operador (D6-A). El aviso sale por el userbot y
+respeta el *pacing* (`_respect_userbot_gap`); un `RateLimited` se re-lanza para
+que la cola aparque el job, y un fallo real queda como `tcp_cancel_failed`.
+
+| Archivo | Cambio |
+|---|---|
+| `domain/sales.py` | `TCP_AWARE_STATUSES = ("DISPATCHED", "CONFIRMED")`. |
+| `api/routes_finance.py` | El cancel captura el estado previo y encola `notify_tcp_cancel` (prioridad TCP) solo si el TCP ya tenía la orden. |
+| `ai/handlers.py` | `notify_tcp_cancel`: revalida `CANCELLED`, evita duplicados, resuelve el proveedor y envía. `tcp_cancel_skipped` si falta target o adaptador. `dispatch_sale` ya no convierte `RateLimited` en `NEEDS_OPERATOR` (**H-28**). |
+| `ai/prompts.py` | Plantilla `tcp_cancel`: orden, producto, cantidad y motivo; sin datos del cliente. |
+| `domain/events.py` | `tcp_cancel_notified`, `tcp_cancel_skipped`, `tcp_cancel_failed`. |
+| `dashboard/src/panels/finance/finance_panel.tsx` | El diálogo de cancelación avisa que también se notificará al TCP cuando la venta está despachada o confirmada. |
+| `tests/test_sales_finance.py` | `CancelTcpNoticeTests` (8): encolado en `DISPATCHED`/`CONFIRMED`, sin encolado antes del despacho o tras fallo, envío único con motivo, ignorado si no está cancelada, skip sin target y *pacing* que no se traga el error; más 1 test de H-28. |
+
+**Evidencia en vivo (2026-11-11, BD real, core reiniciado con el código nuevo):**
+para no escribirle a un TCP real se creó el proveedor desechable
+`E2E-CANCEL` (id 90, sin `telegram_id`) y el producto 90.
+
+| Caso | Resultado |
+|---|---|
+| `V-000004` simulada como `DISPATCHED`, cancelada por `POST /api/finance/cancel/4` | `CANCELLED`; job 147 `notify_tcp_cancel` **COMPLETED**; eventos 454 `sale_cancelled` y 455 `tcp_cancel_skipped` (`supplier has no telegram target`). Cero mensajes enviados. |
+| `V-000003` en `PENDING_APPROVAL`, cancelada por la API | `CANCELLED`; **0** jobs `notify_tcp_cancel` para esa venta. |
+
+La ruta de envío real (adaptador, target y texto) queda cubierta por el test con
+adaptador falso, igual que el despacho. El aviso al cliente al cancelar sigue
+pendiente: la plantilla `sale_cancelled` existe pero nadie la envía.
+
+**Tests:** **229 OK** (9 nuevos). El dashboard compiló con `npm run build`.
 
 
 
