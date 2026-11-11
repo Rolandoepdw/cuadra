@@ -2,7 +2,7 @@
 tipo: cierre_fase
 proyecto: Cuadra
 modulo: bucle_tcp_mutacion_catalogo
-estado: FASE 4 — implementada, pendiente operación real
+estado: FASE 4 — implementada y commiteada (7e7b7e6), pendiente operación real
 fecha: 2026-11-07
 tags: [fase-4, tcp, triage, mutaciones, undo, auditoria, correlacion]
 ---
@@ -221,8 +221,9 @@ aplican, `catalog_mutation_log` existe, los 5 settings de catálogo están prese
 - **Correlación de 20 casos reales**: la heurística está probada con casos
   sintéticos; falta medirla con mensajes reales de los TCP. Hasta entonces, una
   correlación dudosa va a revisión, nunca se auto-aplica.
-- **Bake-off y p95 real**: siguen pendientes de medición con el modelo y las consultas
-  reales; no se inventan cifras.
+- **Bake-off y p95 real**: el bake-off de la Fase 5 ya se midió. El p95 se
+  calcula con `scripts/latency_report.py` (bitácora §10.21), pero la muestra
+  real aún es pequeña; no se inventan cifras.
 - **Recall@3 con consultas reales**: pendiente; el retrieval ya funciona con FTS5 y
   embeddings opcionales.
 - **Reanudación desde el panel**: al aprobar se usa la plantilla genérica
@@ -234,18 +235,18 @@ aplican, `catalog_mutation_log` existe, los 5 settings de catálogo están prese
 - **Sin edición manual del snapshot**: el panel permite aprobar, rechazar o deshacer,
   no corregir un valor propuesto. Si hace falta un precio distinto, se edita el
   producto y se rechaza la mutación.
-- **Commit**: la Fase 4 (y la Fase 3) quedan en el árbol de trabajo a la espera de
-  revisión; no se commitea sin pedido explícito.
+- **Commit**: la Fase 4 se commiteó el 2026-11-11 (`7e7b7e6`); el árbol quedó
+  limpio.
 
 ---
 
 ## 9. Próximo paso
 
-1. Revisar este diff con el dueño; **no se hace commit sin pedido explícito**.
-2. Probar el flujo con un TCP de prueba: audio con `[E-####]`, precio fuera de rango,
-   aprobación desde el panel y undo.
-3. Ejecutar los 20 casos de correlación con mensajes reales y ajustar umbrales si hace
-   falta.
-4. Implementar la Fase 5 (endurecimiento, replay del golden set y evaluación) cuando
-   el dueño lo indique.
-5. Medir p95 y recall@3 reales cuando el servidor llama.cpp esté levantado.
+La Fase 4 está **cerrada y commiteada** (`7e7b7e6`). La Fase 5 también está
+implementada (`0c2917c`), así que no queda ninguna fase nueva del plan.
+
+1. Probar el flujo con un TCP de prueba: audio con `[E-####]`, precio fuera de
+   rango, aprobación desde el panel y undo.
+2. Los pendientes que necesitan datos reales (20 casos de correlación, sets de
+   slots y ventas E2E, recall@3 y p95) están en la bitácora **§9.2**, con el
+   criterio para retomarlos.

@@ -216,16 +216,21 @@ settings existen y `PRAGMA quick_check` devuelve `ok`. **La base real no se toc�
 - **Bake-off y recall@3**: el bake-off ya se midió; falta repetir el recall@3
   con consultas reales. El p95 se mide con `scripts/latency_report.py`
   (bitácora §10.21), pero la muestra real aún es pequeña; no se inventan cifras.
-- **Commit**: la Fase 3 se commiteó el 2026-11-11 junto con las fases 0-5
-  (`0c2917c`); el árbol quedó limpio.
+- **Commit**: la Fase 3 se commiteó el 2026-11-11 (`05c4d37`) junto con las
+  fases 0-5; el árbol quedó limpio.
 
 ---
 
 ## 9. Próximo paso
 
-1. Revisar este diff con el dueño; **no se hace commit sin pedido explícito**.
-2. Probar una venta real en modo asistido con un TCP de prueba: aprobar, despachar,
-   recibir `RECIBIDO`/`ENTREGADO` y liquidar la comisión.
-3. Decidir si `sales.mode` necesita selector en el dashboard antes de pasar a la Fase 4.
-4. Implementar la Fase 4 (`015_catalog_mutations.sql`, triage TCP, mutaciones y undo).
-5. Medir el p95 real cuando el servidor llama.cpp esté levantado.
+La Fase 3 está **cerrada**: todo su código y sus pendientes accionables están
+commiteados y probados. No queda ninguna fase pendiente: la Fase 4
+(`7e7b7e6`) y la Fase 5 (`0c2917c`) ya estaban implementadas cuando se cerró
+este tramo.
+
+1. Probar una venta real en modo asistido con un TCP de prueba (aprobar,
+   despachar, recibir `RECIBIDO`/`ENTREGADO` y liquidar la comisión) cuando la
+   operación lo permita.
+2. Los pendientes que dependen de datos reales (correlación TCP, slots, ventas
+   E2E, recall@3 y p95) están en la bitácora **§9.2**, con el criterio para
+   retomarlos.

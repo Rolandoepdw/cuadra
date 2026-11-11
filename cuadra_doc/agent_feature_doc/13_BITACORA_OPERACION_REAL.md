@@ -739,10 +739,10 @@ estos lotes.
 
 ## 9. Pendientes conocidos (no bloquean estas pruebas)
 
-- 20 casos de correlación TCP con mensajes reales anonimizados.
-- Set etiquetado de slots (F1) y de ventas end-to-end (≥ 80 %).
-- recall@3 con tráfico real. El p95 ya se mide con
-  `scripts/latency_report.py` (§10.21), pero la muestra real aún es pequeña.
+Todos los pendientes de código de las fases 0-5 están cerrados. Lo que queda
+depende de **datos reales** y no se puede resolver en el repositorio; se detalla
+en **§9.2** para retomarlo cuando exista la muestra.
+
 - *(Cerrado el 2026-11-11: selector de `sales.mode` en Finanzas, ver **§10.15**;
   aviso al TCP al cancelar, ver **§10.16**; aviso al cliente al cancelar, ver
   **§10.18**; seguimiento de ventas (`sale_followup`) en el dashboard, ver
@@ -770,6 +770,25 @@ días, pero el umbral de producción (72 h), la consulta de `close_idle` y el
 disparo real del scheduler no se modificaron. La conversación 4 de verificación
 se borró después de comprobar que estaba vacía; la conversación 3 cerrada queda
 como evidencia.
+
+### 9.2 ⏳ Pendientes que requieren datos reales (para más tarde)
+
+Ninguno de estos bloquea la operación: el sistema ya funciona con datos
+sintéticos y degrada a revisión cuando duda. Se retoman cuando haya muestra
+real suficiente.
+
+| # | Pendiente | Por qué está esperando | Qué hace falta para cerrarlo | Cómo se medirá |
+|---|---|---|---|---|
+| R-1 | 20 casos de correlación TCP | La heurística solo se probó con casos sintéticos; falta verla con mensajes reales de los TCP. | 20 mensajes reales anonimizados (texto y audio) con y sin `[E-###]`/`[V-######]`, incluyendo ambiguos y varios pendientes. | Comparar la escalación/venta elegida contra la esperada; una correlación dudosa debe quedar en revisión, nunca auto-aplicada. |
+| R-2 | Set etiquetado de slots (F1) | No hay conversaciones reales etiquetadas por slot (`zona`, `dirección`, `teléfono`, `cantidad`, `confirmación`). | ≥ 50 conversaciones anonimizadas con el slot esperado por turno. | Exactitud por slot y matriz de confusión; el set vive fuera del repo por privacidad. |
+| R-3 | Set de ventas end-to-end (≥ 80 %) | Falta un conjunto de conversaciones que terminen en venta para medir el embudo completo. | ≥ 20 conversaciones reales anonimizadas con resultado esperado (venta, handoff o rechazo). | % de ventas correctas (producto, cantidad, zona, datos) ≥ 80 %; revisar los fallos por tipo. |
+| R-4 | recall@3 con tráfico real | El recall@3 offline usa el golden set sintético; falta confirmarlo con consultas reales. | ≥ 100 consultas reales anonimizadas con el producto correcto etiquetado. | `scripts/eval_retrieval.py` sobre ese set; objetivo recall@3 ≥ 90 %. |
+| R-5 | p95 con muestra real | La herramienta ya existe (`scripts/latency_report.py`, §10.21), pero hay n=13 `compose` en 7 días. | ~50 `compose` reales en dos semanas. | p50/p95 por hora y comparación inactividad/caliente; si el p50 tras inactividad es ≥ 1,5× el caliente y el p95 > 8 s, implementar el *warm-up* de H-06. |
+
+**Cómo aportar los datos sin filtrar secretos:** exportar solo texto y metadatos
+necesarios (sin `telegram_id`, teléfonos completos ni tokens), anonimizar antes
+de guardarlos y mantenerlos fuera del repositorio. Los scripts de evaluación
+leen el set por ruta, no desde la BD real.
 
 ---
 

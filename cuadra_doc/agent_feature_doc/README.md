@@ -129,13 +129,13 @@ modelo está instalado y vendorizado en `backend/models/fastembed/`; el arranque
 descarga y la inferencia offline funciona. Falta medir recall@3 con consultas reales;
 si el modelo falta, el bot sigue respondiendo con FTS5 + fuzzy.
 
-La **Fase 3** está implementada y probada en el árbol de trabajo (ver `09`): venta de
+La **Fase 3** está implementada, probada y commiteada (`05c4d37`, ver `09`): venta de
 punta a punta, stock reservado sin descontar inventario hasta la entrega, ledger de
 comisiones por moneda, despacho al TCP con acks `RECIBIDO`/`ENTREGADO`/`AGOTADO`,
 recuperación de despachos tras un reinicio y panel **Finanzas**. Queda probar una venta
-real con un TCP de prueba y decidir si `sales.mode` necesita selector en el dashboard.
+real con un TCP de prueba.
 
-La **Fase 4** está implementada y probada en el árbol de trabajo (ver `10`): triage de
+La **Fase 4** está implementada, probada y commiteada (`7e7b7e6`, ver `10`): triage de
 mensajes TCP (texto y audio), correlación por `[E-###]`/`[V-######]` y heurística con
 revisión ante ambigüedad, extracción estructurada, mutaciones atómicas de precio/stock/
 specs/zonas con política de auto-aplicación, undo con detección de conflicto (`409`) y
@@ -153,5 +153,5 @@ settings (`sales.mode`, `catalog.autoapply.*`), no reescribiendo el flujo.
 
 Con la Fase 5 se completa el plan de **6 fases (0–5)**. Lo que queda son tareas de
 operación real, no fases nuevas: correlación con mensajes TCP reales, sets de slots y
-de ventas end-to-end, bake-off con los modelos del dueño y medición de p95/recall@3
-en producción.
+de ventas end-to-end, y medición de recall@3/p95 con muestra suficiente. Están
+detalladas con su criterio de cierre en la bitácora **§9.2** (`13`).
