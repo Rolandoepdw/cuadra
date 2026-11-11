@@ -133,5 +133,60 @@ class EvalRetrievalTests(unittest.TestCase):
         )
 
 
+class LatencyReportTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.report = load_script("latency_report")
+
+    @staticmethod
+    def row(created_at: str, latency_ms: int, *, ok: bool = True, purpose="compose"):
+        return {
+            "created_at": created_at,
+            "purpose": purpose,
+            "latency_ms": latency_ms,
+            "ok": 1 if ok else 0,
+        }
+
+    def test_percentile_uses_nearest_rank(self):
+        values = [10, 20, 30, 40]
+        self.assertEqual(self.report.percentile(values, 50), 20)
+        self.assertEqual(self.report.percentile(values, 95), 40)
+        self.assertIsNone(self.report.percentile([], 95))
+
+    def test_idle_and_warm_calls_are_split_by_the_gap(self):
+        rows = [
+            self.row("2026-11-11 10:00:00", 100),
+            self.row("2026-11-11 10:10:00", 200),
+            self.row("2026-11-11 11:00:00", 900),
+        ]
+
+        result = self.report.analyze(rows, gap_minutes=30)
+
+        self.assertEqual(result["after_idle"]["calls"], 2)
+        self.assertEqual(result["after_idle"]["p95"], 900)
+        self.assertEqual(result["warm"]["calls"], 1)
+        self.assertEqual(result["warm"]["p95"], 200)
+
+    def test_hours_are_local_to_havana(self):
+        result = self.report.analyze(
+            [self.row("2026-11-11 03:00:00", 100)], gap_minutes=30
+        )
+
+        self.assertEqual(list(result["by_hour"]), [22])
+
+    def test_failed_calls_count_as_errors_but_not_in_the_percentile(self):
+        result = self.report.analyze(
+            [
+                self.row("2026-11-11 10:00:00", 100),
+                self.row("2026-11-11 10:05:00", 5000, ok=False),
+            ],
+            gap_minutes=30,
+        )
+
+        self.assertEqual(result["overall"]["calls"], 2)
+        self.assertEqual(result["overall"]["errors"], 1)
+        self.assertEqual(result["overall"]["p95"], 100)
+
+
 if __name__ == "__main__":
     unittest.main()
