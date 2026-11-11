@@ -18,6 +18,7 @@ import type {
   CategoryPatch,
   DeliverySettings,
   FinanceSummary,
+  FollowupPage,
   Health,
   LedgerPage,
   LlmModelsResponse,
@@ -288,6 +289,9 @@ export const listSales = (
   const suffix = qs.toString() ? `?${qs}` : "";
   return request<SalesPage>(`/api/finance/sales${suffix}`);
 };
+
+export const listFollowups = (hours = 24, limit = 50) =>
+  request<FollowupPage>(`/api/finance/followups?hours=${hours}&limit=${limit}`);
 
 export const listLedger = (
   params: { status?: string; currency?: string; supplier_id?: number; limit?: number; offset?: number } = {},

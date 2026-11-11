@@ -8,6 +8,7 @@ import {
   dispatchSale,
   getFinanceSummary,
   getSalesSettings,
+  listFollowups,
   listLedger,
   listSales,
   setSalesSettings,
@@ -90,6 +91,13 @@ function isCancellable(sale: Sale): boolean {
   return !["DELIVERED", "SETTLED", "CANCELLED"].includes(sale.status);
 }
 
+function formatAge(hours: number): string {
+  if (hours < 24) return `${Math.round(hours)} h`;
+  const days = Math.floor(hours / 24);
+  const rest = Math.round(hours % 24);
+  return rest > 0 ? `${days} d ${rest} h` : `${days} d`;
+}
+
 export function FinancePanel() {
   const qc = useQueryClient();
   const [status, setStatus] = useState("");
@@ -111,11 +119,18 @@ export function FinancePanel() {
     queryKey: ["finance-ledger", currency],
     queryFn: () => listLedger({ currency, limit: 100 }),
   });
+  const [followupHours, setFollowupHours] = useState(24);
+  const followups = useQuery({
+    queryKey: ["finance-followups", followupHours],
+    queryFn: () => listFollowups(followupHours),
+    refetchInterval: 15_000,
+  });
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["finance-summary"] });
     qc.invalidateQueries({ queryKey: ["finance-sales"] });
     qc.invalidateQueries({ queryKey: ["finance-ledger"] });
+    qc.invalidateQueries({ queryKey: ["finance-followups"] });
   };
 
   const onActionError = (error: unknown) => setActionError((error as Error).message);
@@ -471,6 +486,67 @@ export function FinancePanel() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">{MODE_DESCRIPTIONS[mode]}</p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <CardTitle className="text-base">Seguimiento</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Ventas abiertas sin cambios en el periodo. Es solo un aviso del panel:
+                todavía no se escribe al cliente.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Label className="text-xs">Sin cambios hace</Label>
+              <Select
+                value={String(followupHours)}
+                onChange={(event) => setFollowupHours(Number(event.target.value))}
+              >
+                {[12, 24, 48, 72].map((value) => (
+                  <option key={value} value={value}>
+                    {value} h
+                  </option>
+                ))}
+              </Select>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {followups.isLoading ? (
+            <p className="text-sm text-muted-foreground">Cargando…</p>
+          ) : followups.data && followups.data.items.length > 0 ? (
+            <ul className="flex flex-col gap-2">
+              {followups.data.items.map((sale) => (
+                <li
+                  key={sale.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2"
+                >
+                  <div className="flex flex-col">
+                    <span className="font-mono text-xs">
+                      {sale.order_code ?? `#${sale.id}`}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {sale.product_name ?? `Producto ${sale.product_id}`} ·{" "}
+                      {sale.supplier_name ?? `TCP ${sale.supplier_id}`}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant={SALE_STATUS_VARIANTS[sale.status]}>
+                      {SALE_STATUS_LABELS[sale.status]}
+                    </Badge>
+                    <span className="text-xs text-amber-600">
+                      hace {formatAge(sale.age_hours)}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted-foreground">Sin ventas estancadas.</p>
+          )}
         </CardContent>
       </Card>
 

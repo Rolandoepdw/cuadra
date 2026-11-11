@@ -36,6 +36,11 @@ OPEN_STATUSES = (
     "CONFIRMED",
 )
 BEFORE_DELIVERY = OPEN_STATUSES + ("NEEDS_OPERATOR",)
+# Open states plus the operator queue. DRAFT never reaches the database with a
+# reservation, so it is left out of the follow-up list.
+FOLLOWUP_STATUSES = tuple(status for status in OPEN_STATUSES if status != "DRAFT") + (
+    "NEEDS_OPERATOR",
+)
 # Statuses in which the TCP already has the order in its chat. Only those need
 # a cancellation notice: before a successful dispatch there is nothing to undo.
 TCP_AWARE_STATUSES = ("DISPATCHED", "CONFIRMED")
@@ -708,6 +713,29 @@ def count_sales(
     if where:
         sql += " WHERE " + " AND ".join(where)
     return int(conn.execute(sql, args).fetchone()[0])
+
+
+def followups(conn, *, hours: float = 24, limit: int = 50) -> list[dict]:
+    """Sales still open after `hours` without changes (dashboard reminder).
+
+    `sale_followup` is dashboard-only for now: the operator sees what is stuck.
+    There is no automatic customer message; that policy is deferred to v2.
+    """
+    threshold = max(1.0, min(float(hours), 24 * 30))
+    placeholders = ", ".join("?" for _ in FOLLOWUP_STATUSES)
+    rows = conn.execute(
+        f"""SELECT s.*, p.name AS product_name, sup.name AS supplier_name,
+                   ROUND((julianday('now') - julianday(s.updated_at)) * 24, 1) AS age_hours
+            FROM sales s
+            LEFT JOIN products p ON p.id = s.product_id
+            LEFT JOIN suppliers sup ON sup.id = s.supplier_id
+            WHERE s.status IN ({placeholders})
+              AND (julianday('now') - julianday(s.updated_at)) * 24 >= ?
+            ORDER BY age_hours DESC, s.id ASC
+            LIMIT ?""",
+        (*FOLLOWUP_STATUSES, threshold, max(1, min(int(limit), 200))),
+    )
+    return [dict(row) for row in rows]
 
 
 def list_ledger(

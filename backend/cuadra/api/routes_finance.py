@@ -64,6 +64,16 @@ def get_sale(sale_id: int) -> dict:
     return result
 
 
+@router.get("/finance/followups")
+def followup_sales(
+    hours: float = Query(default=24, ge=1, le=24 * 30),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    """Stale open sales, for the dashboard reminder only."""
+    items = _run(sales.followups, hours=hours, limit=limit)
+    return {"hours": hours, "items": items}
+
+
 @router.get("/finance/ledger")
 def list_ledger(
     status_filter: str | None = Query(default=None, alias="status"),

@@ -406,6 +406,27 @@ export interface Sale {
   ledger_currency: Currency | null;
 }
 
+export interface SaleFollowup {
+  id: number;
+  order_code: string | null;
+  product_id: number;
+  product_name: string | null;
+  supplier_id: number;
+  supplier_name: string | null;
+  recipient_name: string | null;
+  amount: number;
+  currency: Currency;
+  status: SaleStatus;
+  created_at: string;
+  updated_at: string;
+  age_hours: number;
+}
+
+export interface FollowupPage {
+  hours: number;
+  items: SaleFollowup[];
+}
+
 export interface CurrencyTotals {
   currency: Currency;
   gross_sales: number;

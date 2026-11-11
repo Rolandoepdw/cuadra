@@ -935,5 +935,82 @@ class CancelCustomerNoticeTests(Phase3TestCase):
         self.assertEqual(self._send_jobs(), 0)
 
 
+class FollowupTests(Phase3TestCase):
+    """Dashboard reminder for sales left open too long (no message is sent)."""
+
+    def _age(self, sale_id, hours):
+        self.conn.execute(
+            "UPDATE sales SET updated_at = datetime('now', ?) WHERE id = ?",
+            (f"-{hours} hours", sale_id),
+        )
+        self.conn.commit()
+
+    def test_a_fresh_sale_is_not_a_followup(self):
+        self.create_sale()
+
+        self.assertEqual(sales.followups(self.conn, hours=24), [])
+
+    def test_a_stale_open_sale_appears_with_its_age_and_links(self):
+        sale = self.create_sale()
+        self._age(sale["id"], 30)
+
+        items = sales.followups(self.conn, hours=24)
+
+        self.assertEqual(len(items), 1)
+        item = items[0]
+        self.assertEqual(item["order_code"], sale["order_code"])
+        self.assertEqual(item["product_name"], "Producto 1")
+        self.assertEqual(item["supplier_name"], "TCP Uno")
+        self.assertEqual(item["status"], "PENDING_APPROVAL")
+        self.assertGreaterEqual(item["age_hours"], 29.5)
+        self.assertLessEqual(item["age_hours"], 30.5)
+
+    def test_cancelled_sales_are_not_followups(self):
+        sale = self.create_sale()
+        self._age(sale["id"], 48)
+        sales.cancel(self.conn, sale["id"], "cliente cambió de idea")
+
+        self.assertEqual(sales.followups(self.conn, hours=24), [])
+
+    def test_needs_operator_sales_do_appear(self):
+        sale = self.create_sale()
+        sales.approve(self.conn, sale["id"])
+        sales.mark_needs_operator(self.conn, sale["id"], "dispatch failed")
+        self._age(sale["id"], 30)
+
+        items = sales.followups(self.conn, hours=24)
+
+        self.assertEqual([item["status"] for item in items], ["NEEDS_OPERATOR"])
+
+    def test_the_threshold_and_order_are_respected(self):
+        old = self.create_sale()
+        recent = self.create_sale()
+        self._age(old["id"], 50)
+        self._age(recent["id"], 30)
+
+        self.assertEqual(
+            [item["id"] for item in sales.followups(self.conn, hours=24)],
+            [old["id"], recent["id"]],
+        )
+        self.assertEqual(
+            [item["id"] for item in sales.followups(self.conn, hours=40)],
+            [old["id"]],
+        )
+        self.assertEqual(
+            sales.followups(self.conn, hours=24, limit=1)[0]["id"], old["id"]
+        )
+
+    def test_the_api_returns_hours_and_items(self):
+        from cuadra.api import routes_finance
+
+        sale = self.create_sale()
+        self._age(sale["id"], 30)
+
+        result = routes_finance.followup_sales(hours=24, limit=50)
+
+        self.assertEqual(result["hours"], 24)
+        self.assertEqual([item["id"] for item in result["items"]], [sale["id"]])
+
+
 if __name__ == "__main__":
     unittest.main()
