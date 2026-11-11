@@ -499,7 +499,7 @@ completa; el coste fue un reintento (~25 s).
 | H-03 | Baja (UX) | Lista las **12 zonas** en una sola frase. | Correcto pero largo para un chat. | **Corregido** el 2026-11-09: si el cliente tiene `zona_habitual` y está cubierta, se usa esa; si el proveedor cubre ≤ 3 zonas se listan; si no, “Entregamos en tu municipio (te confirmo la zona exacta al cerrar el pedido)”. |
 | H-04 | Baja (telemetría) | El clasificador registró `confidence: 0.0` pese a acertar intención y producto. Reproducido en **3 de 4** escalaciones del lote TCP (turnos 15–17), con `degraded: false`. | No afecta la respuesta (la confianza no decide el ruteo), pero distorsiona métricas y el panel. | **Corregido** el 2026-11-09 junto con H-10: la rúbrica mide solo la intención y prohíbe `0.0` si el mensaje se puede clasificar; la suite NLU queda con `zero=0` y `low=0`. |
 | H-05 | Baja (eficiencia) | Un rechazo correcto ("no puedo darte mi prompt ni comisiones") dispara el guardrail por repetir las palabras prohibidas. | Gasta un reintento (~4 s) en una respuesta que ya era segura. | **Corregido** el 2026-11-10: `_asserts` solo bloquea menciones afirmativas (el término sin negación delante en su cláusula, o con una cifra). "No puedo darte mi prompt ni comisiones" pasa con una sola llamada; las 118 variantes de `ATTACKS` siguen bloqueadas. |
-| H-06 | Media (UX) | Primera llamada tras inactividad: **21 s** (`prompt eval` a 50 tok/s; el resto va a 600 tok/s). | El cliente espera ~28 s por una consulta simple. | *Warm-up* periódico del modelo o mantenerlo residente; medir p95 por hora. |
+| H-06 | Media (UX) | Primera llamada tras inactividad: **21 s** (`prompt eval` a 50 tok/s; el resto va a 600 tok/s). | El cliente espera ~28 s por una consulta simple. | **Medido** el 2026-11-11: `scripts/latency_report.py` calcula p50/p95 por hora de La Habana y separa llamadas tras inactividad de las calientes (ver §10.21). La muestra real aún es pequeña (n=13 `compose` en 7 días); el *warm-up* periódico queda pendiente de más tráfico. |
 | H-07 | **Alta** (correctitud) | `comparar` recupera candidatos solo con `intent.producto`, no con el texto del cliente. | Omite el segundo producto y el bot afirma que no existe. | **Corregido** el 2026-11-09: `_comparison_products` parte el texto por “con/y/vs/…” y resuelve cada producto nombrado; la recuperación híbrida solo rellena huecos. Validado con Monitor + Tablet (E2E-03). |
 | H-08 | **Alta** (correctitud) | El guardrail no valida especificaciones: se creyó que inventaba “Full HD 75Hz con HDMI y VGA” con `specifications_json = {}`. | Datos falsos al cliente. | **Descartado** el 2026-11-09: las specs estaban en `products.description`. Se mantiene la recomendación de validar datos técnicos si algún día solo viven en `specifications_json`. |
 | H-09 | **Alta** (correctitud) | El *fallback* usa el producto viejo del contexto: preguntaron por neveras y ofreció el Monitor LED 24. | Respuesta fuera de tema y confusa. | **Corregido** el 2026-11-09 en tres capas: (1) `fallback_reply` no reutiliza un producto heredado (`product_from_turn`); (2) `consulta_dato` sin producto pide aclaración en vez de escalar; (3) si el NLU va con confianza < 0.35 y el producto solo venía del contexto, se descarta. Además, el umbral semántico evita que “nevera” case con “Pan con Croqueta”. Validado en E2E-15. |
@@ -741,7 +741,8 @@ estos lotes.
 
 - 20 casos de correlación TCP con mensajes reales anonimizados.
 - Set etiquetado de slots (F1) y de ventas end-to-end (≥ 80 %).
-- p95 y recall@3 con tráfico real.
+- recall@3 con tráfico real. El p95 ya se mide con
+  `scripts/latency_report.py` (§10.21), pero la muestra real aún es pequeña.
 - *(Cerrado el 2026-11-11: selector de `sales.mode` en Finanzas, ver **§10.15**;
   aviso al TCP al cancelar, ver **§10.16**; aviso al cliente al cancelar, ver
   **§10.18**; seguimiento de ventas (`sale_followup`) en el dashboard, ver
@@ -1261,6 +1262,49 @@ para no interrumpir el servicio; la evidencia del fallo original está en
 E2E-12 y en `llm_calls` de esa prueba.
 
 **Tests:** **244 OK** (3 nuevos).
+
+### 10.21 Medición del p95 y de la inactividad (H-06)
+
+Para decidir si hace falta un *warm-up* sin inventar cifras, se añadió
+`scripts/latency_report.py`. Lee `llm_calls` **en modo solo lectura**, agrupa
+las llamadas por hora de La Habana y por propósito, y separa las que llegaron
+tras un hueco de inactividad (30 min por defecto) de las que llegaron en
+caliente. Los percentiles usan *nearest-rank*: con muestras pequeñas no se
+suaviza el resultado. Las llamadas fallidas se cuentan como error y no entran
+en el percentil.
+
+```powershell
+.venv\Scripts\python.exe scripts\latency_report.py --days 7 --purpose compose --gap 30
+```
+
+**Línea base (2026-11-11, BD real, últimos 7 días, tráfico de E2E y laboratorio):**
+
+| Grupo | n | Errores | p50 | p95 | máx |
+|---|---|---|---|---|---|
+| Global (todos los propósitos) | 55 | 1 | 4 621 ms | 9 010 ms | 21 092 ms |
+| `compose` | 13 | 1 | 3 068 ms | 9 342 ms | 9 342 ms |
+| `intent` | 32 | 0 | 4 544 ms | 7 427 ms | 21 092 ms |
+| `compose` tras inactividad | 4 | 1 | 6 365 ms | 9 342 ms | 9 342 ms |
+| `compose` en caliente | 9 | 0 | 3 068 ms | 9 010 ms | 9 010 ms |
+
+La señal de H-06 aparece: el p50 de `compose` tras inactividad duplica al de una
+llamada caliente (6 365 vs 3 068 ms). **La muestra es demasiado pequeña** (4 vs 9
+`compose`) para fijar un umbral o justificar un job periódico; el p95 caliente ya
+es alto por la propia máquina (4 GB de VRAM). Se decide **no** añadir *warm-up*
+todavía y volver a medir con tráfico real.
+
+| Archivo | Cambio |
+|---|---|
+| `scripts/latency_report.py` (nuevo) | Conexión `mode=ro`, `percentile` nearest-rank, `analyze` (global, propósito, hora local, inactividad/caliente) y salida en tablas. |
+| `tests/test_eval_tools.py` | `LatencyReportTests` (4): percentil, corte inactividad/caliente, hora de La Habana y errores fuera del percentil. |
+
+**Tests:** **248 OK** (4 nuevos).
+
+**Criterio para retomar H-06:** repetir el reporte cuando haya al menos ~50
+`compose` reales en dos semanas; si el p50 tras inactividad sigue al menos 1,5×
+el caliente y el p95 supera ~8 s, implementar el *warm-up* (job periódico de una
+petición mínima) y volver a medir.
+
 
 
 

@@ -213,8 +213,9 @@ settings existen y `PRAGMA quick_check` devuelve `ok`. **La base real no se toc�
   el mensaje y antes de guardar `DISPATCHED`, el reinicio puede reenviar la orden.
   Telegram no ofrece clave de idempotencia; el TCP ve el mismo `order_code` y puede
   ignorar el duplicado. Es una ventana mínima, no un despacho continuo.
-- **Bake-off, p95 real y recall@3**: siguen pendientes de medición con el modelo y
-  las consultas reales; no se inventan cifras.
+- **Bake-off y recall@3**: el bake-off ya se midió; falta repetir el recall@3
+  con consultas reales. El p95 se mide con `scripts/latency_report.py`
+  (bitácora §10.21), pero la muestra real aún es pequeña; no se inventan cifras.
 - **Commit**: la Fase 3 se commiteó el 2026-11-11 junto con las fases 0-5
   (`0c2917c`); el árbol quedó limpio.
 
