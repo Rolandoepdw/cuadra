@@ -181,7 +181,7 @@ Resumen de lo que importa:
 
 | Tabla | Uso actual | Nota para el rediseño |
 |---|---|---|
-| `suppliers` | TCP; `telegram_id`, `active`, zonas, condiciones | El TCP se identifica por `telegram_id`; `active` es borrado lógico |
+| `suppliers` | TCP; `telegram_id` (`@usuario`) y `telegram_peer_id` (id numérico), `active`, zonas, condiciones | El TCP se identifica por su id numérico; `telegram_id` es solo la etiqueta editable. `active` es borrado lógico |
 | `products` | Producto = presentación de un TCP | `price`, `currency`, `stock`, `status`, `specifications_json`; sin cantidad ni reserva |
 | `product_images` | Galería | El bot no “ve” imágenes; sólo se envían |
 | `customers` | Cliente; `preferences_json` existe | `preferences_json` **no se usa** hoy; no hay dirección/teléfono |

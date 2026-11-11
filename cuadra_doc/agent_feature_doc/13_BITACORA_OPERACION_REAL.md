@@ -785,6 +785,11 @@ real suficiente.
 | R-4 | recall@3 con tráfico real | El recall@3 offline usa el golden set sintético; falta confirmarlo con consultas reales. | ≥ 100 consultas reales anonimizadas con el producto correcto etiquetado. | `scripts/eval_retrieval.py` sobre ese set; objetivo recall@3 ≥ 90 %. |
 | R-5 | p95 con muestra real | La herramienta ya existe (`scripts/latency_report.py`, §10.21), pero hay n=13 `compose` en 7 días. | ~50 `compose` reales en dos semanas. | p50/p95 por hora y comparación inactividad/caliente; si el p50 tras inactividad es ≥ 1,5× el caliente y el p95 > 8 s, implementar el *warm-up* de H-06. |
 
+**✅ Ejecutado (R-6, 2026-11-11):** backfill real del id numérico de los TCP con
+`scripts/resolve_supplier_peers.py` y el endpoint `resolve-peer`. Los 4
+proveedores activos quedaron con `telegram_peer_id` (`16******38`, `18******17`,
+`89******76`, `97******59`); el `--dry-run` posterior ya no lista ninguno.
+
 **Cómo aportar los datos sin filtrar secretos:** exportar solo texto y metadatos
 necesarios (sin `telegram_id`, teléfonos completos ni tokens), anonimizar antes
 de guardarlos y mantenerlos fuera del repositorio. Los scripts de evaluación
@@ -1323,6 +1328,58 @@ todavía y volver a medir con tráfico real.
 `compose` reales en dos semanas; si el p50 tras inactividad sigue al menos 1,5×
 el caliente y el p95 supera ~8 s, implementar el *warm-up* (job periódico de una
 petición mínima) y volver a medir.
+
+### 10.22 Identidad de Telegram: id numérico, no `@usuario` (R-6)
+
+**Hallazgo.** El username de Telegram es mutable (se renombra o se libera), así
+que no sirve como clave. La auditoría confirmó que los **clientes** ya usan el id
+numérico en todo el camino:
+
+| Punto | Evidencia | Valor |
+|---|---|---|
+| Bot (aiogram) | `channels/telegram.py:42,57,71` | `str(message.chat.id)` |
+| Userbot (Telethon) | `channels/telegram_user.py:98` | `str(event.sender_id)` |
+| Persistencia | `customer_channels (channel, identifier)` UNIQUE | ids de 10 dígitos |
+| Salida | `ai/handlers.py:516` → `get_channel_identifier` | mismo id numérico |
+
+En la BD real, `customer_channels` guarda ids numéricos (p. ej. `12******86`,
+`89******76`); el `@usuario` solo aparece como nombre de respaldo en
+`telegram_user.py:77`. **No hay ninguna búsqueda de cliente por username.**
+
+Donde sí había riesgo era en **proveedores**: `suppliers.telegram_id` guarda el
+`@usuario` y `telegram_peer_id` (migración 016) el id numérico, pero este último
+solo se rellenaba tras un envío saliente exitoso (`ai/handlers.py:608-635`). En
+la BD real, 3 de 4 proveedores activos tenían `telegram_peer_id = NULL`, así que
+un cambio de handle rompía la correlación o, peor, podía entregar tráfico del
+negocio a quien tomara el handle liberado.
+
+**Cambios.**
+
+| Archivo | Cambio |
+|---|---|
+| `domain/catalog.py` | `normalize_telegram_handle` (acepta `nombre`, `@nombre`, `t.me/nombre`), `clean_telegram_peer_id` (solo numérico), `find_supplier_by_telegram_handle`, `list_suppliers_missing_peer`. `create_supplier`/`update_supplier` normalizan el handle y aceptan `telegram_peer_id`. |
+| `ai/ingest.py` | `ingest_incoming(handle=...)`. Si el id numérico no matchea, se busca el TCP por `@usuario`; si no tiene peer se **aprende y persiste** (`supplier_peer_resolved`, `source: inbound`). Si ya tiene peer distinto, **no** se rutea como TCP y se registra `supplier_peer_mismatch` una sola vez (handle reasignado). Los chats de grupo (id negativo) nunca se aprenden como peer personal. |
+| `channels/telegram.py`, `channels/telegram_user.py` | Pasan `from_user.username` / `sender.username` al ingest. |
+| `api/models.py`, `api/routes_catalog.py` | `telegram_peer_id` en `SupplierIn/Patch`; `POST /api/suppliers/{id}/resolve-peer` resuelve el id con el userbot (400 sin handle, 503 sin userbot, 502 si Telegram no responde). |
+| `dashboard/…/tcp_tab.tsx` | Badge `id ✓` / `sin id` junto al handle, campo «ID numérico de Telegram» y botón «Resolver». |
+| `scripts/resolve_supplier_peers.py` (nuevo) | Backfill masivo con `--dry-run`, pacing `USERBOT_MIN_SEND_GAP_S`, evento por TCP y `supplier_peer_resolved` con `source: backfill`. Requiere el core detenido (sesión única de Telethon). |
+
+**Política resultante:** el id numérico manda; el handle es una etiqueta. Un
+remitente con handle conocido pero id distinto del peer guardado **nunca** se
+trata como TCP: se degrada a cliente y se avisa en `events` para revisión
+manual. Un TCP recién dado de alta aprende su id con el primer mensaje que
+escriba, sin que el operador tenga que hacer nada.
+
+**Tests:** **259 OK** (11 nuevos en `tests/test_telegram_identity.py`:
+normalización, validación del peer, alta con handle normalizado, aprendizaje
+pasivo, match posterior sin handle, renombre del TCP, toma del handle por un
+tercero, no repetición del aviso, chat de grupo que nunca se aprende como peer y
+lista de pendientes). `tsc --noEmit` limpio y dashboard recompilado.
+
+**Cerrado (R-6):** el backfill real se ejecutó el 2026-11-11 con el userbot y el
+core detenido: los 4 TCP activos quedaron con `telegram_peer_id` y el
+`--dry-run` posterior no lista ninguno. El aprendizaje pasivo sigue cubriendo a
+los TCP nuevos en cuanto escriban.
 
 
 

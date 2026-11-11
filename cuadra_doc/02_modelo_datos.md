@@ -37,7 +37,7 @@ Verbatim en `backend/migrations/001_init.sql`. Resumen de referencia:
 | Tabla | Rol | Estados / valores |
 |---|---|---|
 | `categories` | Taxonomía operativa (curaduría del operador) | `active` 0/1 |
-| `suppliers` | Proveedores (TCP) | `active` 0/1 |
+| `suppliers` | Proveedores (TCP) | `active` 0/1; `telegram_id` es el `@usuario` (mutable) y `telegram_peer_id` el id numérico estable |
 | `products` | Presentación de UN proveedor | `status`: `ACTIVE`, `OUT_OF_STOCK`, `PAUSED`, `REMOVED`; `currency`/`commission_currency`: `USD`, `CUP` |
 | `product_images` | Galería por producto (ruta relativa bajo `data/fotos/product_{id}/`) | `is_main`, `sort_order` |
 | `customers` | Cliente con identidad multi-canal | — |
@@ -69,7 +69,7 @@ Verbatim en `backend/migrations/001_init.sql`. Resumen de referencia:
   `{"car_cable": "Sí, incluido", "warranty": "6 meses", "beach_delivery": "24h"}` — se enriquece con cada respuesta del TCP y se inyecta en el contexto del LLM para no volver a preguntar.
 - **Fotografía histórica en `sales.context_json`:** al crear la venta se congela precio, moneda, comisión y zona del TCP del momento — una auditoría no puede depender de datos editables del catálogo.
 - **Moneda explícita en todo:** ni precios ni comisiones sin `currency`/`commission_currency`. **`commission_currency` es intencional:** lo habitual es cobrar la comisión en USD aunque el precio esté en CUP. Conversiones (si algún día se necesitan) se hacen al registrar la venta, no al consultar.
-- **Identidad de cliente:** la llave natural es `(channel, identifier)`. El mismo cliente en Telegram y WhatsApp futuro son dos filas de `customer_channels` apuntando al mismo `customers.id` (el merge es manual/operativo).
+- **Identidad de cliente:** la llave natural es `(channel, identifier)`. El mismo cliente en Telegram y WhatsApp futuro son dos filas de `customer_channels` apuntando al mismo `customers.id` (el merge es manual/operativo). En Telegram, `identifier` es siempre el **id numérico**, nunca el `@usuario` (que puede cambiar de dueño).
 - **Rutas de imágenes:** relativas bajo `data/` (p. ej. `fotos/product_12/img_001.jpg`), nunca rutas absolutas — la BD es portable entre máquinas. Las imágenes se comprimen al subir (máx. 1280 px, ~500 KB).
 - **Borrado lógico preferido:** `suppliers.active = 0` y `products.status = 'REMOVED'` en lugar de `DELETE` físico (las ventas y el historial referencian estas filas). `DELETE` físico reservado para datos sin referencias (imágenes sueltas, categorías sin usar).
 - **Regla de seguridad de categorías (anti-baneo):** el scheduler solo publica un producto en grupos `ACTIVE` cuyas categorías (`group_categories`) incluyan su `category_id`. **Producto con `category_id = NULL` solo va a grupos sin categorías asignadas** (grupos libres). La selección manual (`broadcast_group_links`) tiene prioridad sobre el auto-match, pero la regla de NULL se aplica igual.

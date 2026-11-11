@@ -153,10 +153,18 @@ El destino de salida se resuelve desde `customer_channels` (`get_channel_identif
 el mensaje guardado no conoce la dirección, el canal la aporta.
 
 **Ruteo de entrada (`ai/ingest.py`):** un mensaje entrante cuyo `identifier` coincide con
-el `suppliers.telegram_id` de un proveedor activo se trata como **respuesta de TCP**
-(`author='tcp'`, job `tcp_reply`); cualquier otro identificador es un **cliente**
-(`author='customer'`, jobs `transcribe_audio`/`generate_reply`). `ingest_incoming`
-devuelve `source: customer|supplier`.
+el `suppliers.telegram_peer_id` (id numérico) o con el `suppliers.telegram_id` de un
+proveedor activo se trata como **respuesta de TCP** (`author='tcp'`, job `tcp_reply`);
+cualquier otro identificador es un **cliente** (`author='customer'`, jobs
+`transcribe_audio`/`generate_reply`). `ingest_incoming` devuelve `source: customer|supplier`.
+
+**Identidad de Telegram:** clientes y proveedores se identifican por el **id numérico**
+(`customer_channels.identifier`, `suppliers.telegram_peer_id`), nunca por `@usuario`.
+El username es mutable: se puede renombrar o liberar. Cuando un remitente conocido
+escribe con un `@usuario` que coincide con un TCP sin peer guardado, `ingest` aprende
+el id numérico y lo persiste (`supplier_peer_resolved`). Si el peer ya existe y el
+remitente es otro, **no** se rutea como TCP y se emite `supplier_peer_mismatch` (el
+handle pudo cambiar de dueño).
 
 ## 5. Concurrencia y colas (punto crítico)
 
