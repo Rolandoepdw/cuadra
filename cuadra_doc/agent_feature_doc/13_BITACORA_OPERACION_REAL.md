@@ -532,8 +532,9 @@ completa; el coste fue un reintento (~25 s).
 > (redacción), H-12, H-14 y H-25 (contexto/prompt), H-22 (aviso completo al
 > cliente), H-04, H-10 y H-27 (NLU, confianza y resolución semántica), H-23
 > (precios superados en el historial), H-18/H-19 (dashboard), H-02 (transporte) y
-> H-05 (rechazos y guardrail). El detalle técnico y los reintentos están en
-> **§10**. La suite completa pasa con **216 tests**.
+> H-05 (rechazos y guardrail). También se cerró el pendiente del selector de
+> `sales.mode`. El detalle técnico y los reintentos están en **§10**. La suite
+> completa pasa con **220 tests**.
 
 ---
 
@@ -739,7 +740,8 @@ estos lotes.
 - 20 casos de correlación TCP con mensajes reales anonimizados.
 - Set etiquetado de slots (F1) y de ventas end-to-end (≥ 80 %).
 - p95 y recall@3 con tráfico real.
-- UI de `sales.mode`, aviso al TCP al cancelar y `sale_followup`.
+- Aviso al TCP al cancelar y `sale_followup`.
+- *(Cerrado el 2026-11-11: selector de `sales.mode` en Finanzas, ver **§10.15**.)*
 
 ### 9.1 ✅ Ejecutado — E2E-14 (cierre por inactividad)
 
@@ -1064,6 +1066,29 @@ comercial); "no" debe ir delante del término en su cláusula. Así
 **Tests:** **216 OK** (4 nuevos). Las 118 variantes de `ATTACKS` del set de
 endurecimiento siguen bloqueadas; E2E-09 pasaría ahora con una sola llamada al
 modelo.
+
+### 10.15 Selector de `sales.mode` en el dashboard (pendiente de Fase 3)
+
+Hasta ahora `sales.mode` (`assisted` / `hybrid` / `autonomous`) se cambiaba con
+SQL directo; el panel de Finanzas solo mostraba el modo. Se añadió el control
+sin tocar la lógica de ventas: `sale_mode()` sigue siendo la única fuente de
+verdad y cae a `assisted` ante un valor inválido.
+
+| Archivo | Cambio |
+|---|---|
+| `domain/sales.py` | `set_sale_mode()` valida contra `SALES_MODES` y persiste con `settings.set()` (mantiene `updated_at`). |
+| `api/models.py`, `api/routes_settings.py` | `SalesSettingsIn`; `GET/PUT /api/settings/sales`; el PUT registra `sales_settings_saved`. El `Literal` de pydantic rechaza valores fuera de la lista con **422**. |
+| `dashboard/src/panels/finance/finance_panel.tsx` | Card **“Modo de venta”** con selector, explicación del modo y confirmación antes de guardar. `autonomous` se marca como acción destructiva. |
+| `dashboard/src/lib/api.ts`, `types/api.ts` | `getSalesSettings()` / `setSalesSettings()` y `SalesSettings`. |
+| `tests/test_sales_finance.py` | `SalesModeSettingsTests` (4): defecto, persistencia visible en `summary`, rechazo de valor inválido y caída a `assisted` si la BD tiene basura. |
+
+**Evidencia (API real, 2026-11-11):** `GET` → `{"mode":"assisted"}`; `PUT`
+`hybrid` → `{"mode":"hybrid"}` y `GET /api/finance/summary` devolvió
+`"mode":"hybrid"`; `PUT` de vuelta a `assisted`; `PUT` con `free` → **HTTP 422**.
+Eventos 443/444 `sales_settings_saved` (`hybrid`, `assisted`). La BD quedó en
+`assisted`.
+
+**Tests:** **220 OK** (4 nuevos). El dashboard compiló con `npm run build`.
 
 
 
