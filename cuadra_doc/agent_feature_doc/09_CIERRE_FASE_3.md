@@ -189,10 +189,11 @@ settings existen y `PRAGMA quick_check` devuelve `ok`. **La base real no se toc�
 
 ## 8. Limitaciones de esta fase
 
-- **Modo de autonomía sin UI**: `sales.mode` se cambia en la tabla `settings`
-  (`assisted` por defecto). El panel muestra el modo, pero no lo edita todavía.
-- **Sin notificación al TCP al cancelar**: `02` §7.4 la menciona “si es posible”;
-  hoy el operador ve la venta cancelada en el dashboard y avisa al TCP por su cuenta.
+- **Modo de autonomía**: `sales.mode` (`assisted` por defecto) ya se edita desde
+  la card **Modo de venta** de Finanzas; `autonomous` pide confirmación.
+- **Notificación al TCP al cancelar**: implementada el 2026-11-11 (bitácora
+  §10.16). Se avisa por Telegram solo si la orden ya había llegado al TCP
+  (`DISPATCHED`/`CONFIRMED`); antes del despacho no hay nada que cancelar.
 - **Sin `sale_followup`**: no hay recordatorio automático porque `02` no define su
   contenido y D6-A mantiene las alertas en el dashboard.
 - **Cancelar después de `DELIVERED`**: no se permite por API; requiere decisión
@@ -208,7 +209,8 @@ settings existen y `PRAGMA quick_check` devuelve `ok`. **La base real no se toc�
   ignorar el duplicado. Es una ventana mínima, no un despacho continuo.
 - **Bake-off, p95 real y recall@3**: siguen pendientes de medición con el modelo y
   las consultas reales; no se inventan cifras.
-- **Sin commit**: la Fase 3 queda en el árbol de trabajo a la espera de revisión.
+- **Commit**: la Fase 3 se commiteó el 2026-11-11 junto con las fases 0-5
+  (`0c2917c`); el árbol quedó limpio.
 
 ---
 

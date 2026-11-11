@@ -522,6 +522,7 @@ completa; el coste fue un reintento (~25 s).
 | H-26 | Baja (UX) | `ask_which_product` empieza con “Claro que sí”; ante “¿Tienes neveras?” puede leerse como confirmación de disponibilidad. | Matiz de redacción en un caso de producto inexistente. | **Corregido** el 2026-11-09: la plantilla empieza “Dime cuál producto te interesa…” y el saludo del prompt ya no incluye “Claro que sí”. |
 | H-27 | **Alta** (correctitud) | Descubierto al corregir H-10: `cargador`/`cargadores` resolvía por similitud semántica a **“Moto Eléctrica Cargo”** (coseno 0.558 ≥ `RETRIEVAL_MIN_SEMANTIC_SCORE` 0.4), aunque el catálogo no tiene cargadores. | El bot habría respondido sobre una moto a quien preguntaba por un cargador. | **Corregido** el 2026-11-09: `_lexically_supported` exige que el buscador difuso también reconozca el candidato semántico antes de nombrarlo; la recuperación híbrida sigue rellenando huecos, pero no inventa un producto. Cubierto por 2 tests. |
 | H-28 | Baja (resiliencia) | Al implementar el aviso de cancelación se vio que `dispatch_sale` trataba `RateLimited` (la pausa de cortesía del userbot) como un fallo de envío y marcaba la venta `NEEDS_OPERATOR`. | Una espera de segundos pedía intervención del operador. | **Corregido** el 2026-11-11: `RateLimited` se re-lanza para que la cola aparque el job sin gastar intentos. Cubierto por 1 test. |
+| H-29 | Baja (UX) | Un segundo `.\start_cuadra.ps1` lanzaba otro core que el guardián rechazaba con un traceback crudo; con `-Background`, el sondeo de salud podía atribuir al proceso nuevo un éxito del anterior. | Arranque confuso: parece que el core está roto cuando en realidad ya estaba sano. | **Corregido** el 2026-11-11: preflight de salud (10 s; el endpoint tarda ~4 s) y del `cuadra.lock`; si ya hay un core, avisa y no lanza otro. Verificado en 8321 y con `-Port 8399`. |
 
 > H-01 quedó corregido en la BD y en la fuente. El nombre antiguo solo estaba en
 > `seed_demo_data.py` (corregido y commiteado el 2026-11-09); se comprobó que
@@ -1131,6 +1132,31 @@ adaptador falso, igual que el despacho. El aviso al cliente al cancelar sigue
 pendiente: la plantilla `sale_cancelled` existe pero nadie la envía.
 
 **Tests:** **229 OK** (9 nuevos). El dashboard compiló con `npm run build`.
+
+### 10.17 Arranque duplicado del core (H-29)
+
+El traceback `RuntimeError: another cuadra-core is already running (pid ...)` no
+era un fallo del core: el guardián de instancia estaba haciendo su trabajo. En
+ese momento ya había un `cuadra-core` sano en 8321 (pid 1516) y `start_cuadra.ps1`
+lanzó un segundo proceso, que murió con código 3. Además, el sondeo de salud de
+`-Background` usaba un timeout de 3 s y el endpoint tarda ~4,2 s en este laptop,
+así que podía dar por bueno el arranque usando la respuesta del proceso anterior.
+
+`start_cuadra.ps1` ahora hace un preflight antes de lanzar nada:
+
+1. Consulta `/api/health` (timeout 10 s). Si responde, muestra el PID del lock y
+   no arranca una segunda instancia.
+2. Si no responde pero el `cuadra.lock` apunta a un PID vivo, avisa que hay un
+   core arrancando o colgado y sugiere `.\stop_cuadra.ps1`.
+3. Si el lock es viejo o no existe, arranca normal. El sondeo de `-Background`
+   también subió a 10 s.
+
+**Verificación:** con el core en 8321 → aviso con `pid 1516`, sin lanzar nada;
+con `-Port 8399` → detecta el lock vivo y avisa; tras `stop` + `start
+-Background` → core nuevo (pid 36068) respondiendo y `llm.status = ok`.
+
+**Tests:** comprobación manual de los tres caminos (el arranque no tiene tests
+unitarios).
 
 
 
