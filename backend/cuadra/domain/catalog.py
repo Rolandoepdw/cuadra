@@ -66,6 +66,43 @@ def _set_clause(fields: dict) -> tuple[str, list]:
     return ", ".join(f"{k} = ?" for k in fields), list(fields.values())
 
 
+# --------------------------------------------------------------- telegram ids
+#
+# Customers are keyed by their numeric Telegram id (`customer_channels`), which
+# never changes. Suppliers, however, are registered by `@usuario`, which the
+# owner can rename or release; `telegram_peer_id` keeps the numeric id so
+# inbound matching survives a rename (migration 016).
+
+_TELEGRAM_NUMERIC_RE = re.compile(r"^-?\d+$")
+_TELEGRAM_LINK_RE = re.compile(
+    r"^(?:https?://)?(?:t\.me|telegram\.me)/([A-Za-z][A-Za-z0-9_]*)/?$",
+    re.IGNORECASE,
+)
+
+
+def normalize_telegram_handle(value: Any) -> str | None:
+    """Canonical `@usuario` form (accepts `nombre`, `@nombre` and t.me links)."""
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if _TELEGRAM_NUMERIC_RE.match(raw):
+        return raw
+    match = _TELEGRAM_LINK_RE.match(raw)
+    if match is not None:
+        raw = match.group(1)
+    raw = raw.lstrip("@").strip()
+    return f"@{raw}" if raw else None
+
+
+def clean_telegram_peer_id(value: Any) -> str | None:
+    """Numeric Telegram id (negative for groups); empty clears the field."""
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    _require(bool(_TELEGRAM_NUMERIC_RE.match(raw)), "telegram_peer_id must be numeric")
+    return raw
+
+
 # ---------------------------------------------------------------- categories
 
 def list_categories(conn, active: bool | None = None) -> list[dict]:
@@ -373,14 +410,15 @@ def create_supplier(conn, data: dict) -> dict:
     name = _clean_name(data.get("name"), "name")
     cur = conn.execute(
         """INSERT INTO suppliers
-           (name, business_alias, whatsapp_phone, telegram_id, delivery_zone,
-            payment_terms, priority, notes, active)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           (name, business_alias, whatsapp_phone, telegram_id, telegram_peer_id,
+            delivery_zone, payment_terms, priority, notes, active)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             name,
             data.get("business_alias"),
             data.get("whatsapp_phone"),
-            data.get("telegram_id"),
+            normalize_telegram_handle(data.get("telegram_id")),
+            clean_telegram_peer_id(data.get("telegram_peer_id")),
             data.get("delivery_zone"),
             data.get("payment_terms"),
             int(data.get("priority", 100)),
@@ -410,6 +448,7 @@ _SUPPLIER_FIELDS = (
     "business_alias",
     "whatsapp_phone",
     "telegram_id",
+    "telegram_peer_id",
     "delivery_zone",
     "payment_terms",
     "priority",
@@ -431,6 +470,10 @@ def update_supplier(conn, supplier_id: int, data: dict) -> dict:
             fields["priority"] = int(data["priority"])
         elif key == "active":
             fields["active"] = int(bool(data["active"]))
+        elif key == "telegram_id":
+            fields["telegram_id"] = normalize_telegram_handle(data["telegram_id"])
+        elif key == "telegram_peer_id":
+            fields["telegram_peer_id"] = clean_telegram_peer_id(data["telegram_peer_id"])
         else:
             fields[key] = data[key]
     if "delivery_zone_ids" in data:
@@ -516,7 +559,7 @@ def set_supplier_telegram_peer(conn, supplier_id: int, peer_id: str | None) -> N
     the human handle (`@usuario`). Keeping the resolved peer lets TCP acks match
     without resolving the username on every inbound message.
     """
-    raw = str(peer_id).strip() if peer_id is not None else ""
+    raw = clean_telegram_peer_id(peer_id)
     if not raw:
         return
     _get(conn, "suppliers", supplier_id, "supplier")
@@ -540,6 +583,38 @@ def find_supplier_by_telegram_id(conn, telegram_id: str) -> dict | None:
         (raw, raw),
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+def find_supplier_by_telegram_handle(conn, handle: str) -> dict | None:
+    """Resolve an inbound sender's `@usuario` to its supplier.
+
+    Used as a fallback when the numeric id is still unknown: the supplier row
+    stores the mutable handle, so a reply from them is the chance to learn their
+    stable id (see `ai.ingest`).
+    """
+    normalized = normalize_telegram_handle(handle)
+    if not normalized:
+        return None
+    row = conn.execute(
+        """SELECT * FROM suppliers
+           WHERE active = 1
+             AND LOWER(telegram_id) IN (?, ?)
+           LIMIT 1""",
+        (normalized.lower(), normalized.lstrip("@").lower()),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def list_suppliers_missing_peer(conn) -> list[dict]:
+    """Active suppliers still identified only by their mutable handle."""
+    rows = conn.execute(
+        """SELECT id, name, telegram_id FROM suppliers
+           WHERE active = 1
+             AND (telegram_peer_id IS NULL OR telegram_peer_id = '')
+             AND telegram_id IS NOT NULL AND telegram_id != ''
+           ORDER BY id"""
+    )
+    return [dict(r) for r in rows]
 
 
 # ------------------------------------------------------------------ products

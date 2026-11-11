@@ -77,11 +77,14 @@ def _sender_name(sender) -> str | None:
     return name or getattr(sender, "username", None)
 
 
-def _ingest_userbot(identifier: str, name: str | None, **kwargs) -> None:
+def _ingest_userbot(
+    identifier: str, name: str | None, handle: str | None = None, **kwargs
+) -> None:
     ingest.ingest_incoming(
         channel="telegram",
         identifier=identifier,
         customer_name=name,
+        handle=handle,
         identity="userbot",
         **kwargs,
     )
@@ -102,6 +105,7 @@ async def _on_private_message(event) -> None:
             _ingest_userbot(
                 identifier,
                 name,
+                handle=getattr(sender, "username", None),
                 type="text",
                 body=message.text,
                 external_id=str(message.id),
@@ -118,6 +122,7 @@ async def _on_private_message(event) -> None:
             _ingest_userbot(
                 identifier,
                 name,
+                handle=getattr(sender, "username", None),
                 type="audio",
                 file_path=f"audios/{path.name}",
                 external_id=str(message.id),
@@ -130,6 +135,7 @@ async def _on_private_message(event) -> None:
             _ingest_userbot(
                 identifier,
                 name,
+                handle=getattr(sender, "username", None),
                 type="image",
                 file_path=f"images/{path.name}",
                 external_id=str(message.id),

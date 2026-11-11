@@ -30,6 +30,7 @@ class SupplierIn(BaseModel):
     business_alias: str | None = None
     whatsapp_phone: str | None = None
     telegram_id: str | None = None
+    telegram_peer_id: str | None = None
     delivery_zone: str | None = None
     delivery_zone_ids: list[int] = Field(default_factory=list)
     payment_terms: str | None = None
@@ -43,6 +44,7 @@ class SupplierPatch(BaseModel):
     business_alias: str | None = None
     whatsapp_phone: str | None = None
     telegram_id: str | None = None
+    telegram_peer_id: str | None = None
     delivery_zone: str | None = None
     delivery_zone_ids: list[int] | None = None
     payment_terms: str | None = None

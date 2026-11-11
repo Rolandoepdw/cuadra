@@ -26,6 +26,7 @@ def ingest_incoming(
     body: str | None = None,
     file_path: str | None = None,
     customer_name: str | None = None,
+    handle: str | None = None,
     identity: str | None = None,
     external_id: str | None = None,
 ) -> dict:
@@ -37,6 +38,8 @@ def ingest_incoming(
             if channel == "telegram"
             else None
         )
+        if supplier is None and channel == "telegram" and handle:
+            supplier = _resolve_supplier_by_handle(conn, handle, identifier)
 
         if supplier is not None:
             return _ingest_supplier(
@@ -97,6 +100,81 @@ def ingest_incoming(
         }
     finally:
         conn.close()
+
+
+def _resolve_supplier_by_handle(conn, handle: str, identifier: str) -> dict | None:
+    """Match an inbound `@usuario` and learn its numeric id the first time.
+
+    Suppliers are registered by handle, so a rename breaks numeric matching until
+    the peer is known; a reply from them is a chance to learn it for free. Once a
+    peer is stored, a different sender on the same handle is NOT the supplier:
+    handles can be released and taken over, and business traffic must never reach
+    whoever took them.
+    """
+    supplier = catalog.find_supplier_by_telegram_handle(conn, handle)
+    if supplier is None:
+        return None
+
+    actual = str(identifier).strip()
+    if actual.startswith("-"):
+        # Group/channel chat id: the bot got added to a group, not a TCP writing
+        # in private. Learning it would send escalations to the whole group.
+        return None
+
+    peer = str(supplier.get("telegram_peer_id") or "").strip()
+
+    if peer and peer != actual:
+        log.warning(
+            "supplier %s handle %s now writes from %s (expected %s)",
+            supplier["id"],
+            supplier.get("telegram_id"),
+            actual,
+            peer,
+        )
+        already = conn.execute(
+            """SELECT 1 FROM events
+               WHERE type = 'supplier_peer_mismatch' AND entity = 'suppliers'
+                 AND entity_id = ? AND details_json LIKE ?
+               LIMIT 1""",
+            (supplier["id"], f'%"actual_peer_id": "{actual}"%'),
+        ).fetchone()
+        if already is None:
+            events.log(
+                conn,
+                "bot",
+                "supplier_peer_mismatch",
+                entity="suppliers",
+                entity_id=supplier["id"],
+                details={
+                    "telegram_id": supplier.get("telegram_id"),
+                    "expected_peer_id": peer,
+                    "actual_peer_id": actual,
+                },
+            )
+        return None
+
+    if not peer:
+        catalog.set_supplier_telegram_peer(conn, supplier["id"], actual)
+        supplier["telegram_peer_id"] = actual
+        log.info(
+            "learned telegram peer %s for supplier %s (%s)",
+            actual,
+            supplier["id"],
+            supplier.get("telegram_id"),
+        )
+        events.log(
+            conn,
+            "bot",
+            "supplier_peer_resolved",
+            entity="suppliers",
+            entity_id=supplier["id"],
+            details={
+                "telegram_id": supplier.get("telegram_id"),
+                "peer_id": actual,
+                "source": "inbound",
+            },
+        )
+    return supplier
 
 
 def _ingest_supplier(

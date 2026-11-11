@@ -119,6 +119,9 @@ export const updateSupplier = (id: number, body: SupplierPatch) =>
   request<Supplier>(`/api/suppliers/${id}`, { method: "PATCH", body: JSON.stringify(body) });
 export const deleteSupplier = (id: number) =>
   request<Supplier>(`/api/suppliers/${id}`, { method: "DELETE" });
+// Asks the userbot for the numeric id behind the `@usuario` (needs the session).
+export const resolveSupplierPeer = (id: number) =>
+  request<Supplier>(`/api/suppliers/${id}/resolve-peer`, { method: "POST" });
 
 // -------------------------------------------------------------------- products
 

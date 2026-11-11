@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Plus, Pencil, Trash2 } from "lucide-react";
-import { createSupplier, deleteSupplier, listSuppliers, listZones, updateSupplier } from "@/lib/api";
+import { createSupplier, deleteSupplier, listSuppliers, listZones, resolveSupplierPeer, updateSupplier } from "@/lib/api";
 import type { Supplier, SupplierIn } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,6 +24,7 @@ const EMPTY: SupplierIn = {
   business_alias: "",
   whatsapp_phone: "",
   telegram_id: "",
+  telegram_peer_id: "",
   delivery_zone: "",
   delivery_zone_ids: [],
   payment_terms: "",
@@ -56,7 +57,16 @@ export function TcpTab() {
   const columns: ColumnDef<Supplier, unknown>[] = [
     { accessorKey: "name", header: "Nombre" },
     { accessorKey: "business_alias", header: "Alias", cell: (c) => c.row.original.business_alias ?? "—" },
-    { accessorKey: "telegram_id", header: "Telegram", cell: (c) => c.row.original.telegram_id ?? "—" },
+    { accessorKey: "telegram_id", header: "Telegram", cell: (c) => (
+      <div className="flex items-center gap-2">
+        <span>{c.row.original.telegram_id ?? "—"}</span>
+        {c.row.original.telegram_id && (
+          <Badge variant={c.row.original.telegram_peer_id ? "success" : "secondary"}>
+            {c.row.original.telegram_peer_id ? "id ✓" : "sin id"}
+          </Badge>
+        )}
+      </div>
+    ) },
     {
       accessorKey: "delivery_zone_ids",
       header: "Zonas",
@@ -147,6 +157,14 @@ function SupplierForm({
   const [form, setForm] = useState<SupplierIn>(EMPTY);
   const [initializedFor, setInitializedFor] = useState<number | "new" | null>(null);
   const { data: zones = [] } = useQuery({ queryKey: ["zones"], queryFn: listZones });
+  const qc = useQueryClient();
+  const resolve = useMutation({
+    mutationFn: (id: number) => resolveSupplierPeer(id),
+    onSuccess: (updated) => {
+      setForm((f) => ({ ...f, telegram_peer_id: updated.telegram_peer_id ?? "" }));
+      qc.invalidateQueries({ queryKey: ["suppliers"] });
+    },
+  });
 
   const key = supplier?.id ?? "new";
   if (open && initializedFor !== key) {
@@ -157,6 +175,7 @@ function SupplierForm({
             business_alias: supplier.business_alias ?? "",
             whatsapp_phone: supplier.whatsapp_phone ?? "",
             telegram_id: supplier.telegram_id ?? "",
+            telegram_peer_id: supplier.telegram_peer_id ?? "",
             delivery_zone: supplier.delivery_zone ?? "",
             delivery_zone_ids: supplier.delivery_zone_ids ?? [],
             payment_terms: supplier.payment_terms ?? "",
@@ -187,6 +206,34 @@ function SupplierForm({
           </Field>
           <Field label="Telegram ID">
             <Input value={form.telegram_id ?? ""} onChange={(e) => set("telegram_id", e.target.value)} />
+          </Field>
+          <Field label="ID numérico de Telegram">
+            <div className="flex gap-2">
+              <Input
+                value={form.telegram_peer_id ?? ""}
+                onChange={(e) => set("telegram_peer_id", e.target.value)}
+                placeholder="Ej. 123456789"
+              />
+              {supplier && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => resolve.mutate(supplier.id)}
+                  disabled={
+                    !form.telegram_id || resolve.isPending || form.telegram_id !== supplier.telegram_id
+                  }
+                >
+                  {resolve.isPending ? "..." : "Resolver"}
+                </Button>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              El @usuario puede cambiar o liberarse; el id numérico no. Se aprende solo cuando el
+              TCP escribe, o con «Resolver» (requiere userbot conectado).
+            </p>
+            {resolve.isError && (
+              <p className="text-xs text-destructive">{(resolve.error as Error).message}</p>
+            )}
           </Field>
           <Field label="WhatsApp">
             <Input value={form.whatsapp_phone ?? ""} onChange={(e) => set("whatsapp_phone", e.target.value)} />

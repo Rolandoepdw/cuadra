@@ -19,7 +19,7 @@ from cuadra.api.models import (
     ZoneIn,
     ZonePatch,
 )
-from cuadra.domain import catalog, catalog_mutations
+from cuadra.domain import catalog, catalog_mutations, events
 from cuadra.domain.errors import Conflict
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_pin)])
@@ -147,6 +147,50 @@ def update_supplier(supplier_id: int, payload: SupplierPatch) -> dict:
 def delete_supplier(supplier_id: int) -> dict:
     """Soft delete: sets active=false (sales reference the supplier)."""
     return _out(_run(catalog.delete_supplier, supplier_id))
+
+
+@router.post("/suppliers/{supplier_id}/resolve-peer")
+async def resolve_supplier_peer(supplier_id: int) -> dict:
+    """Ask the userbot for the numeric id behind the supplier's `@usuario`.
+
+    The handle can be renamed or released by its owner; the numeric id cannot,
+    and it is what inbound TCP messages carry. Requires the userbot session.
+    """
+    from cuadra.channels import telegram_user
+
+    supplier = _run(catalog.get_supplier, supplier_id)
+    target = supplier.get("telegram_id")
+    if not target:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "supplier has no telegram_id")
+    if not telegram_user.available():
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "userbot is not connected"
+        )
+    try:
+        peer = await telegram_user.resolve_peer(target)
+    except Exception as exc:  # noqa: BLE001 - reported to the operator, not retried
+        log.warning("could not resolve peer for supplier %s", supplier_id, exc_info=True)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, f"could not resolve {target}"
+        ) from exc
+    if not peer:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, f"telegram returned no id for {target}"
+        )
+    conn = db.connect()
+    try:
+        catalog.set_supplier_telegram_peer(conn, supplier_id, peer)
+        events.log(
+            conn,
+            "dashboard",
+            "supplier_peer_resolved",
+            entity="suppliers",
+            entity_id=supplier_id,
+            details={"telegram_id": target, "peer_id": peer, "source": "dashboard"},
+        )
+    finally:
+        conn.close()
+    return _out(_run(catalog.get_supplier, supplier_id))
 
 
 # ------------------------------------------------------------------ products

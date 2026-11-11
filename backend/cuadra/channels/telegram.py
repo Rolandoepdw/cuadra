@@ -103,6 +103,7 @@ async def _handle(
             body=body,
             file_path=file_path,
             customer_name=name,
+            handle=getattr(from_user, "username", None),
             identity="bot",
             external_id=external_id,
         )
