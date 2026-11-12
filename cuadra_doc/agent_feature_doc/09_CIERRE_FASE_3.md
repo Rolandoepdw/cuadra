@@ -62,9 +62,11 @@ Settings nuevos (en `settings`, no en `.env`):
 - **Resumen sin `domain/finance.py`**: las métricas viven en `sales.summary()` para
   no duplicar consultas ni abrir una capa vacía. El panel consume el mismo contrato
   descrito en `02` §7.1.
-- **`sale_followup` sin job**: el documento `02` no define el contenido del job y
-  D6-A prohíbe notificar al operador por Telegram. El recordatorio vive solo en
-  el dashboard (`GET /api/finance/followups` y la card **Seguimiento**).
+- **`sale_followup` sin job (histórico)**: cerrado el 2026-11-12 (bitácora
+  §10.24). El documento `02` no define el contenido del job y D6-A prohíbe
+  notificar al operador por Telegram; por eso la v2 escribe **al cliente** por el
+  *outbox*, solo en `CONFIRMED`/`NEEDS_OPERATOR`, una vez por venta y de 09:00 a
+  20:00. El panel sigue mostrando las ventas estancadas.
 
 ---
 
@@ -198,10 +200,10 @@ settings existen y `PRAGMA quick_check` devuelve `ok`. **La base real no se toc�
 - **Aviso al cliente al cancelar**: implementado el 2026-11-11 (bitácora §10.18).
   Siempre que la venta tenga conversación, el cliente recibe `sale_cancelled` por
   el *outbox* de respuestas; el mensaje es idempotente por venta.
-- **`sale_followup` solo en el dashboard**: la card **Seguimiento** lista las
-  ventas abiertas sin cambios en 12/24/48/72 h (bitácora §10.19). No hay
-  recordatorio automático al cliente; queda anotado para la v2, donde habrá que
-  definir texto, umbral y política anti-spam.
+- **`sale_followup` solo en el dashboard (histórico)**: la card **Seguimiento**
+  lista las ventas abiertas sin cambios en 12/24/48/72 h (bitácora §10.19). La v2
+  con recordatorio al cliente se implementó el 2026-11-12 (bitácora §10.24), con
+  modo `off`/`shadow`/`on`; por defecto no se escribe.
 - **Cancelar después de `DELIVERED`**: no se permite por API; requiere decisión
   manual del operador, tal como pide §5. La venta entregada ya movió stock físico.
 - **Conversión de moneda**: no hay tabla de tasas. Las comisiones cruzadas quedan

@@ -1404,6 +1404,54 @@ automático de `sale_followup` (v2). Hoy la venta estancada solo aparece en el
 dashboard; avisar al cliente exige definir cuándo, con qué texto y cómo se
 cancela. El *warm-up* de H-06 sigue condicionado a R-5.
 
+*(Actualización 2026-11-12: la v2 se implementó en §10.24; queda apagada por
+defecto hasta que el operador active `sales.followup.mode`.)*
+
+### 10.24 `sale_followup` v2: recordatorio al cliente
+
+Cierra la decisión de producto que quedó abierta en §10.19. No es un aviso
+genérico a toda venta abierta: solo se escribe al cliente donde él está
+esperando algo que nosotros le debemos.
+
+**Las tres decisiones (2026-11-12):**
+
+| Pregunta | Decisión |
+|---|---|
+| Estados | Solo `CONFIRMED` (el TCP confirmó y falta entregar) y `NEEDS_OPERATOR` (el TCP se quedó sin stock y el cliente espera una alternativa o la cancelación). `PENDING_APPROVAL`, `PENDING_DISPATCH` y `DISPATCHED` son latencia interna: siguen solo en el panel, porque avisar ahí sería disculparse por algo que el cliente no puede resolver (y en `DISPATCHED` prometer algo que el TCP aún no confirmó). |
+| Cuándo y cuántas | 24 h desde el último movimiento **real**: cambio de estado **o** mensaje entrante del cliente (`MAX(sales.updated_at, último INBOUND)`). Una sola vez por venta. Solo de 09:00 a 20:00 America/Havana; si vence de noche, se aparca hasta las 09:00. No se envía si el cliente escribió en ese periodo ni si la conversación está `CLOSED`. |
+| Texto y canal | Dos plantillas cortas, sin precios ni fechas prometidas: `sale_followup_preparing` (sigue en preparación, ofrece cambiar la entrega) y `sale_followup_optional` (el almacén no tenía; ¿otra opción o cancelamos?). Sale por la conversación original con el *outbox* (`send_message`), nunca por el chat del TCP ni el del operador. |
+
+**Seguridad y cancelación en tres capas:**
+
+1. **Revalidación:** el handler relee la venta y no hace nada si cambió de estado, si está silenciada o si la conversación está `CLOSED`. Un job aparcado para la mañana vuelve a comprobar el modo antes de enviar.
+2. **Idempotencia:** `external_id = sale-followup-{id}`, `sales.followup_sent_at` y evento `sale_followup_sent`. Un reintento o un reinicio no duplica el mensaje ni lo vuelve a ofrecer al barrido.
+3. **Control del operador:** `sales.followup.mode` = `off` (por defecto) / `shadow` (registra `sale_followup_due` sin enviar) / `on`; botón **Silenciar** por venta (`followup_muted_at`) y botón **Recordar** para enviarlo a mano aunque el modo esté apagado (sigue siendo uno por venta).
+
+| Archivo | Cambio |
+|---|---|
+| `migrations/017_sale_followup.sql` | `sales.followup_sent_at`, `sales.followup_muted_at` (aditivo; las filas existentes quedan NULL). |
+| `domain/sales.py` | `FOLLOWUP_MESSAGE_STATUSES`, `_LAST_MOVEMENT_SQL`, `followup_candidates()`, `mark_followup_sent()`, `mute_followup()`; `followups()` ahora mide el movimiento real (estado o mensaje entrante). |
+| `domain/settings.py` | `sales.followup.mode` (`off`/`shadow`/`on`), default `off`; un valor corrupto cae en `off`. |
+| `ai/prompts.py` | `sale_followup_preparing`, `sale_followup_optional`. |
+| `ai/handlers.py` | Job `sale_followup`: revalida, crea el `OUTBOUND` y encola `send_message`. |
+| `scheduler/maintenance.py` | `queue_sale_followups()` + `_next_send_window()` (ventana 09–20 y guardas de duplicado). |
+| `scheduler/broadcasts.py` | Barrido cada 15 min; primera pasada 3 min después de arrancar. |
+| `api/routes_finance.py` | `POST /api/finance/followup/{id}` (manual) y `/mute` (con `muted: false` para rearmar). |
+| `api/routes_settings.py` | `GET/PUT /api/settings/sales/followup`. |
+| Dashboard | Selector de modo y botones **Recordar**/**Silenciar** en la card **Seguimiento**, con badges «Recordado» y «Silenciado». |
+
+**Tests:** **286 OK** (19 nuevos: candidatos por estado, umbral, mensaje entrante
+que reinicia el reloj, conversación cerrada, muteo y recordatorio previo, guardado
+del mensaje y del job, idempotencia, no-op al cambiar de estado, modo
+`off`/`shadow`/`on`, ventana horaria, rutas manual/mute y settings).
+`.\check_all.ps1` en verde. En la BD real: migración 017 aplicada, modo `off`,
+0 candidatos, 0 jobs pendientes ni fallidos. **No se envió nada a ningún cliente.**
+
+**Cómo activarlo:** Finanzas → Seguimiento → Recordatorio: primero **Solo avisar
+en el panel** durante un día y revisar los eventos `sale_followup_due`; después
+**Activo**. El botón **Recordar** ya funciona en modo apagado para probar el texto
+en una venta concreta.
+
 
 
 
