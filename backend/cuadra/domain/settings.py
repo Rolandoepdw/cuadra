@@ -45,6 +45,13 @@ DELIVERY_TRANSPORT_POLICY = "delivery.transport_policy"
 TRANSPORT_POLICIES = ("coordinated", "included", "not_included")
 TRANSPORT_DEFAULT = "coordinated"
 
+# `sale_followup` v2 (doc 13 §10.24). Off by default: messaging a real customer
+# is opt-in. `shadow` records what would be sent without sending it, so the
+# operator can watch real sales before turning automation on.
+SALES_FOLLOWUP_MODE = "sales.followup.mode"
+SALES_FOLLOWUP_MODES = ("off", "shadow", "on")
+SALES_FOLLOWUP_DEFAULT = "off"
+
 
 def _now() -> str:
     # Match the schema's `datetime('now')` (UTC, no offset).
@@ -117,6 +124,23 @@ def set_transport_policy(conn, value: str) -> str:
     if value not in TRANSPORT_POLICIES:
         raise ValueError(f"invalid transport policy: {value}")
     set(conn, DELIVERY_TRANSPORT_POLICY, value)
+    return value
+
+
+def sales_followup_mode(conn) -> str:
+    """Whether `sale_followup` sends nothing, only logs, or really writes.
+
+    An unknown stored value falls back to `off`: a typo must never start
+    messaging customers.
+    """
+    value = get(conn, SALES_FOLLOWUP_MODE, SALES_FOLLOWUP_DEFAULT)
+    return value if value in SALES_FOLLOWUP_MODES else SALES_FOLLOWUP_DEFAULT
+
+
+def set_sales_followup_mode(conn, value: str) -> str:
+    if value not in SALES_FOLLOWUP_MODES:
+        raise ValueError(f"invalid follow-up mode: {value}")
+    set(conn, SALES_FOLLOWUP_MODE, value)
     return value
 
 

@@ -26,6 +26,7 @@ from cuadra.domain import (
     escalations,
     events,
     sales as sales_domain,
+    settings as settings_domain,
     turns,
 )
 
@@ -44,6 +45,7 @@ def register() -> None:
     queue.register_handler("dispatch_sale", dispatch_sale)
     queue.register_handler("notify_tcp_cancel", notify_tcp_cancel)
     queue.register_handler("notify_sale_cancelled", notify_sale_cancelled)
+    queue.register_handler("sale_followup", sale_followup)
     queue.register_handler("resolve_supplier_peer", resolve_supplier_peer)
     queue.register_handler("send_broadcast", send_broadcast)
     queue.register_handler("reindex_product", reindex_product)
@@ -928,6 +930,75 @@ async def notify_sale_cancelled(payload: dict) -> None:
                 details={"order_code": sale["order_code"], "message_id": message["id"]},
             )
         _ensure_send_job(conn, sale["conversation_id"], message["id"])
+    finally:
+        conn.close()
+
+
+_FOLLOWUP_TEMPLATE = {
+    "CONFIRMED": "sale_followup_preparing",
+    "NEEDS_OPERATOR": "sale_followup_optional",
+}
+
+
+async def sale_followup(payload: dict) -> None:
+    """Send the one reminder a stuck sale owes its customer (doc 13 §10.24).
+
+    The scheduler enqueues one job per candidate; this handler re-reads the sale
+    so an approval, dispatch or cancellation that happened in between is a
+    no-op. The deterministic `external_id` (plus `followup_sent_at`) makes a
+    retry or a restart neither duplicate the message nor bring the sale back to
+    the sweep.
+    """
+    sale_id = int(payload["sale_id"])
+    trigger = payload.get("trigger") or "scheduler"
+    conn = db.connect()
+    try:
+        sale = sales_domain.get_sale(conn, sale_id)
+        if trigger == "scheduler" and settings_domain.sales_followup_mode(conn) != "on":
+            # A job parked overnight must not send after the operator turns the
+            # mode off; a manual click is an explicit decision and bypasses this.
+            log.debug("sale %s follow-up mode is off: skipping", sale_id)
+            return
+        if sale["status"] not in sales_domain.FOLLOWUP_MESSAGE_STATUSES:
+            log.debug("sale %s is %s: no customer follow-up", sale_id, sale["status"])
+            return
+        if sale.get("followup_muted_at") and trigger != "manual":
+            log.debug("sale %s follow-up is muted", sale_id)
+            return
+        conversation_id = sale["conversation_id"]
+        if not conversation_id:
+            return
+        conversation = conversations.get_conversation(conn, conversation_id)
+        if conversation["status"] == "CLOSED":
+            log.debug("conversation %s is closed: no follow-up", conversation_id)
+            return
+        key = _FOLLOWUP_TEMPLATE[sale["status"]]
+        text = prompts.TEMPLATES[key].format(order_code=sale["order_code"])
+        message, created = conversations.add_message_with_status(
+            conn,
+            conversation_id,
+            "OUTBOUND",
+            "bot",
+            body=text,
+            external_id=f"sale-followup-{sale_id}",
+        )
+        if created:
+            events.log(
+                conn,
+                "bot",
+                "sale_followup_sent",
+                entity="sales",
+                entity_id=sale_id,
+                details={
+                    "order_code": sale["order_code"],
+                    "status": sale["status"],
+                    "message_id": message["id"],
+                    "trigger": trigger,
+                },
+            )
+        if not sale.get("followup_sent_at"):
+            sales_domain.mark_followup_sent(conn, sale_id)
+        _ensure_send_job(conn, conversation_id, message["id"])
     finally:
         conn.close()
 

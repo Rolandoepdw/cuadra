@@ -19,6 +19,7 @@ import type {
   DeliverySettings,
   FinanceSummary,
   FollowupPage,
+  FollowupSettings,
   Health,
   LedgerPage,
   LlmModelsResponse,
@@ -278,6 +279,15 @@ export const setSalesSettings = (body: SalesSettings) =>
     body: JSON.stringify(body),
   });
 
+export const getFollowupSettings = () =>
+  request<FollowupSettings>("/api/settings/sales/followup");
+
+export const setFollowupSettings = (body: FollowupSettings) =>
+  request<FollowupSettings>("/api/settings/sales/followup", {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+
 // -------------------------------------------------------------------- finance
 
 export const getFinanceSummary = () => request<FinanceSummary>("/api/finance/summary");
@@ -295,6 +305,15 @@ export const listSales = (
 
 export const listFollowups = (hours = 24, limit = 50) =>
   request<FollowupPage>(`/api/finance/followups?hours=${hours}&limit=${limit}`);
+
+export const sendSaleFollowup = (saleId: number) =>
+  request<Sale>(`/api/finance/followup/${saleId}`, { method: "POST" });
+
+export const muteSaleFollowup = (saleId: number, muted = true) =>
+  request<Sale>(`/api/finance/followup/${saleId}/mute`, {
+    method: "POST",
+    body: JSON.stringify({ muted }),
+  });
 
 export const listLedger = (
   params: { status?: string; currency?: string; supplier_id?: number; limit?: number; offset?: number } = {},

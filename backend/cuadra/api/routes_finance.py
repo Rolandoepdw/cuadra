@@ -15,6 +15,10 @@ class CancelSaleIn(BaseModel):
     reason: str = Field(default="", max_length=500)
 
 
+class FollowupMuteIn(BaseModel):
+    muted: bool = True
+
+
 def _run(fn, *args, **kwargs):
     conn = db.connect()
     try:
@@ -161,3 +165,40 @@ def cancel_sale(sale_id: int, payload: CancelSaleIn | None = None) -> dict:
             priority=config.PRIORITY_CUSTOMER,
         )
     return sale
+
+
+@router.post("/finance/followup/{sale_id}")
+def send_followup(sale_id: int) -> dict:
+    """Send the customer reminder now, even if the automatic mode is off.
+
+    Manual is still one-shot: a sale that already got its reminder is rejected
+    instead of silently doing nothing. The job itself re-reads the sale, so it
+    also no-ops if the status changed between this call and the worker.
+    """
+
+    def _prepare(conn):
+        sale = sales.get_sale(conn, sale_id)
+        if sale["status"] not in sales.FOLLOWUP_MESSAGE_STATUSES:
+            raise sales.Invalid(
+                f"cannot remind a sale in status {sale['status']}"
+            )
+        if sale.get("followup_sent_at"):
+            raise sales.Invalid("this sale already got its reminder")
+        if not sale["conversation_id"]:
+            raise sales.Invalid("this sale has no conversation to reply to")
+        return sale
+
+    sale = _run(_prepare)
+    queue.enqueue(
+        "sale_followup",
+        {"sale_id": sale_id, "trigger": "manual"},
+        priority=config.PRIORITY_CUSTOMER,
+    )
+    return sale
+
+
+@router.post("/finance/followup/{sale_id}/mute")
+def mute_followup(sale_id: int, payload: FollowupMuteIn | None = None) -> dict:
+    """Operator opt-out per sale; `muted: false` re-arms it."""
+    muted = True if payload is None else payload.muted
+    return _run(sales.mute_followup, sale_id, muted)

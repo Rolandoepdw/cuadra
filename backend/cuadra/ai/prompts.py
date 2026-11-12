@@ -192,6 +192,16 @@ TEMPLATES = {
         "algo que no puedo cumplir; te ofrezco otra opción o te devuelvo la reserva."
     ),
     "sale_cancelled": "Tu pedido {order_code} quedó cancelado. Si quieres, miramos otra opción.",
+    # `sale_followup` v2 (doc 13 §10.24): one reminder, only when the customer
+    # is waiting for something we owe them. No prices and no promised dates.
+    "sale_followup_preparing": (
+        "Hola. Tu pedido {order_code} sigue en preparación. Si necesitas cambiar "
+        "la dirección o la hora de entrega, dímelo por aquí."
+    ),
+    "sale_followup_optional": (
+        "Hola. Sobre tu pedido {order_code}: el almacén no tenía disponibilidad. "
+        "¿Quieres que te busque otra opción o preferís que lo cancelemos?"
+    ),
     "sale_declined": "Sin problema, lo dejamos para cuando quieras. Aquí seguimos.",
     "tcp_order": (
         "📦 NUEVA ORDEN — Ref: {order_code}\n\n"

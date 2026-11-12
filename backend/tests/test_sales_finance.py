@@ -1012,5 +1012,280 @@ class FollowupTests(Phase3TestCase):
         self.assertEqual([item["id"] for item in result["items"]], [sale["id"]])
 
 
+class FollowupMessageTests(Phase3TestCase):
+    """`sale_followup` v2: one truthful reminder, only where the customer waits."""
+
+    def _age(self, sale_id, hours):
+        self.conn.execute(
+            "UPDATE sales SET updated_at = datetime('now', ?) WHERE id = ?",
+            (f"-{hours} hours", sale_id),
+        )
+        self.conn.commit()
+
+    def _confirmed(self):
+        sale = self.create_sale()
+        sales.approve(self.conn, sale["id"])
+        sales.mark_dispatched(self.conn, sale["id"], "tcp-1")
+        sales.confirm(self.conn, sale["id"])
+        return sale
+
+    def _needs_operator(self):
+        sale = self.create_sale()
+        sales.approve(self.conn, sale["id"])
+        sales.mark_needs_operator(self.conn, sale["id"], "AGOTADO")
+        return sale
+
+    def _set_conversation(self, status):
+        self.conn.execute(
+            "UPDATE conversations SET status = ? WHERE id = 1", (status,)
+        )
+        self.conn.commit()
+
+    def _messages(self):
+        return self.conn.execute(
+            "SELECT * FROM messages WHERE direction = 'OUTBOUND' ORDER BY id"
+        ).fetchall()
+
+    def _jobs(self, job_type):
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE type = ?", (job_type,)
+        ).fetchone()[0]
+
+    def _events(self, event_type):
+        return self.conn.execute(
+            "SELECT * FROM events WHERE type = ?", (event_type,)
+        ).fetchall()
+
+    def _run(self, sale_id, trigger="manual"):
+        import asyncio
+
+        from cuadra.ai import handlers
+
+        asyncio.run(
+            handlers.sale_followup({"sale_id": sale_id, "trigger": trigger})
+        )
+
+    # ------------------------------------------------------------ candidates
+
+    def test_a_confirmed_sale_is_due_after_the_threshold(self):
+        sale = self._confirmed()
+        self._age(sale["id"], 30)
+
+        ids = [item["id"] for item in sales.followup_candidates(self.conn, hours=24)]
+
+        self.assertEqual(ids, [sale["id"]])
+
+    def test_internal_latency_states_are_not_message_candidates(self):
+        for status in ("PENDING_APPROVAL", "PENDING_DISPATCH", "DISPATCHED"):
+            sale = self.create_sale()
+            if status in ("PENDING_DISPATCH", "DISPATCHED"):
+                sales.approve(self.conn, sale["id"])
+            if status == "DISPATCHED":
+                sales.mark_dispatched(self.conn, sale["id"], "tcp-1")
+            self._age(sale["id"], 30)
+            self.assertEqual(sales.followup_candidates(self.conn, hours=24), [])
+
+    def test_needs_operator_is_due_too(self):
+        sale = self._needs_operator()
+        self._age(sale["id"], 30)
+
+        ids = [item["id"] for item in sales.followup_candidates(self.conn, hours=24)]
+
+        self.assertEqual(ids, [sale["id"]])
+
+    def test_a_customer_message_resets_the_clock(self):
+        sale = self._confirmed()
+        self._age(sale["id"], 40)
+        conversations.add_message(self.conn, 1, "INBOUND", "customer", body="¿ya va?")
+
+        self.assertEqual(sales.followup_candidates(self.conn, hours=24), [])
+
+    def test_closed_conversations_are_not_message_candidates(self):
+        sale = self._confirmed()
+        self._age(sale["id"], 30)
+        self._set_conversation("CLOSED")
+
+        self.assertEqual(sales.followup_candidates(self.conn, hours=24), [])
+
+    def test_muted_and_already_reminded_sales_never_come_back(self):
+        sale = self._confirmed()
+        self._age(sale["id"], 30)
+
+        sales.mute_followup(self.conn, sale["id"])
+        self.assertEqual(sales.followup_candidates(self.conn, hours=24), [])
+
+        sales.mute_followup(self.conn, sale["id"], muted=False)
+        self.assertEqual(
+            [item["id"] for item in sales.followup_candidates(self.conn, hours=24)],
+            [sale["id"]],
+        )
+
+        sales.mark_followup_sent(self.conn, sale["id"])
+        self.assertEqual(sales.followup_candidates(self.conn, hours=24), [])
+
+    # --------------------------------------------------------------- handler
+
+    def test_handler_stores_the_message_and_the_send_job(self):
+        sale = self._confirmed()
+
+        self._run(sale["id"])
+
+        messages = self._messages()
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["external_id"], f"sale-followup-{sale['id']}")
+        self.assertIn(sale["order_code"], messages[0]["body"])
+        self.assertEqual(self._jobs("send_message"), 1)
+        self.assertEqual(len(self._events("sale_followup_sent")), 1)
+        saved = sales.get_sale(self.conn, sale["id"])
+        self.assertIsNotNone(saved["followup_sent_at"])
+
+    def test_handler_is_idempotent_on_retry(self):
+        sale = self._confirmed()
+
+        self._run(sale["id"])
+        self._run(sale["id"])
+
+        self.assertEqual(len(self._messages()), 1)
+        self.assertEqual(self._jobs("send_message"), 1)
+        self.assertEqual(len(self._events("sale_followup_sent")), 1)
+
+    def test_handler_noops_when_the_sale_left_the_reminder_states(self):
+        sale = self._confirmed()
+        sales.deliver(self.conn, sale["id"])
+
+        self._run(sale["id"])
+
+        self.assertEqual(self._messages(), [])
+
+    def test_handler_noops_on_a_closed_conversation(self):
+        sale = self._confirmed()
+        self._set_conversation("CLOSED")
+
+        self._run(sale["id"])
+
+        self.assertEqual(self._messages(), [])
+
+    def test_muted_sale_is_skipped_by_the_scheduler_but_not_by_the_operator(self):
+        sale = self._needs_operator()
+        sales.mute_followup(self.conn, sale["id"])
+        settings.set_sales_followup_mode(self.conn, "on")
+
+        self._run(sale["id"], trigger="scheduler")
+        self.assertEqual(self._messages(), [])
+
+        self._run(sale["id"], trigger="manual")
+        self.assertEqual(len(self._messages()), 1)
+
+    def test_a_parked_scheduler_job_respects_the_mode_switch(self):
+        sale = self._confirmed()
+
+        # Mode is off by default: a scheduler job queued earlier must not send.
+        self._run(sale["id"], trigger="scheduler")
+        self.assertEqual(self._messages(), [])
+
+        settings.set_sales_followup_mode(self.conn, "on")
+        self._run(sale["id"], trigger="scheduler")
+        self.assertEqual(len(self._messages()), 1)
+
+    # ----------------------------------------------------------------- sweep
+
+    def test_the_sweep_does_nothing_when_the_mode_is_off(self):
+        from cuadra.scheduler import maintenance
+
+        sale = self._confirmed()
+        self._age(sale["id"], 30)
+
+        maintenance.queue_sale_followups()
+
+        self.assertEqual(self._jobs("sale_followup"), 0)
+
+    def test_shadow_mode_logs_once_without_sending(self):
+        from cuadra.scheduler import maintenance
+
+        sale = self._confirmed()
+        self._age(sale["id"], 30)
+        settings.set_sales_followup_mode(self.conn, "shadow")
+
+        maintenance.queue_sale_followups()
+        maintenance.queue_sale_followups()
+
+        self.assertEqual(self._jobs("sale_followup"), 0)
+        self.assertEqual(self._messages(), [])
+        self.assertEqual(len(self._events("sale_followup_due")), 1)
+
+    def test_on_mode_enqueues_one_job_per_sale_without_duplicates(self):
+        from cuadra.scheduler import maintenance
+
+        sale = self._confirmed()
+        self._age(sale["id"], 30)
+        settings.set_sales_followup_mode(self.conn, "on")
+
+        maintenance.queue_sale_followups()
+        maintenance.queue_sale_followups()
+
+        self.assertEqual(self._jobs("sale_followup"), 1)
+        self.assertEqual(len(self._events("sale_followup_queued")), 1)
+
+    def test_quiet_hours_wait_until_the_morning(self):
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+
+        from cuadra.scheduler import maintenance
+
+        havana = ZoneInfo("America/Havana")
+        midday = datetime(2026, 11, 12, 17, 0, tzinfo=timezone.utc)  # 12:00 Havana
+        night = datetime(2026, 11, 12, 8, 0, tzinfo=timezone.utc)  # 03:00 Havana
+
+        self.assertIsNone(maintenance._next_send_window(midday))
+        target = maintenance._next_send_window(night)
+        self.assertIsNotNone(target)
+        self.assertEqual(target.astimezone(havana).hour, 9)
+
+    # ------------------------------------------------------------------- API
+
+    def test_the_manual_route_enqueues_the_job(self):
+        from cuadra.api import routes_finance
+
+        sale = self._confirmed()
+
+        routes_finance.send_followup(sale["id"])
+
+        self.assertEqual(self._jobs("sale_followup"), 1)
+
+    def test_the_manual_route_rejects_other_statuses_and_a_second_reminder(self):
+        from fastapi import HTTPException
+
+        from cuadra.api import routes_finance
+
+        fresh = self.create_sale()
+        with self.assertRaises(HTTPException) as ctx:
+            routes_finance.send_followup(fresh["id"])
+        self.assertEqual(ctx.exception.status_code, 409)
+
+        sale = self._confirmed()
+        sales.mark_followup_sent(self.conn, sale["id"])
+        with self.assertRaises(HTTPException) as ctx:
+            routes_finance.send_followup(sale["id"])
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_mute_route_and_followup_settings(self):
+        from cuadra.api import routes_finance, routes_settings
+        from cuadra.api.models import FollowupSettingsIn
+
+        sale = self._confirmed()
+
+        muted = routes_finance.mute_followup(sale["id"])
+        self.assertIsNotNone(muted["followup_muted_at"])
+
+        self.assertEqual(routes_settings.get_followup_settings(), {"mode": "off"})
+        self.assertEqual(
+            routes_settings.set_followup_settings(FollowupSettingsIn(mode="shadow")),
+            {"mode": "shadow"},
+        )
+        self.assertEqual(
+            routes_settings.get_followup_settings(), {"mode": "shadow"}
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

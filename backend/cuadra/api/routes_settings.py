@@ -7,6 +7,7 @@ from cuadra.api.auth import require_pin
 from cuadra.api.models import (
     BroadcastStrategyIn,
     DeliverySettingsIn,
+    FollowupSettingsIn,
     SalesSettingsIn,
 )
 from cuadra.domain import broadcasts, events, sales, settings
@@ -110,6 +111,34 @@ def set_sales_settings(payload: SalesSettingsIn) -> dict:
             conn,
             "dashboard",
             "sales_settings_saved",
+            entity="settings",
+            details={"mode": value},
+        )
+        return {"mode": value}
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    finally:
+        conn.close()
+
+
+@router.get("/sales/followup")
+def get_followup_settings() -> dict:
+    conn = db.connect()
+    try:
+        return {"mode": settings.sales_followup_mode(conn)}
+    finally:
+        conn.close()
+
+
+@router.put("/sales/followup")
+def set_followup_settings(payload: FollowupSettingsIn) -> dict:
+    conn = db.connect()
+    try:
+        value = settings.set_sales_followup_mode(conn, payload.mode)
+        events.log(
+            conn,
+            "dashboard",
+            "sale_followup_mode_saved",
             entity="settings",
             details={"mode": value},
         )

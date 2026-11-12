@@ -89,6 +89,17 @@ def start() -> None:
         coalesce=True,
         next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
     )
+    # Customer reminders for stale sales (doc 13 §10.24). Off unless the
+    # operator enables `sales.followup.mode`; `shadow` only records candidates.
+    _scheduler.add_job(
+        maintenance.queue_sale_followups,
+        "interval",
+        minutes=15,
+        id="sale_followup_sweep",
+        max_instances=1,
+        coalesce=True,
+        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=3),
+    )
     _scheduler.add_job(
         tick,
         "interval",

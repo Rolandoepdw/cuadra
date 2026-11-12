@@ -41,6 +41,21 @@ BEFORE_DELIVERY = OPEN_STATUSES + ("NEEDS_OPERATOR",)
 FOLLOWUP_STATUSES = tuple(status for status in OPEN_STATUSES if status != "DRAFT") + (
     "NEEDS_OPERATOR",
 )
+# `sale_followup` v2 (doc 13 §10.24): only these states owe the customer an
+# automatic answer. The PENDING_* and DISPATCHED states are internal latency,
+# already surfaced in the dashboard; messaging there would be an apology or a
+# false promise. `sale_followup` must always be a subset of FOLLOWUP_STATUSES.
+FOLLOWUP_MESSAGE_STATUSES = ("CONFIRMED", "NEEDS_OPERATOR")
+# "Movement" = last status change OR last inbound customer message. Without the
+# inbound part, a follow-up would nag someone who wrote five minutes ago: the
+# sale's `updated_at` only moves on transitions.
+_LAST_MOVEMENT_SQL = """MAX(
+    s.updated_at,
+    COALESCE((
+        SELECT MAX(m.created_at) FROM messages m
+        WHERE m.conversation_id = s.conversation_id AND m.direction = 'INBOUND'
+    ), s.updated_at)
+)"""
 # Statuses in which the TCP already has the order in its chat. Only those need
 # a cancellation notice: before a successful dispatch there is nothing to undo.
 TCP_AWARE_STATUSES = ("DISPATCHED", "CONFIRMED")
@@ -716,26 +731,89 @@ def count_sales(
 
 
 def followups(conn, *, hours: float = 24, limit: int = 50) -> list[dict]:
-    """Sales still open after `hours` without changes (dashboard reminder).
+    """Sales still open after `hours` without real movement (dashboard reminder).
 
-    `sale_followup` is dashboard-only for now: the operator sees what is stuck.
-    There is no automatic customer message; that policy is deferred to v2.
+    "Movement" is the last status change or the last inbound customer message
+    (see `_LAST_MOVEMENT_SQL`), so a customer who just wrote does not look
+    abandoned. This list is the operator's view; sending to the customer is the
+    separate `sale_followup` job (v2, doc 13 §10.24).
     """
     threshold = max(1.0, min(float(hours), 24 * 30))
     placeholders = ", ".join("?" for _ in FOLLOWUP_STATUSES)
     rows = conn.execute(
         f"""SELECT s.*, p.name AS product_name, sup.name AS supplier_name,
-                   ROUND((julianday('now') - julianday(s.updated_at)) * 24, 1) AS age_hours
+                   ROUND((julianday('now') - julianday({_LAST_MOVEMENT_SQL})) * 24, 1)
+                       AS age_hours
             FROM sales s
             LEFT JOIN products p ON p.id = s.product_id
             LEFT JOIN suppliers sup ON sup.id = s.supplier_id
             WHERE s.status IN ({placeholders})
-              AND (julianday('now') - julianday(s.updated_at)) * 24 >= ?
+              AND (julianday('now') - julianday({_LAST_MOVEMENT_SQL})) * 24 >= ?
             ORDER BY age_hours DESC, s.id ASC
             LIMIT ?""",
         (*FOLLOWUP_STATUSES, threshold, max(1, min(int(limit), 200))),
     )
     return [dict(row) for row in rows]
+
+
+def followup_candidates(conn, *, hours: float = 24, limit: int = 50) -> list[dict]:
+    """Sales that owe the customer one automatic reminder (doc 13 §10.24).
+
+    Only `CONFIRMED` and `NEEDS_OPERATOR`, only open conversations, and never a
+    sale already reminded or muted. The caller decides the send window; this
+    function only answers "who is due" in a deterministic order.
+    """
+    threshold = max(1.0, min(float(hours), 24 * 30))
+    placeholders = ", ".join("?" for _ in FOLLOWUP_MESSAGE_STATUSES)
+    rows = conn.execute(
+        f"""SELECT s.*, p.name AS product_name, sup.name AS supplier_name,
+                   ROUND((julianday('now') - julianday({_LAST_MOVEMENT_SQL})) * 24, 1)
+                       AS age_hours
+            FROM sales s
+            JOIN conversations c ON c.id = s.conversation_id
+            LEFT JOIN products p ON p.id = s.product_id
+            LEFT JOIN suppliers sup ON sup.id = s.supplier_id
+            WHERE s.status IN ({placeholders})
+              AND s.followup_sent_at IS NULL
+              AND s.followup_muted_at IS NULL
+              AND c.status != 'CLOSED'
+              AND (julianday('now') - julianday({_LAST_MOVEMENT_SQL})) * 24 >= ?
+            ORDER BY age_hours DESC, s.id ASC
+            LIMIT ?""",
+        (*FOLLOWUP_MESSAGE_STATUSES, threshold, max(1, min(int(limit), 200))),
+    )
+    return [dict(row) for row in rows]
+
+
+def mark_followup_sent(conn, sale_id: int) -> dict:
+    """Record the one reminder sent for a sale.
+
+    Deliberately leaves `updated_at` untouched: that column means "last status
+    change" and moving it would hide the real age in the dashboard.
+    """
+    with conn:
+        conn.execute(
+            "UPDATE sales SET followup_sent_at = ? WHERE id = ?", (_now(), sale_id)
+        )
+    return get_sale(conn, sale_id)
+
+
+def mute_followup(conn, sale_id: int, muted: bool = True) -> dict:
+    """Operator opt-out for the automatic reminder of a single sale."""
+    with conn:
+        conn.execute(
+            "UPDATE sales SET followup_muted_at = ? WHERE id = ?",
+            (_now() if muted else None, sale_id),
+        )
+    events.log(
+        conn,
+        "dashboard",
+        "sale_followup_muted" if muted else "sale_followup_unmuted",
+        entity="sales",
+        entity_id=sale_id,
+        details={"muted": bool(muted)},
+    )
+    return get_sale(conn, sale_id)
 
 
 def list_ledger(

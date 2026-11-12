@@ -143,6 +143,12 @@ class SalesSettingsIn(BaseModel):
     mode: Literal["assisted", "hybrid", "autonomous"]
 
 
+class FollowupSettingsIn(BaseModel):
+    """`sale_followup` v2: off, shadow (log only) or on."""
+
+    mode: Literal["off", "shadow", "on"]
+
+
 class BroadcastIn(BaseModel):
     channel: Literal["telegram", "whatsapp"] = "telegram"
     template: str = Field(min_length=1, max_length=4096)

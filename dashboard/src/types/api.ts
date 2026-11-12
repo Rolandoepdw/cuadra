@@ -365,10 +365,15 @@ export type SaleStatus =
   | "NEEDS_OPERATOR";
 
 export type SalesMode = "assisted" | "hybrid" | "autonomous";
+export type FollowupMode = "off" | "shadow" | "on";
 export type LedgerStatus = "PENDING" | "COLLECTED" | "VOID";
 
 export interface SalesSettings {
   mode: SalesMode;
+}
+
+export interface FollowupSettings {
+  mode: FollowupMode;
 }
 
 export interface Sale {
@@ -422,6 +427,8 @@ export interface SaleFollowup {
   created_at: string;
   updated_at: string;
   age_hours: number;
+  followup_sent_at: string | null;
+  followup_muted_at: string | null;
 }
 
 export interface FollowupPage {

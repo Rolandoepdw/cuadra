@@ -7,18 +7,24 @@ import {
   cancelSale,
   dispatchSale,
   getFinanceSummary,
+  getFollowupSettings,
   getSalesSettings,
   listFollowups,
   listLedger,
   listSales,
+  muteSaleFollowup,
+  sendSaleFollowup,
+  setFollowupSettings,
   setSalesSettings,
   settleSale,
 } from "@/lib/api";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import type {
+  FollowupMode,
   LedgerEntry,
   LedgerStatus,
   Sale,
+  SaleFollowup,
   SaleStatus,
   SalesMode,
 } from "@/types/api";
@@ -72,6 +78,19 @@ const MODE_DESCRIPTIONS: Record<SalesMode, string> = {
     "El bot despacha sin aprobación y tú cobras al final. Úsalo solo con el catálogo validado.",
 };
 
+const FOLLOWUP_MODE_LABELS: Record<FollowupMode, string> = {
+  off: "Apagado",
+  shadow: "Solo avisar en el panel",
+  on: "Activo",
+};
+
+const FOLLOWUP_MODE_DESCRIPTIONS: Record<FollowupMode, string> = {
+  off: "No se escribe al cliente. Solo ves las ventas estancadas aquí.",
+  shadow:
+    "No envía nada: registra qué recordatorios se enviarían, para revisarlos antes de activarlo.",
+  on: "Envía un único recordatorio por venta en CONFIRMED o NEEDS_OPERATOR, de 09:00 a 20:00.",
+};
+
 const LEDGER_STATUS_LABELS: Record<LedgerStatus, string> = {
   PENDING: "Pendiente",
   COLLECTED: "Cobrada",
@@ -96,6 +115,13 @@ function formatAge(hours: number): string {
   const days = Math.floor(hours / 24);
   const rest = Math.round(hours % 24);
   return rest > 0 ? `${days} d ${rest} h` : `${days} d`;
+}
+
+function canRemind(sale: SaleFollowup): boolean {
+  return (
+    (sale.status === "CONFIRMED" || sale.status === "NEEDS_OPERATOR") &&
+    !sale.followup_sent_at
+  );
 }
 
 export function FinancePanel() {
@@ -160,6 +186,34 @@ export function FinancePanel() {
       setPendingMode(null);
       onActionError(error);
     },
+  });
+
+  const followupSettings = useQuery({
+    queryKey: ["followup-settings"],
+    queryFn: getFollowupSettings,
+  });
+  const [followupMode, setFollowupMode] = useState<FollowupMode>("off");
+  useEffect(() => {
+    if (followupSettings.data) setFollowupMode(followupSettings.data.mode);
+  }, [followupSettings.data]);
+  const saveFollowupMode = useMutation({
+    mutationFn: () => setFollowupSettings({ mode: followupMode }),
+    onSuccess: () => {
+      setActionError(null);
+      qc.invalidateQueries({ queryKey: ["followup-settings"] });
+      refresh();
+    },
+    onError: onActionError,
+  });
+  const remindNow = useMutation({
+    mutationFn: sendSaleFollowup,
+    onSuccess: onActionSuccess,
+    onError: onActionError,
+  });
+  const muteFollowup = useMutation({
+    mutationFn: (saleId: number) => muteSaleFollowup(saleId, true),
+    onSuccess: onActionSuccess,
+    onError: onActionError,
   });
 
   const approve = useMutation({
@@ -495,8 +549,8 @@ export function FinancePanel() {
             <div>
               <CardTitle className="text-base">Seguimiento</CardTitle>
               <p className="text-xs text-muted-foreground">
-                Ventas abiertas sin cambios en el periodo. Es solo un aviso del panel:
-                todavía no se escribe al cliente.
+                Ventas abiertas sin movimiento real (cambio de estado o mensaje del
+                cliente). Desde aquí decides si se le recuerda algo al cliente.
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -514,7 +568,44 @@ export function FinancePanel() {
             </div>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex flex-col gap-2 rounded-md border bg-muted/30 px-3 py-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col">
+              <Label className="text-xs">Recordatorio al cliente</Label>
+              <span className="text-xs text-muted-foreground">
+                {FOLLOWUP_MODE_DESCRIPTIONS[followupMode]}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Select
+                value={followupMode}
+                onChange={(event) =>
+                  setFollowupMode(event.target.value as FollowupMode)
+                }
+              >
+                {(Object.keys(FOLLOWUP_MODE_LABELS) as FollowupMode[]).map(
+                  (value) => (
+                    <option key={value} value={value}>
+                      {FOLLOWUP_MODE_LABELS[value]}
+                    </option>
+                  ),
+                )}
+              </Select>
+              <Button
+                size="sm"
+                onClick={() => saveFollowupMode.mutate()}
+                disabled={
+                  followupSettings.isLoading ||
+                  !followupSettings.data ||
+                  followupMode === followupSettings.data.mode ||
+                  saveFollowupMode.isPending
+                }
+              >
+                <Save /> Guardar
+              </Button>
+            </div>
+          </div>
+
           {followups.isLoading ? (
             <p className="text-sm text-muted-foreground">Cargando…</p>
           ) : followups.data && followups.data.items.length > 0 ? (
@@ -540,6 +631,32 @@ export function FinancePanel() {
                     <span className="text-xs text-amber-600">
                       hace {formatAge(sale.age_hours)}
                     </span>
+                    {!!sale.followup_sent_at && (
+                      <Badge variant="success">Recordado</Badge>
+                    )}
+                    {!!sale.followup_muted_at && (
+                      <Badge variant="outline">Silenciado</Badge>
+                    )}
+                    {canRemind(sale) && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => remindNow.mutate(sale.id)}
+                        disabled={remindNow.isPending}
+                      >
+                        <Send /> Recordar
+                      </Button>
+                    )}
+                    {!sale.followup_sent_at && !sale.followup_muted_at && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => muteFollowup.mutate(sale.id)}
+                        disabled={muteFollowup.isPending}
+                      >
+                        <X /> Silenciar
+                      </Button>
+                    )}
                   </div>
                 </li>
               ))}
