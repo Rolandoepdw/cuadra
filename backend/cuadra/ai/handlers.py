@@ -44,6 +44,7 @@ def register() -> None:
     queue.register_handler("dispatch_sale", dispatch_sale)
     queue.register_handler("notify_tcp_cancel", notify_tcp_cancel)
     queue.register_handler("notify_sale_cancelled", notify_sale_cancelled)
+    queue.register_handler("resolve_supplier_peer", resolve_supplier_peer)
     queue.register_handler("send_broadcast", send_broadcast)
     queue.register_handler("reindex_product", reindex_product)
     queue.register_handler("reindex_all_products", reindex_all_products)
@@ -1371,3 +1372,58 @@ async def send_broadcast(payload: dict) -> None:
         broadcasts_domain.record_result(conn, post_id, "SENT")
     finally:
         conn.close()
+
+
+async def resolve_supplier_peer(payload: dict) -> None:
+    """Learn the numeric Telegram id of a supplier after it is created/edited.
+
+    Enqueued by the catalog routes so a save never waits on Telegram. Idempotent:
+    it returns as soon as the row already has a peer. Offline/dummy setups are a
+    no-op instead of a retry storm; the passive path learns it from a reply.
+    """
+    supplier_id = payload.get("supplier_id")
+    if supplier_id is None:
+        raise queue.PermanentJobError("resolve_supplier_peer job has no supplier_id")
+    supplier_id = int(supplier_id)
+
+    conn = db.connect()
+    try:
+        supplier = catalog.get_supplier(conn, supplier_id)
+    finally:
+        conn.close()
+
+    handle = supplier.get("telegram_id")
+    if not handle or supplier.get("telegram_peer_id"):
+        return
+
+    from cuadra.channels import telegram_user
+
+    if not telegram_user.available():
+        log.info(
+            "skipping peer resolve for supplier %s: userbot not connected", supplier_id
+        )
+        return
+
+    _respect_userbot_gap(telegram_user)
+    try:
+        peer = await telegram_user.resolve_peer(handle)
+    except Exception:  # noqa: BLE001 - the queue owns retries/backoff here
+        log.warning("could not resolve peer for supplier %s", supplier_id, exc_info=True)
+        raise
+    if not peer:
+        return
+
+    conn = db.connect()
+    try:
+        catalog.set_supplier_telegram_peer(conn, supplier_id, peer)
+        events.log(
+            conn,
+            "system",
+            "supplier_peer_resolved",
+            entity="suppliers",
+            entity_id=supplier_id,
+            details={"telegram_id": handle, "peer_id": peer, "source": "save"},
+        )
+    finally:
+        conn.close()
+    log.info("learned telegram peer %s for supplier %s on save", peer, supplier_id)

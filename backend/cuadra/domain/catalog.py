@@ -103,6 +103,19 @@ def clean_telegram_peer_id(value: Any) -> str | None:
     return raw
 
 
+def _supplier_telegram_ids(data: dict) -> tuple[str | None, str | None]:
+    """Split handle and numeric id for a supplier row.
+
+    Operators often paste a numeric id in the `telegram_id` field; it is stored
+    as the stable peer instead of as a bogus `@usuario`.
+    """
+    handle = normalize_telegram_handle(data.get("telegram_id"))
+    peer = clean_telegram_peer_id(data.get("telegram_peer_id"))
+    if handle and not peer and _TELEGRAM_NUMERIC_RE.match(handle):
+        return None, handle
+    return handle, peer
+
+
 # ---------------------------------------------------------------- categories
 
 def list_categories(conn, active: bool | None = None) -> list[dict]:
@@ -408,6 +421,7 @@ def get_supplier(conn, supplier_id: int) -> dict:
 
 def create_supplier(conn, data: dict) -> dict:
     name = _clean_name(data.get("name"), "name")
+    handle, peer_id = _supplier_telegram_ids(data)
     cur = conn.execute(
         """INSERT INTO suppliers
            (name, business_alias, whatsapp_phone, telegram_id, telegram_peer_id,
@@ -417,8 +431,8 @@ def create_supplier(conn, data: dict) -> dict:
             name,
             data.get("business_alias"),
             data.get("whatsapp_phone"),
-            normalize_telegram_handle(data.get("telegram_id")),
-            clean_telegram_peer_id(data.get("telegram_peer_id")),
+            handle,
+            peer_id,
             data.get("delivery_zone"),
             data.get("payment_terms"),
             int(data.get("priority", 100)),
@@ -471,7 +485,17 @@ def update_supplier(conn, supplier_id: int, data: dict) -> dict:
         elif key == "active":
             fields["active"] = int(bool(data["active"]))
         elif key == "telegram_id":
-            fields["telegram_id"] = normalize_telegram_handle(data["telegram_id"])
+            handle = normalize_telegram_handle(data["telegram_id"])
+            if (
+                handle
+                and _TELEGRAM_NUMERIC_RE.match(handle)
+                and "telegram_peer_id" not in data
+            ):
+                # A pasted numeric id is the stable peer, not a handle.
+                fields["telegram_id"] = None
+                fields["telegram_peer_id"] = handle
+            else:
+                fields["telegram_id"] = handle
         elif key == "telegram_peer_id":
             fields["telegram_peer_id"] = clean_telegram_peer_id(data["telegram_peer_id"])
         else:

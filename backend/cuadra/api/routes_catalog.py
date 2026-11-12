@@ -68,6 +68,26 @@ def _run(fn, *args, **kwargs):
         conn.close()
 
 
+def _queue_peer_resolve(supplier: dict) -> None:
+    """Learn the supplier's numeric Telegram id in the background.
+
+    The save never waits on Telegram: the worker resolves the handle and stores
+    `telegram_peer_id`. Skipped when there is nothing to learn or the userbot is
+    offline (dummy setups); the passive inbound path covers that case later.
+    """
+    from cuadra.channels import telegram_user
+
+    if not supplier.get("telegram_id") or supplier.get("telegram_peer_id"):
+        return
+    if not telegram_user.available():
+        return
+    queue.enqueue(
+        "resolve_supplier_peer",
+        {"supplier_id": supplier["id"]},
+        priority=config.PRIORITY_TCP,
+    )
+
+
 # ---------------------------------------------------------------- categories
 
 
@@ -129,7 +149,9 @@ def list_suppliers(q: str | None = None, active: bool | None = None) -> list[dic
 
 @router.post("/suppliers", status_code=status.HTTP_201_CREATED)
 def create_supplier(payload: SupplierIn) -> dict:
-    return _out(_run(catalog.create_supplier, payload.model_dump()))
+    supplier = _out(_run(catalog.create_supplier, payload.model_dump()))
+    _queue_peer_resolve(supplier)
+    return supplier
 
 
 @router.get("/suppliers/{supplier_id}")
@@ -140,7 +162,9 @@ def get_supplier(supplier_id: int) -> dict:
 @router.patch("/suppliers/{supplier_id}")
 def update_supplier(supplier_id: int, payload: SupplierPatch) -> dict:
     data = payload.model_dump(exclude_unset=True)
-    return _out(_run(catalog.update_supplier, supplier_id, data))
+    supplier = _out(_run(catalog.update_supplier, supplier_id, data))
+    _queue_peer_resolve(supplier)
+    return supplier
 
 
 @router.delete("/suppliers/{supplier_id}")

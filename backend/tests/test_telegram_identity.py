@@ -10,12 +10,16 @@ model server. Run from `backend/`:
     .venv\\Scripts\\python.exe -m unittest discover -s tests -v
 """
 
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from cuadra import config, db
-from cuadra.ai import ingest
+from cuadra.ai import handlers, ingest
+from cuadra.channels import telegram
 from cuadra.domain import catalog
 
 
@@ -227,6 +231,111 @@ class TelegramIdentityTests(unittest.TestCase):
             self.assertEqual(catalog.list_suppliers_missing_peer(conn), [])
         finally:
             conn.close()
+
+    # ------------------------------------------------------ operator shortcuts
+
+    def test_numeric_telegram_id_is_stored_as_the_peer(self):
+        conn = db.connect()
+        try:
+            supplier = catalog.create_supplier(
+                conn, {"name": "Pegado", "telegram_id": " 555666777 "}
+            )
+        finally:
+            conn.close()
+        self.assertIsNone(supplier["telegram_id"])
+        self.assertEqual(supplier["telegram_peer_id"], "555666777")
+
+    def test_numeric_telegram_id_moves_to_the_peer_on_update(self):
+        conn = db.connect()
+        try:
+            catalog.update_supplier(conn, 1, {"telegram_id": "444555666"})
+        finally:
+            conn.close()
+        supplier = self._supplier(1)
+        self.assertIsNone(supplier["telegram_id"])
+        self.assertEqual(supplier["telegram_peer_id"], "444555666")
+
+    # -------------------------------------------------------- resolve on save
+
+    def test_resolve_job_learns_the_peer(self):
+        with (
+            patch("cuadra.channels.telegram_user.available", return_value=True),
+            patch(
+                "cuadra.channels.telegram_user.resolve_peer",
+                new=AsyncMock(return_value="777888999"),
+            ),
+        ):
+            asyncio.run(handlers.resolve_supplier_peer({"supplier_id": 1}))
+
+        self.assertEqual(self._supplier(1)["telegram_peer_id"], "777888999")
+        events = self._events("supplier_peer_resolved")
+        self.assertEqual(len(events), 1)
+        self.assertIn('"source": "save"', events[0]["details_json"])
+
+    def test_resolve_job_skips_a_supplier_that_already_has_a_peer(self):
+        with (
+            patch("cuadra.channels.telegram_user.available", return_value=True),
+            patch(
+                "cuadra.channels.telegram_user.resolve_peer",
+                new=AsyncMock(return_value="000000000"),
+            ) as resolve,
+        ):
+            asyncio.run(handlers.resolve_supplier_peer({"supplier_id": 2}))
+
+        resolve.assert_not_awaited()
+        self.assertEqual(self._supplier(2)["telegram_peer_id"], "222333444")
+
+    def test_resolve_job_is_a_noop_without_a_userbot(self):
+        with patch("cuadra.channels.telegram_user.available", return_value=False):
+            asyncio.run(handlers.resolve_supplier_peer({"supplier_id": 1}))
+        self.assertIsNone(self._supplier(1)["telegram_peer_id"])
+
+    # --------------------------------------------------------- bot chat guard
+
+    def test_bot_ignores_group_chats(self):
+        with patch("cuadra.channels.telegram.ingest.ingest_incoming") as ingest_mock:
+            asyncio.run(
+                telegram._handle(
+                    None,
+                    identifier="-1001234567890",
+                    from_user=None,
+                    type="text",
+                    body="hola grupo",
+                    chat_type="supergroup",
+                )
+            )
+        ingest_mock.assert_not_called()
+
+    def test_bot_accepts_private_chats_and_forwards_the_handle(self):
+        user = SimpleNamespace(full_name="Cliente", username="cliente_tg")
+        with patch("cuadra.channels.telegram.ingest.ingest_incoming") as ingest_mock:
+            asyncio.run(
+                telegram._handle(
+                    None,
+                    identifier="123456",
+                    from_user=user,
+                    type="text",
+                    body="hola",
+                    chat_type="private",
+                )
+            )
+
+        ingest_mock.assert_called_once()
+        kwargs = ingest_mock.call_args.kwargs
+        self.assertEqual(kwargs["identifier"], "123456")
+        self.assertEqual(kwargs["handle"], "cliente_tg")
+        self.assertEqual(kwargs["identity"], "bot")
+
+    # ---------------------------------------------------------- startup alert
+
+    def test_startup_reports_suppliers_without_a_peer(self):
+        from cuadra import main as core_main
+
+        core_main._warn_suppliers_without_peer()
+
+        events = self._events("suppliers_missing_peer")
+        self.assertEqual(len(events), 1)
+        self.assertIn('"supplier_ids": [1]', events[0]["details_json"])
 
 
 if __name__ == "__main__":

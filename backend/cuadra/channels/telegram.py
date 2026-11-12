@@ -44,6 +44,7 @@ async def start() -> None:
             type="text",
             body=message.text,
             external_id=str(message.message_id),
+            chat_type=message.chat.type,
         )
 
     @_dp.message(F.voice | F.audio)
@@ -59,6 +60,7 @@ async def start() -> None:
             type="audio",
             file_path=f"audios/{path.name}",
             external_id=str(message.message_id),
+            chat_type=message.chat.type,
         )
 
     @_dp.message(F.photo)
@@ -73,6 +75,7 @@ async def start() -> None:
             type="image",
             file_path=f"images/{path.name}",
             external_id=str(message.message_id),
+            chat_type=message.chat.type,
         )
 
     # start_polling is a long-running coroutine: it MUST be scheduled as a task,
@@ -91,8 +94,26 @@ def _on_polling_done(task) -> None:
 
 
 async def _handle(
-    bot, *, identifier, from_user, type, body=None, file_path=None, external_id=None
+    bot,
+    *,
+    identifier,
+    from_user,
+    type,
+    body=None,
+    file_path=None,
+    external_id=None,
+    chat_type=None,
 ) -> None:
+    if chat_type != "private":
+        # The bot answers 1:1 only: a group chat id is not a customer, and
+        # replying there would leak one conversation to the whole group.
+        log.info(
+            "ignoring telegram %s from %s chat %s (private only)",
+            type,
+            chat_type,
+            identifier,
+        )
+        return
     name = from_user.full_name if from_user is not None else None
     log.info("inbound telegram %s from %s (%s): %s", type, identifier, name, (body or file_path))
     try:

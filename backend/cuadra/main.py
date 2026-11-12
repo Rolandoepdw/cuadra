@@ -27,6 +27,7 @@ from cuadra.api import (
 )
 from cuadra.channels import telegram as telegram_channel
 from cuadra.channels import telegram_user
+from cuadra.domain import catalog, events
 from cuadra.domain.errors import DomainError, NotFound
 from cuadra.scheduler import broadcasts as scheduler_broadcasts
 
@@ -45,6 +46,30 @@ def _setup_logging() -> None:
     )
     file_handler.setFormatter(fmt)
     root.addHandler(file_handler)
+
+
+def _warn_suppliers_without_peer() -> None:
+    """Surface TCPs that still depend on a mutable `@usuario` (see 10.22)."""
+    conn = db.connect()
+    try:
+        pending = catalog.list_suppliers_missing_peer(conn)
+        if not pending:
+            return
+        log.warning(
+            "suppliers without a numeric Telegram id: %s",
+            ", ".join(f"#{s['id']} {s['name']}" for s in pending),
+        )
+        events.log(
+            conn,
+            "system",
+            "suppliers_missing_peer",
+            entity="suppliers",
+            details={"supplier_ids": [s["id"] for s in pending]},
+        )
+    except Exception:  # noqa: BLE001 - an alert must never block startup
+        log.exception("could not check suppliers without a Telegram peer")
+    finally:
+        conn.close()
 
 
 @asynccontextmanager
@@ -73,6 +98,7 @@ async def lifespan(app: FastAPI):
     if recovered_turns:
         log.warning("re-armed %s abandoned customer turn(s)", recovered_turns)
     handlers.register()
+    _warn_suppliers_without_peer()
     rearmed = handlers.recover_pending_dispatches()
     if rearmed:
         log.warning("re-armed %s pending sale dispatch(es)", rearmed)
