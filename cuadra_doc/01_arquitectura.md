@@ -164,7 +164,8 @@ El username es mutable: se puede renombrar o liberar. Cuando un remitente conoci
 escribe con un `@usuario` que coincide con un TCP sin peer guardado, `ingest` aprende
 el id numérico y lo persiste (`supplier_peer_resolved`). Si el peer ya existe y el
 remitente es otro, **no** se rutea como TCP y se emite `supplier_peer_mismatch` (el
-handle pudo cambiar de dueño).
+handle pudo cambiar de dueño). El bot atiende solo chats privados; los grupos se
+descartan en `channels/telegram.py`.
 
 ## 5. Concurrencia y colas (punto crítico)
 

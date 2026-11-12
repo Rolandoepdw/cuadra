@@ -1381,6 +1381,29 @@ core detenido: los 4 TCP activos quedaron con `telegram_peer_id` y el
 `--dry-run` posterior no lista ninguno. El aprendizaje pasivo sigue cubriendo a
 los TCP nuevos en cuanto escriban.
 
+### 10.23 Cierre de los huecos de identidad y bot 1:1
+
+Cuatro huecos que quedaron anotados en §10.22, más una verificación local que
+sustituye al CI inexistente.
+
+| Hueco | Cambio |
+|---|---|
+| El bot atendía grupos | `channels/telegram.py`: `_handle` descarta cualquier chat que no sea `private` (se registra en el log y no se ingiere). Un id de grupo no es un cliente y responder ahí filtraría la conversación a todo el grupo. Los tres handlers pasan `message.chat.type`. |
+| El peer solo se aprendía con el primer mensaje o a mano | `handlers.resolve_supplier_peer` + encolado desde `POST/PATCH /api/suppliers`: al guardar un TCP con handle y sin id, se encola un job `resolve_supplier_peer` que resuelve en segundo plano (respeta el gap del userbot, es idempotente y no hace nada si no hay userbot). El guardado nunca espera a Telegram. |
+| Un id numérico pegado en «Telegram ID» quedaba como handle falso | `catalog._supplier_telegram_ids` (alta) y la rama de `update_supplier` lo mueven a `telegram_peer_id` y dejan `telegram_id` en NULL. |
+| Nada avisaba de un TCP sin id estable | `main._warn_suppliers_without_peer`: al arrancar, log de advertencia y evento `suppliers_missing_peer` con los ids pendientes (categoría `entities`, visible en Logs). |
+| Sin CI | `check_all.ps1` (raíz): tests del backend, `tsc --noEmit` y build del dashboard, con códigos de salida reales. `-SkipBuild` para el ciclo corto. |
+
+**Tests:** **267 OK** (8 nuevos: id numérico al alta y en la edición, job de
+resolución (aprende / omite si ya hay peer / no-op sin userbot), bot que ignora
+grupos y acepta privados con handle, y alerta de arranque). `.\check_all.ps1
+-SkipBuild` en verde.
+
+**Sigue pendiente (decisión de producto, no de datos):** el recordatorio
+automático de `sale_followup` (v2). Hoy la venta estancada solo aparece en el
+dashboard; avisar al cliente exige definir cuándo, con qué texto y cómo se
+cancela. El *warm-up* de H-06 sigue condicionado a R-5.
+
 
 
 
