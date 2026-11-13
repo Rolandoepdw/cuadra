@@ -13,7 +13,7 @@ const EMPTY: BroadcastStrategyIn = {
   max_posts_per_day: 20,
   min_interval_s: 300,
   max_interval_s: 1200,
-  repeat_passes: 2,
+  repeat_passes: 1,
   repeat_window_days: 1,
   apply_to_groups: false,
 };
