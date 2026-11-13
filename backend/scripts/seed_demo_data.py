@@ -652,6 +652,110 @@ DEMO_PRODUCTS = [
         "commission_currency": "USD",
         "stock": 10,
     },
+    # --- Real test 2026-11-12: widen the thin catalogs ---------------------
+    # Claudia and Yoan had only 4 and 2 products. These additions also cover
+    # cases the seed did not: low stock (1), a PAUSED product and two names
+    # that are easy to confuse ("Urban" vs "Urban Plus").
+    {
+        "name": "Microondas 20L",
+        "supplier": "Claudia",
+        "category": "hogar",
+        "description": "Microondas 20 litros\n700W\n5 niveles de potencia",
+        "price": 140.0,
+        "currency": "USD",
+        "commission": 14.0,
+        "commission_currency": "USD",
+        "stock": 3,
+    },
+    {
+        "name": "Ventilador de Torre",
+        "supplier": "Claudia",
+        "category": "hogar",
+        "description": "Ventilador de torre\noscilante\n3 velocidades",
+        "price": 55.0,
+        "currency": "USD",
+        "commission": 5.0,
+        "commission_currency": "USD",
+        "stock": 6,
+    },
+    {
+        "name": "Cargador Rápido 20W",
+        "supplier": "Claudia",
+        "category": "accesorios",
+        "description": "Cargador rápido 20W\nUSB-C\ncompatible con iPhone y Android",
+        "price": 18.0,
+        "currency": "USD",
+        "commission": 2.0,
+        "commission_currency": "USD",
+        "stock": 30,
+    },
+    {
+        "name": "Moto Eléctrica City",
+        "supplier": "Yoan",
+        "category": "motos_eléctricas",
+        "description": "Motorina City\n60V x 20A\nautonomía 45 km",
+        "price": 1200.0,
+        "currency": "USD",
+        "commission": 40.0,
+        "commission_currency": "USD",
+        "stock": 3,
+    },
+    {
+        "name": "Batería para Moto Eléctrica",
+        "supplier": "Yoan",
+        "category": "accesorios",
+        "description": "Batería 60V x 20A\npara moto eléctrica",
+        "price": 250.0,
+        "currency": "USD",
+        "commission": 20.0,
+        "commission_currency": "USD",
+        "stock": 5,
+    },
+    {
+        "name": "Casco para Moto",
+        "supplier": "Yoan",
+        "category": "accesorios",
+        "description": "Casco certificado\ntalla ajustable",
+        "price": 40.0,
+        "currency": "USD",
+        "commission": 4.0,
+        "commission_currency": "USD",
+        "stock": 10,
+    },
+    {
+        "name": "Laptop Gamer RTX 4060",
+        "supplier": "Rolando",
+        "category": "tecnología",
+        "description": "Laptop gaming\nRTX 4060\n16GB RAM\n1TB SSD",
+        "price": 1100.0,
+        "currency": "USD",
+        "commission": 60.0,
+        "commission_currency": "USD",
+        "stock": 1,
+    },
+    {
+        "name": "Router WiFi 6",
+        "supplier": "Rolando",
+        "category": "tecnología",
+        "description": "Router WiFi 6\ndual band\n4 antenas",
+        "price": 90.0,
+        "currency": "USD",
+        "commission": 9.0,
+        "commission_currency": "USD",
+        "stock": 4,
+        "status": "PAUSED",
+    },
+    {
+        "name": "Moto Eléctrica Urban Plus",
+        "supplier": "Roger",
+        "category": "motos_eléctricas",
+        "description": "Motorina Urban Plus\n72V x 35A\nautonomía 95 km",
+        "price": 1500.0,
+        "currency": "USD",
+        "commission": 50.0,
+        "commission_currency": "USD",
+        "stock": 2,
+    },
 ]
 
 # --------------------------------------------------------------------------
@@ -731,6 +835,29 @@ DEMO_BROADCASTS = [
         "product": "Moto Combustión Zontes 250",
         "groups": ["Venta Electrodomésticos"],
     },
+    # --- Real test 2026-11-12: campaigns for the new products --------------
+    # Auto targeting by category (hogar / tecnología).
+    {"product": "Microondas 20L", "groups": None},
+    {"product": "Ventilador de Torre", "groups": None},
+    {"product": "Laptop Gamer RTX 4060", "groups": None},
+    # PAUSED product: it still publishes, but must not be sold. The catalog
+    # rules are what stop a sale, so the campaign is useful to test that path.
+    {"product": "Router WiFi 6", "groups": None},
+    # No group is tagged "accesorios", so these are manual in all-zone groups.
+    {
+        "product": "Cargador Rápido 20W",
+        "groups": ["Canal Ventas Electrodomésticos", "Venta Electrodomésticos"],
+    },
+    {"product": "Casco para Moto", "groups": ["Venta Electrodomésticos"]},
+    # Yoan delivers in Habana del Este / Guanabacoa / Regla, so the moto
+    # groups (La Lisa / Marianao) would not match; manual all-zone group.
+    {"product": "Moto Eléctrica City", "groups": ["Venta Electrodomésticos"]},
+    {
+        "product": "Batería para Moto Eléctrica",
+        "groups": ["Venta Electrodomésticos"],
+    },
+    # Roger delivers in La Lisa / Marianao, same zones as "Venta Motos E".
+    {"product": "Moto Eléctrica Urban Plus", "groups": ["Venta Motos E"]},
 ]
 
 DISABLED_BROADCASTS = [
