@@ -210,7 +210,11 @@ def _render_greeting(conn, product: dict, conversation: dict) -> str:
     info = catalog.llm_product_json(conn, product)
     zona, zona_clause = _reply_zone(conn, conversation, info)
     policy = settings.transport_policy(conn)
-    return prompts.TEMPLATES["greeting_product"].format(
+    context = conversations.get_context(conn, conversation["id"])
+    context["conversation_id"] = conversation["id"]
+    return prompts.template_variant(
+        "greeting_product",
+        context,
         producto=info["nombre"],
         precio=f"{info['precio']:g}",
         moneda=info["moneda"],
@@ -588,10 +592,11 @@ async def _decide(
     # from the previous turn ("Hola, buenas" -> Pan con Croqueta) looks deaf.
     if product_source in ("", "context") and _is_greeting(text):
         guard_context = _guard_context(None, None, context)
+        reply = prompts.template_variant("ask_which_product", context)
         reply, generator = _safe_template(
             conn,
             conversation,
-            prompts.TEMPLATES["ask_which_product"],
+            reply,
             guard_context,
             "template",
         )
@@ -600,10 +605,11 @@ async def _decide(
     if intent.intencion in ("consulta_precio", "consulta_stock", "comprar"):
         if product is None:
             guard_context = _guard_context(None, None, context)
+            reply = prompts.template_variant("ask_which_product", context)
             reply, generator = _safe_template(
                 conn,
                 conversation,
-                prompts.TEMPLATES["ask_which_product"],
+                reply,
                 guard_context,
                 "template",
             )
@@ -643,10 +649,11 @@ async def _decide(
             # Nothing in the catalog matches what the customer asked about
             # (H-09): never escalate a question about an unknown product.
             guard_context = _guard_context(None, None, context)
+            reply = prompts.template_variant("ask_which_product", context)
             reply, generator = _safe_template(
                 conn,
                 conversation,
-                prompts.TEMPLATES["ask_which_product"],
+                reply,
                 guard_context,
                 "template",
             )
@@ -663,13 +670,13 @@ async def _decide(
                 product, None, context, product_source=product_source
             )
             faltante = " y ".join(datos_cliente)
+            reply = prompts.template_variant("ask_client_data", context, dato=faltante)
             reply, generator = _safe_template(
                 conn,
                 conversation,
-                prompts.TEMPLATES["ask_client_data"],
+                reply,
                 guard_context,
                 "template",
-                dato=faltante,
             )
             return reply, False, generator, None
 
@@ -705,6 +712,63 @@ async def _decide(
             "template",
         )
         return reply, True, generator, pregunta
+
+    # Ruta de queja determinista: léxico de insulto/molestia antes del LLM.
+    _QUEJA_LEXICON = (
+        "tonto", "estúpido", "estupido", "no sirve", "no entiendes", "feo",
+        "basura", "inútil", "inutil", "molesto", "estafa", "fraude", "robo",
+        "quiero hablar con un humano", "atención al cliente", "reclamo",
+        "queja", "estás cansado", "estás lenta", "estás lento",
+    )
+    text_lower = (text or "").lower()
+    is_queja = intent.intencion == "queja" or any(
+        w in text_lower for w in _QUEJA_LEXICON
+    )
+    if is_queja:
+        guard_context = _guard_context(product, None, context, product_source=product_source)
+        # Contador de quejas consecutivas en contexto.
+        qcount = int(context.get("queja_count", 0)) + 1
+        context["queja_count"] = qcount
+        conversations.set_context(conn, conversation["id"], context)
+        extra_queja = (
+            "El cliente está molesto o insultando. Disculpa brevemente, no te pongas a la defensiva, "
+            "y vuelve al asunto comercial con empatía. Máximo 2 párrafos cortos."
+        )
+        messages, prompt_text = _build_base_messages(
+            conn, conversation, history, context, product=product, turn_text=text
+        )
+        reply = await llm.compose(
+            messages, prompt_text, extra=extra_queja, conversation_id=conversation["id"]
+        )
+        ok, reason = guardrails.validate_reply(reply, guard_context)
+        if not ok:
+            reply = guardrails.fallback_reply(guard_context)
+            generator = "fallback"
+        else:
+            generator = "llm"
+        return reply, False, generator, None
+
+    # Contador de 'otro' consecutivos: rescate del bucle.
+    if intent.intencion == "otro":
+        otro_count = int(context.get("otro_count", 0)) + 1
+        context["otro_count"] = otro_count
+        conversations.set_context(conn, conversation["id"], context)
+        if otro_count >= 3:
+            # Derivar a operador: no seguir dando vueltas.
+            guard_context = _guard_context(None, None, context)
+            reply, generator = _safe_template(
+                conn,
+                conversation,
+                prompts.TEMPLATES["ask_which_product"],
+                guard_context,
+                "template",
+            )
+            return reply, False, generator, None
+    else:
+        # Resetear el contador si el intent cambia de 'otro'.
+        if context.get("otro_count", 0) > 0:
+            context["otro_count"] = 0
+            conversations.set_context(conn, conversation["id"], context)
 
     # comparar / queja / otro / low confidence -> careful free generation
     candidates = None
@@ -762,6 +826,7 @@ def _update_context(
     sale: dict | None = None,
 ) -> None:
     context = conversations.get_context(conn, conversation["id"])
+    context["conversation_id"] = conversation["id"]
     if product is not None:
         context["product_id"] = product["id"]
     context["last_intent"] = intent.intencion
@@ -772,6 +837,9 @@ def _update_context(
     if sale is not None:
         context["sale_id"] = sale["id"]
         context["order_code"] = sale["order_code"]
+        # Una venta nueva cierra el bucle de 'otro' y de quejas.
+        context["otro_count"] = 0
+        context["queja_count"] = 0
     conversations.set_context(conn, conversation["id"], context)
 
 
