@@ -670,7 +670,7 @@ class SupplierPeerTests(Phase3TestCase):
             patch.object(handlers.channels, "get_adapter", return_value=object()),
             patch.object(
                 handlers,
-                "_respect_userbot_gap",
+                "_check_token_bucket",
                 side_effect=queue.RateLimited(
                     30, "userbot send gap", account=False, penalize=False
                 ),
@@ -818,7 +818,7 @@ class CancelTcpNoticeTests(Phase3TestCase):
             patch.object(handlers.channels, "get_adapter", return_value=object()),
             patch.object(
                 handlers,
-                "_respect_userbot_gap",
+                "_check_token_bucket",
                 side_effect=queue.RateLimited(
                     30, "userbot send gap", account=False, penalize=False
                 ),

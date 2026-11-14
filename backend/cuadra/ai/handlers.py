@@ -7,6 +7,9 @@ import random
 from datetime import datetime, timedelta, timezone
 
 from cuadra import channels, config, db
+from cuadra.channels import rate_limit
+from cuadra.channels.telegram_user import _USERBOT_SENDER
+from cuadra.channels import telegram_user
 from cuadra.ai import (
     assembler,
     memory,
@@ -52,33 +55,95 @@ def register() -> None:
     queue.register_handler("reindex_all_products", reindex_all_products)
 
 
-def _respect_userbot_gap(sender) -> None:
-    """Park the job while the userbot is inside its global human-like gap.
+async def _check_token_bucket(sender) -> None:
+    """Check the account-wide token bucket before a userbot send.
 
-    This is Cuadra's own pacing, not a Telegram punishment: it is marked
-    ``penalize=False`` so the queue parks the job without consuming attempts
-    or rate-limit hits. Kept at the handler (not inside send_text/send_image)
-    so a multi-part broadcast checks once and a retry never re-sends the image
-    by accident.
+    Defers (RateLimited, penalize=False) when the bucket is empty, so the
+    queue parks the job instead of sleeping the worker.
     """
-    from cuadra.channels import rate_limit, telegram_user
-
     if sender is not telegram_user:
         return
-    wait = rate_limit.local_gap_remaining(
-        "userbot", config.USERBOT_MIN_SEND_GAP_S
-    )
+    wait = await rate_limit.consume_token(_USERBOT_SENDER, 1.0)
     if wait > 0:
-        # Absolute retry time with a small margin, so the next wake-up lands
-        # after the gap instead of exactly on its edge.
-        retry_at = datetime.now(timezone.utc) + timedelta(seconds=wait + 0.25)
+        retry_at = datetime.now(timezone.utc) + timedelta(seconds=wait)
         raise queue.RateLimited(
             wait,
-            f"userbot send gap: wait {wait:.0f}s",
+            f"token bucket: wait {wait:.2f}s",
             account=False,
             penalize=False,
             retry_at=retry_at,
         )
+
+
+async def send_message(payload: dict) -> None:
+    """Deliver a stored OUTBOUND message through its channel.
+
+    Idempotent: a `message_sent` event marks delivery, so a requeued job
+    (crash between send and completion) never double-sends.
+    """
+    conversation_id = payload["conversation_id"]
+    message_id = payload["message_id"]
+
+    conn = db.connect()
+    try:
+        sent = conn.execute(
+            """SELECT 1 FROM events
+               WHERE type = 'message_sent' AND entity = 'messages' AND entity_id = ?""",
+            (message_id,),
+        ).fetchone()
+        if sent is not None:
+            log.debug("message %s already sent, skipping", message_id)
+            return
+        message = conversations.get_message(conn, message_id)
+        conversation = conversations.get_conversation(conn, conversation_id)
+        target = conversations.get_channel_identifier(
+            conn, conversation["customer_id"], conversation["channel"]
+        )
+    finally:
+        conn.close()
+
+    if target is None:
+        log.warning("no channel identifier for conversation %s", conversation_id)
+        return
+    identity = conversation.get("identity") or "bot"
+    adapter = channels.get_adapter(conversation["channel"], identity)
+    if adapter is None:
+        log.warning(
+            "no adapter for channel %r identity %r", conversation["channel"], identity
+        )
+        return
+
+    delay = 0.0
+    await _pace_send(adapter, target)
+
+    if message["type"] == "image" and message["file_path"]:
+        await adapter.send_image(
+            target, str(config.DATA_DIR / message["file_path"]), caption=message["body"]
+        )
+        provider_message_id = None
+    elif message["type"] == "audio" and message["file_path"]:
+        await adapter.send_audio(target, str(config.DATA_DIR / message["file_path"]))
+        provider_message_id = None
+    else:
+        provider_message_id = await adapter.send_text(target, message["body"] or "")
+
+    conn = db.connect()
+    try:
+        events.log(
+            conn,
+            "bot",
+            "message_sent",
+            entity="messages",
+            entity_id=message_id,
+            details={
+                "channel": conversation["channel"],
+                "identity": identity,
+                "delay_s": delay,
+                "provider_message_id": provider_message_id,
+            },
+        )
+    finally:
+        conn.close()
 
 
 def _pending_audio(conn, turn: dict) -> list[dict]:
@@ -502,21 +567,34 @@ async def transcribe_audio(payload: dict) -> None:
 
 
 def _human_delay() -> float:
-    """Seconds to wait before sending (never below 1s; slower out of hours)."""
-    in_hours = True
-    try:
-        from zoneinfo import ZoneInfo
+    """Seconds to wait before sending (always 0: no cosmetic delay)."""
+    return 0.0
 
-        hour = datetime.now(ZoneInfo("America/Havana")).hour
-        in_hours = config.BUSINESS_START_HOUR <= hour < config.BUSINESS_END_HOUR
-    except Exception:  # noqa: BLE001 — no tz data => always in hours
-        pass
-    lo, hi = (
-        (config.TYPING_DELAY_MIN, config.TYPING_DELAY_MAX)
-        if in_hours
-        else (config.OUT_OF_HOURS_DELAY_MIN, config.OUT_OF_HOURS_DELAY_MAX)
-    )
-    return max(1.0, random.uniform(lo, hi))
+
+async def _pace_send(adapter, target: str) -> None:
+    """Pace a send: account-wide token bucket + per-chat floor.
+
+    No cosmetic sleeps. If the bucket is empty or the chat floor is active,
+    raises ``RateLimited(penalize=False)`` so the queue parks the job and
+    retries later instead of sleeping the worker.
+    """
+    await _check_token_bucket(adapter)
+
+    cwait = rate_limit.chat_floor_remaining(target)
+    if cwait > 0:
+        retry_at = datetime.now(timezone.utc) + timedelta(seconds=cwait)
+        raise queue.RateLimited(
+            cwait,
+            f"per-chat floor: wait {cwait:.2f}s",
+            account=False,
+            penalize=False,
+            retry_at=retry_at,
+        )
+
+    from cuadra.channels import telegram_user
+
+    if adapter is telegram_user:
+        rate_limit.mark_chat_action(target)
 
 
 async def send_message(payload: dict) -> None:
@@ -557,10 +635,8 @@ async def send_message(payload: dict) -> None:
         )
         return
 
-    delay = _human_delay()
-    _respect_userbot_gap(adapter)
-    await adapter.typing(target)
-    await asyncio.sleep(delay)
+    delay = 0.0
+    await _pace_send(adapter, target)
 
     if message["type"] == "image" and message["file_path"]:
         await adapter.send_image(
@@ -584,7 +660,7 @@ async def send_message(payload: dict) -> None:
             details={
                 "channel": conversation["channel"],
                 "identity": identity,
-                "delay_s": round(delay, 2),
+                "delay_s": delay,
                 "provider_message_id": provider_message_id,
             },
         )
@@ -666,9 +742,7 @@ async def send_escalation(payload: dict) -> None:
         producto=(product["name"] if product else "un producto del catálogo"),
         pregunta=escalation["question"],
     )
-    _respect_userbot_gap(adapter)
-    await adapter.typing(target)
-    await asyncio.sleep(_human_delay())
+    await _pace_send(adapter, target)
     await adapter.send_text(target, text)
 
     conn = db.connect()
@@ -792,9 +866,7 @@ async def dispatch_sale(payload: dict) -> None:
         telefono=sale["customer_phone"],
     )
     try:
-        _respect_userbot_gap(adapter)
-        await adapter.typing(target)
-        await asyncio.sleep(_human_delay())
+        await _pace_send(adapter, target)
         tcp_message_id = await adapter.send_text(target, text)
     except queue.RateLimited:
         # Pacing is not a dispatch failure: let the queue park the job and retry
@@ -884,9 +956,7 @@ async def notify_tcp_cancel(payload: dict) -> None:
         motivo=sale["notes"] or "cancelada por el operador",
     )
     try:
-        _respect_userbot_gap(adapter)
-        await adapter.typing(target)
-        await asyncio.sleep(_human_delay())
+        await _pace_send(adapter, target)
         await adapter.send_text(target, text)
     except queue.RateLimited:
         raise
@@ -1434,7 +1504,7 @@ async def send_broadcast(payload: dict) -> None:
     if sender is None:
         raise queue.PermanentJobError(f"unknown sender '{group['sender']}'")
 
-    _respect_userbot_gap(sender)
+    await _check_token_bucket(sender)
 
     abs_image = None
     if image_path:
@@ -1521,7 +1591,7 @@ async def resolve_supplier_peer(payload: dict) -> None:
         )
         return
 
-    _respect_userbot_gap(telegram_user)
+    await _check_token_bucket(telegram_user)
     try:
         peer = await telegram_user.resolve_peer(handle)
     except Exception:  # noqa: BLE001 - the queue owns retries/backoff here

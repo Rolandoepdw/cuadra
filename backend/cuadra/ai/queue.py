@@ -21,10 +21,49 @@ log = logging.getLogger("cuadra.queue")
 Handler = Callable[[dict], Awaitable[None]]
 
 _handlers: dict[str, Handler] = {}
-_task: asyncio.Task | None = None
+_task: list[asyncio.Task] = []
 _stop = asyncio.Event()
 
-POLL_INTERVAL_S = 1.0
+POLL_INTERVAL_S = 0.2
+
+# In-process semaphore around LLM calls while llama.cpp runs -np 1.
+# Set to 1 to avoid piling requests on the single-slot server; raise when
+# -np > 1 is configured and measured safe.
+_LLM_SEMAPHORE: asyncio.Semaphore | None = None
+
+
+def llm_semaphore() -> asyncio.Semaphore:
+    """Return (creating if needed) the in-process LLM call semaphore."""
+    global _LLM_SEMAPHORE
+    if _LLM_SEMAPHORE is None:
+        _LLM_SEMAPHORE = asyncio.Semaphore(1)
+    return _LLM_SEMAPHORE
+
+
+async def llm_call() -> None:
+    """Acquire the LLM semaphore for one model call.
+
+    Call this around every `llm.chat`/`classify`/`compose`/`summarize`
+    invocation so we never overload the single-slot llama.cpp server.
+    """
+    await llm_semaphore().acquire()
+
+
+def llm_release() -> None:
+    """Release the LLM semaphore after a model call."""
+    sem = _LLM_SEMAPHORE
+    if sem is not None and sem.locked():
+        sem.release()
+
+
+class LLMCall:
+    """Async context manager wrapping an LLM call with the semaphore."""
+
+    async def __aenter__(self) -> None:
+        await llm_call()
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        llm_release()
 
 
 class PermanentJobError(Exception):
@@ -367,15 +406,12 @@ async def _process(job: dict) -> None:
             conn.close()
 
 
-async def _loop() -> None:
-    log.info("job queue worker started")
+async def _loop(worker_id: int) -> None:
+    log.info("job queue worker %s started", worker_id)
     while not _stop.is_set():
-        # The userbot gap is account-wide. While it is active, leave bulk
-        # broadcasts in the queue and keep serving customer/TCP work.
-        wait = rate_limit.remaining("userbot", config.USERBOT_MIN_SEND_GAP_S)
         conn = db.connect()
         try:
-            job = _claim(conn, allow_broadcast=wait <= 0)
+            job = _claim(conn, allow_broadcast=True)
         finally:
             conn.close()
         if job is None:
@@ -385,21 +421,26 @@ async def _loop() -> None:
                 pass
             continue
         await _process(job)
-    log.info("job queue worker stopped")
+    log.info("job queue worker %s stopped", worker_id)
 
 
-def start() -> None:
+def start(workers: int | None = None) -> None:
+    """Start N queue workers (default: config.QUEUE_WORKERS)."""
     global _task
     _stop.clear()
-    _task = asyncio.get_running_loop().create_task(_loop())
+    n = workers if workers is not None else config.QUEUE_WORKERS
+    _task = [
+        asyncio.get_running_loop().create_task(_loop(i))
+        for i in range(max(1, n))
+    ]
 
 
 async def stop() -> None:
     global _task
     if _task is not None:
         _stop.set()
-        await _task
-        _task = None
+        await asyncio.gather(*_task, return_exceptions=True)
+        _task = []
 
 
 def queue_size(conn=None) -> int:

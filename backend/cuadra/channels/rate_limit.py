@@ -19,9 +19,10 @@ worker. Real cooldowns still come from Telegram on the next attempt.
 
 import logging
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 
-from cuadra import db
+from cuadra import config, db
 
 log = logging.getLogger("cuadra.rate_limit")
 
@@ -202,3 +203,85 @@ def set_cooldown(sender: str, seconds: float, reason: str | None = None) -> None
             conn.close()
     except sqlite3.Error:
         log.warning("could not set cooldown for %s", sender, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Token bucket + per-chat floor (in-memory, single process).
+#
+# Replaces the fixed 8s gap with a token bucket that allows short bursts
+# (e.g. 2-4 conversations answering at once) but enforces a long-term rate
+# ceiling. The per-chat floor guarantees at least 1s between two messages to
+# the same chat, which is where most FloodWaits originate.
+#
+# State lives in RAM and is rebuilt on restart (assumed full bucket). This is
+# acceptable because the bucket is a pacing aid, not a security boundary: real
+# cooldowns still come from Telegram via blocked_until / FloodWait.
+# ---------------------------------------------------------------------------
+
+import asyncio
+
+_bucket_lock = asyncio.Lock()
+_buckets: dict[str, dict] = {}
+_chat_last: dict[str, float] = {}
+
+
+def _bucket_state(sender: str) -> dict:
+    state = _buckets.get(sender)
+    if state is None:
+        state = {
+            "tokens": float(config.USERBOT_TOKEN_BUCKET_CAPACITY),
+            "refilled_at": time.monotonic(),
+        }
+        _buckets[sender] = state
+    return state
+
+
+def _refill(state: dict) -> None:
+    now = time.monotonic()
+    elapsed = now - state["refilled_at"]
+    if elapsed <= 0:
+        return
+    capacity = float(config.USERBOT_TOKEN_BUCKET_CAPACITY)
+    refill_rate = 1.0 / max(config.USERBOT_TOKEN_BUCKET_REFILL_S, 0.001)
+    state["tokens"] = min(capacity, state["tokens"] + elapsed * refill_rate)
+    state["refilled_at"] = now
+
+
+async def consume_token(sender: str, tokens: float = 1.0) -> float:
+    """Reserve `tokens` from the sender's bucket.
+
+    Returns seconds to wait before the sender may act (0 if tokens available).
+    Does not sleep: the caller decides whether to defer the job or wait.
+    """
+    async with _bucket_lock:
+        state = _bucket_state(sender)
+        _refill(state)
+        if state["tokens"] >= tokens:
+            state["tokens"] -= tokens
+            return 0.0
+        deficit = tokens - state["tokens"]
+        wait_s = deficit / (1.0 / max(config.USERBOT_TOKEN_BUCKET_REFILL_S, 0.001))
+        return round(wait_s, 3)
+
+
+def bucket_remaining(sender: str) -> float:
+    """Tokens currently available (best-effort, no lock)."""
+    state = _buckets.get(sender)
+    if state is None:
+        return float(config.USERBOT_TOKEN_BUCKET_CAPACITY)
+    _refill(state)
+    return round(state["tokens"], 2)
+
+
+def chat_floor_remaining(chat_id: str) -> float:
+    """Seconds left in the per-chat minimum gap."""
+    last = _chat_last.get(chat_id)
+    if last is None:
+        return 0.0
+    wait = config.PER_CHAT_MIN_GAP_S - (time.monotonic() - last)
+    return max(0.0, round(wait, 3))
+
+
+def mark_chat_action(chat_id: str) -> None:
+    """Record a successful send to a chat (per-chat floor)."""
+    _chat_last[chat_id] = time.monotonic()

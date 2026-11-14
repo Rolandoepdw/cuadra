@@ -71,10 +71,30 @@ TELETHON_SESSION = Path(
 
 # Userbot anti-flood safety. Telegram rate limits are per account: after a
 # FloodWait every userbot action must wait, not just the failing job.
-USERBOT_MIN_SEND_GAP_S = float(os.environ.get("CUADRA_USERBOT_MIN_SEND_GAP_S", "8"))
+USERBOT_MIN_SEND_GAP_S = float(os.environ.get("CUADRA_USERBOT_MIN_SEND_GAP_S", "1.5"))
 TELEGRAM_PEER_FLOOD_COOLDOWN_S = float(
     os.environ.get("CUADRA_TELEGRAM_PEER_FLOOD_COOLDOWN_S", "3600")
 )
+
+# Token bucket for userbot pacing (replaces the fixed 8s gap for 1:1 chats).
+# Capacity = burst of messages allowed without waiting; refill = seconds per
+# token. Hard caps: max messages per minute and per hour to stay under ban
+# risk. A broadcast group post uses the group's own min_interval instead.
+USERBOT_TOKEN_BUCKET_CAPACITY = int(
+    os.environ.get("CUADRA_USERBOT_TOKEN_BUCKET_CAPACITY", "4")
+)
+USERBOT_TOKEN_BUCKET_REFILL_S = float(
+    os.environ.get("CUADRA_USERBOT_TOKEN_BUCKET_REFILL_S", "1.5")
+)
+USERBOT_MAX_MSG_PER_MIN = int(os.environ.get("CUADRA_USERBOT_MAX_MSG_PER_MIN", "20"))
+USERBOT_MAX_MSG_PER_HOUR = int(os.environ.get("CUADRA_USERBOT_MAX_MSG_PER_HOUR", "300"))
+
+# Per-chat floor: minimum seconds between two messages to the same chat.
+PER_CHAT_MIN_GAP_S = float(os.environ.get("CUADRA_PER_CHAT_MIN_GAP_S", "1.0"))
+
+# Job queue workers (how many jobs run in parallel). LLM calls remain
+# serialised behind an in-process semaphore while llama.cpp runs -np 1.
+QUEUE_WORKERS = int(os.environ.get("CUADRA_QUEUE_WORKERS", "4"))
 
 # LLM transport. "openai" = any OpenAI-compatible endpoint (Cuadra's own
 # llama.cpp server by default, also LM Studio/vLLM); "ollama" = native /api/chat.
@@ -144,8 +164,9 @@ CONVERSATION_IDLE_HOURS = float(
 
 # Turn assembly: one reply per burst. The debounce is re-armed by every new
 # message; max_wait prevents an endless wait while the customer keeps typing.
-TURN_DEBOUNCE_S = float(os.environ.get("CUADRA_TURN_DEBOUNCE_S", "2.5"))
-TURN_MAX_WAIT_S = float(os.environ.get("CUADRA_TURN_MAX_WAIT_S", "8"))
+# Kept low for speed; the gap/token-bucket below is the anti-ban control.
+TURN_DEBOUNCE_S = float(os.environ.get("CUADRA_TURN_DEBOUNCE_S", "0.8"))
+TURN_MAX_WAIT_S = float(os.environ.get("CUADRA_TURN_MAX_WAIT_S", "2.5"))
 
 # Whisper (speech-to-text). Empty language = auto-detect ("es" in production).
 WHISPER_MODEL = os.environ.get("CUADRA_WHISPER_MODEL", "small")
@@ -172,16 +193,17 @@ PRIORITY_MAINTENANCE = 200
 # Broadcast scheduler (Hito 7): how often due campaigns are dispatched.
 BROADCAST_TICK_S = int(os.environ.get("CUADRA_BROADCAST_TICK_S", "5"))
 
-# Persona / human-like delays (seconds)
-TYPING_DELAY_MIN = float(os.environ.get("CUADRA_TYPING_DELAY_MIN", "1"))
-TYPING_DELAY_MAX = float(os.environ.get("CUADRA_TYPING_DELAY_MAX", "4"))
+# Persona / human-like delays (seconds). Set to 0: no simulated typing delay.
+# Anti-ban is handled by the token bucket below, not by cosmetic sleeps.
+TYPING_DELAY_MIN = float(os.environ.get("CUADRA_TYPING_DELAY_MIN", "0"))
+TYPING_DELAY_MAX = float(os.environ.get("CUADRA_TYPING_DELAY_MAX", "0"))
 
-# Simulated business hours (America/Havana). Outside them the bot answers slower
-# (as a human would) — never with an "I'm offline" excuse (doc 03 §Persona).
+# Simulated business hours (America/Havana). Outside them the bot answers at
+# the same speed as inside hours — no artificial slowdown (doc 03 §Persona).
 BUSINESS_START_HOUR = int(os.environ.get("CUADRA_BUSINESS_START_HOUR", "8"))
 BUSINESS_END_HOUR = int(os.environ.get("CUADRA_BUSINESS_END_HOUR", "21"))
-OUT_OF_HOURS_DELAY_MIN = float(os.environ.get("CUADRA_OUT_OF_HOURS_DELAY_MIN", "5"))
-OUT_OF_HOURS_DELAY_MAX = float(os.environ.get("CUADRA_OUT_OF_HOURS_DELAY_MAX", "15"))
+OUT_OF_HOURS_DELAY_MIN = float(os.environ.get("CUADRA_OUT_OF_HOURS_DELAY_MIN", "0"))
+OUT_OF_HOURS_DELAY_MAX = float(os.environ.get("CUADRA_OUT_OF_HOURS_DELAY_MAX", "0"))
 
 # TCP escalation
 ESCALATION_TIMEOUT_MIN = int(os.environ.get("CUADRA_ESCALATION_TIMEOUT_MIN", "30"))

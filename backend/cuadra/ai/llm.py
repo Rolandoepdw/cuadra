@@ -29,6 +29,10 @@ log = logging.getLogger("cuadra.llm")
 # H-24: short pause before retrying a compose whose TCP connection was reset.
 COMPOSE_RETRY_DELAY_S = 1.0
 
+# Serialize calls to the single-slot llama.cpp server (-np 1). Multiple
+# concurrent queue workers would otherwise pile requests on the server socket.
+_llm_semaphore = asyncio.Semaphore(1)
+
 
 INTENTS = (
     "consulta_precio",
@@ -112,13 +116,14 @@ def _usage(data: dict) -> tuple[int | None, int | None]:
 
 
 async def _post_chat(client: httpx.AsyncClient, payload: dict, structured: bool) -> dict:
-    response = await client.post(_chat_url(), json=payload, headers=_headers())
-    if response.status_code == 400 and structured:
-        # Some endpoints reject response_format/format: retry as plain text.
-        payload = {k: v for k, v in payload.items() if k not in ("response_format", "format")}
+    async with _llm_semaphore:
         response = await client.post(_chat_url(), json=payload, headers=_headers())
-    response.raise_for_status()
-    return response.json()
+        if response.status_code == 400 and structured:
+            # Some endpoints reject response_format/format: retry as plain text.
+            payload = {k: v for k, v in payload.items() if k not in ("response_format", "format")}
+            response = await client.post(_chat_url(), json=payload, headers=_headers())
+        response.raise_for_status()
+        return response.json()
 
 
 def _active_model() -> str:
