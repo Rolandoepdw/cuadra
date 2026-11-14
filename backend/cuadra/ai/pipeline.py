@@ -26,6 +26,30 @@ from cuadra.domain import (
 log = logging.getLogger("cuadra.pipeline")
 
 
+# Datos que solo el cliente puede proporcionar; nunca se escalan al TCP.
+_DATO_CLIENTE = {
+    "zona", "municipio", "dirección", "direccion", "domicilio", "barrio",
+    "reparto", "teléfono", "telefono", "tel", "celular", "número",
+    "numero", "contacto", "nombre", "destinatario", "a nombre de",
+}
+
+
+def _dato_pertenece_a(dato: str) -> str:
+    """Clasifica un dato faltante como del cliente, del proveedor o desconocido.
+
+    Solo los datos del proveedor (stock, garantía, precio, variantes, tiempo de
+    entrega) se escalan al TCP. Los datos del cliente (zona, dirección, teléfono,
+    nombre) se le piden al cliente, nunca al almacén.
+    """
+    d = (dato or "").strip().lower()
+    if not d:
+        return "desconocido"
+    if d in _DATO_CLIENTE or any(k in d for k in _DATO_CLIENTE):
+        return "cliente"
+    # Todo lo que no es del cliente se asume del proveedor (stock, garantía, etc.).
+    return "proveedor"
+
+
 def _build_base_messages(
     conn,
     conversation,
@@ -402,7 +426,7 @@ def _maybe_handle_sale(
     guard = _sale_guard(product, float(product["price"]))
 
     existing = sales_domain.active_sale_for_conversation(conn, conversation["id"])
-    if existing is not None:
+    if existing is not None and int(existing.get("product_id", -1)) == int(product["id"]):
         guard = _sale_guard(product, float(existing["amount"]))
         reply, generator = _fast_template(
             conn,
@@ -614,7 +638,7 @@ async def _decide(
         return reply, False, generator, None
 
     if intent.intencion == "consulta_dato":
-        missing = ", ".join(intent.datos_faltantes) if intent.datos_faltantes else text
+        datos = list(intent.datos_faltantes) if intent.datos_faltantes else []
         if product is None:
             # Nothing in the catalog matches what the customer asked about
             # (H-09): never escalate a question about an unknown product.
@@ -627,8 +651,51 @@ async def _decide(
                 "template",
             )
             return reply, False, generator, None
+
+        # Clasificar qué datos faltan: los del cliente se le piden a él;
+        # solo los del proveedor se escalan al TCP.
+        datos_cliente = [d for d in datos if _dato_pertenece_a(d) == "cliente"]
+        datos_proveedor = [d for d in datos if _dato_pertenece_a(d) == "proveedor"]
+
+        if datos_cliente and not datos_proveedor:
+            # Solo faltan datos que el cliente conoce: no escalar, preguntarle.
+            guard_context = _guard_context(
+                product, None, context, product_source=product_source
+            )
+            faltante = " y ".join(datos_cliente)
+            reply, generator = _safe_template(
+                conn,
+                conversation,
+                prompts.TEMPLATES["ask_client_data"],
+                guard_context,
+                "template",
+                dato=faltante,
+            )
+            return reply, False, generator, None
+
+        if not datos_proveedor:
+            # No hay datos del proveedor que pedir: no escalar, pedir aclaración.
+            guard_context = _guard_context(
+                product, None, context, product_source=product_source
+            )
+            reply, generator = _safe_template(
+                conn,
+                conversation,
+                prompts.TEMPLATES["ask_which_product"],
+                guard_context,
+                "template",
+            )
+            return reply, False, generator, None
+
+        # Quedan datos del proveedor: escalar con una pregunta real, no el
+        # nombre crudo del slot.
         guard_context = _guard_context(
             product, None, context, product_source=product_source
+        )
+        pregunta = (
+            f"El cliente pregunta sobre {product['name']} y necesita saber: "
+            + ", ".join(datos_proveedor)
+            + ". ¿Me confirma ese dato para pasárselo?"
         )
         reply, generator = _safe_template(
             conn,
@@ -637,7 +704,7 @@ async def _decide(
             guard_context,
             "template",
         )
-        return reply, True, generator, missing
+        return reply, True, generator, pregunta
 
     # comparar / queja / otro / low confidence -> careful free generation
     candidates = None
@@ -751,6 +818,8 @@ async def _classify(conn, conversation, messages: list[dict], text: str, message
 async def handle_turn(conn, conversation, turn: dict) -> dict:
     """Run the full pipeline once for a consolidated customer turn."""
     started = time.perf_counter()
+    intent_ms = 0
+    compose_ms = 0
     turn_messages = _turn_messages(conn, turn)
     turn_ids = {message["id"] for message in turn_messages}
     last_message_id = (
@@ -790,9 +859,11 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
         turn_text=text,
     )
 
+    intent_started = time.perf_counter()
     intent, degraded = await _classify(
         conn, conversation, nlu_messages, prompt_text, last_message_id
     )
+    intent_ms = int((time.perf_counter() - intent_started) * 1000)
 
     product, product_source = _resolve_product(conn, intent, context, text)
     # H-09: a low-confidence read must not inherit the previous product. An
@@ -819,6 +890,7 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
     )
 
     sale = None
+    compose_started = time.perf_counter()
     sale_outcome = _maybe_handle_sale(conn, conversation, text, intent, product, context)
     if sale_outcome is not None:
         reply = sale_outcome["reply"]
@@ -840,6 +912,7 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
             product_source=product_source,
         )
         stage = _stage_for(context, intent, product, escalate)
+    compose_ms = int((time.perf_counter() - compose_started) * 1000)
 
     supplier_id = product["supplier_id"] if (escalate and product) else None
 
@@ -870,6 +943,8 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
         "sale_status": sale["status"] if sale else None,
         "sale_order_code": sale["order_code"] if sale else None,
         "latency_ms": int((time.perf_counter() - started) * 1000),
+        "intent_ms": intent_ms,
+        "compose_ms": compose_ms,
         "context_tokens": llm.estimate_tokens(
             [*nlu_messages, {"role": "user", "content": prompt_text}]
         ),

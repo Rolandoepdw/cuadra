@@ -228,6 +228,26 @@ async def process_turn(payload: dict) -> None:
 
         conversation = conversations.get_conversation(conn, turn["conversation_id"])
         result = await pipeline.handle_turn(conn, conversation, turn)
+
+        # --- latency breakdown ---
+        # debounce: how long the turn waited for silence before processing
+        due_at = turns.parse_ts(turn["due_at"])
+        created_at = turns.parse_ts(turn["created_at"])
+        debounce_ms = int((due_at - created_at).total_seconds() * 1000) if due_at and created_at else 0
+        # queue: how long the job waited between creation and claim
+        queue_ms = 0
+        job_id = turn.get("job_id")
+        if job_id is not None:
+            job_row = conn.execute(
+                "SELECT created_at, updated_at FROM jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            if job_row:
+                j_created = turns.parse_ts(job_row["created_at"])
+                j_updated = turns.parse_ts(job_row["updated_at"])
+                if j_created and j_updated:
+                    queue_ms = int((j_updated - j_created).total_seconds() * 1000)
+
         outbound = conversations.add_message(
             conn,
             turn["conversation_id"],
@@ -254,6 +274,10 @@ async def process_turn(payload: dict) -> None:
                 "generator": result["generator"],
                 "degraded": result["degraded"],
                 "latency_ms": result["latency_ms"],
+                "intent_ms": result.get("intent_ms", 0),
+                "compose_ms": result.get("compose_ms", 0),
+                "debounce_ms": debounce_ms,
+                "queue_ms": queue_ms,
                 "context_tokens": result["context_tokens"],
                 "stage": result.get("stage"),
                 "sale_id": result.get("sale_id"),
@@ -1150,6 +1174,28 @@ async def tcp_process(payload: dict) -> None:
                     _notify_sale_ack(
                         sale["conversation_id"], sale["order_code"], action
                     )
+                return
+            if action == "AMBIGUOUS":
+                # Ack keyword present but multiple DISPATCHED sales and no
+                # order code: flag for operator review, never guess.
+                events.log(
+                    conn,
+                    "bot",
+                    "tcp_sale_ack_ambiguous",
+                    entity="suppliers",
+                    entity_id=supplier_id,
+                    details={
+                        "message_id": message_id,
+                        "text": answer[:200],
+                    },
+                )
+                _mark_tcp_processed(
+                    conn,
+                    message_id=message_id,
+                    supplier_id=supplier_id,
+                    kind="SALE_ACK_AMBIGUOUS",
+                    details={"text": answer[:200]},
+                )
                 return
 
         correlation = tcp_triage.correlate(conn, supplier_id=supplier_id, text=answer)

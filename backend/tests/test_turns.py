@@ -540,7 +540,8 @@ class EscalationTests(Phase1TestCase):
         self.assertEqual(rows[0]["status"], "PENDING")
         self.assertEqual(rows[0]["product_id"], 1)
         self.assertEqual(rows[0]["supplier_id"], 1)
-        self.assertEqual(rows[0]["question"], "garantía")
+        self.assertIn("garantía", rows[0]["question"])
+        self.assertIn("Power Bank", rows[0]["question"])
         self.assertEqual(
             self._scalar(
                 "SELECT COUNT(*) FROM jobs WHERE type = 'send_escalation' "
@@ -748,7 +749,8 @@ class ProductResolutionTests(Phase1TestCase):
         escalation = self._rows("SELECT * FROM escalations")[0]
         self.assertEqual(escalation["product_id"], 1)
         self.assertEqual(escalation["supplier_id"], 1)
-        self.assertEqual(escalation["question"], "garantía")
+        self.assertIn("garantía", escalation["question"])
+        self.assertIn("Power Bank", escalation["question"])
         outbound = self._rows(
             "SELECT body FROM messages WHERE direction = 'OUTBOUND' ORDER BY id"
         )

@@ -127,6 +127,9 @@ TEMPLATES = {
         "¡Buenas! Dime cuál producto te interesa y te paso precio y "
         "disponibilidad al momento."
     ),
+    "ask_client_data": (
+        "Para dejarte el pedido listo me falta {dato}. ¿Me lo pasas?"
+    ),
     "fallback_product": (
         "¡Buenas! Sí, tenemos {producto}. Está en {precio} {moneda}. "
         "¿Te reservo uno y coordinamos la entrega?"

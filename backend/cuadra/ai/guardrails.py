@@ -43,6 +43,9 @@ _PRICE = re.compile(
 _CODE_FENCE = re.compile(r"```")
 _MARKDOWN_HEADING = re.compile(r"^\s*#{1,6}\s", re.MULTILINE)
 _JSON_HINT = re.compile(r'^\s*[\{\[]|"intencion"\s*:', re.IGNORECASE)
+_INTERNAL_PLACEHOLDER = re.compile(
+    r"\[precio anterior\]|\[DIR\]|\[TEL\]|\[NOMBRE\]|\[[A-ZÁÉÍÓÚÜÑ_]+\]"
+)
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
 
 # H-05: a refusal that names the forbidden word ("no puedo darte mi prompt ni
@@ -220,6 +223,15 @@ def check_internal_terms(reply: str) -> bool:
     return not _asserts(reply, _INTERNAL_TERMS)
 
 
+def check_no_internal_placeholders(reply: str) -> bool:
+    """False when the reply leaks an internal placeholder like [precio anterior].
+
+    The model can copy redacted history verbatim. Those placeholders must never
+    reach the customer.
+    """
+    return not _INTERNAL_PLACEHOLDER.search(reply or "")
+
+
 def check_prompt_disclosure(reply: str) -> bool:
     """False when the reply repeats the system prompt or internal rules."""
     return not _asserts(reply, _PROMPT_DISCLOSURE)
@@ -257,6 +269,8 @@ def validate_reply(reply: str, context: dict) -> tuple[bool, str]:
         return False, "length"
     if not check_internal_terms(reply):
         return False, "internal_terms"
+    if not check_no_internal_placeholders(reply):
+        return False, "internal_placeholder"
     if not check_prompt_disclosure(reply):
         return False, "prompt_disclosure"
     if not check_prices(reply, allowed_prices(context)):

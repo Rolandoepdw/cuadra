@@ -65,7 +65,9 @@ SALES_MODES = ("assisted", "hybrid", "autonomous")
 MODE_KEY = "sales.mode"
 HYBRID_MAX_AGE_KEY = "sales.hybrid_max_age_hours"
 
-_ACK_CONFIRM = re.compile(r"\bRECIBID[OA]\b")
+_ACK_CONFIRM = re.compile(
+    r"\b(RECIBID[OA]|RECIVID[OA]|RECIBI|RECIVÍ|CONFIRMAD[OA]|CONFIRMO|LISTO|PREPARAD[OA])\b"
+)
 _ACK_DELIVERED = re.compile(r"\bENTREGAD[OA]\b|\bCOBRAD[OA]\b")
 _ACK_OUT_OF_STOCK = re.compile(r"\bAGOTAD[OA]\b|\bSIN\s+STOCK\b")
 _ORDER_CODE = re.compile(r"\bV-\d{6}\b", re.IGNORECASE)
@@ -637,26 +639,52 @@ def _ack_sale(conn, supplier_id: int, text: str) -> dict | None:
         if sale is not None and int(sale["supplier_id"]) == int(supplier_id):
             return sale
         return None
-    row = conn.execute(
+    rows = conn.execute(
         """SELECT * FROM sales
-           WHERE supplier_id = ? AND status IN ('DISPATCHED', 'CONFIRMED')
-           ORDER BY id LIMIT 1""",
+           WHERE supplier_id = ? AND status = 'DISPATCHED'
+           ORDER BY id""",
         (supplier_id,),
-    ).fetchone()
-    return dict(row) if row is not None else None
+    ).fetchall()
+    if not rows:
+        return None
+    if len(rows) == 1:
+        return dict(rows[0])
+    # Multiple DISPATCHED sales for this supplier: ambiguous, do not guess.
+    return None
 
 
 def apply_tcp_ack(conn, supplier_id: int, text: str) -> tuple[dict | None, str | None]:
     """Interpret RECIBIDO / ENTREGADO / AGOTADO from a supplier message.
 
     Returns (sale, action) where action is CONFIRMED, DELIVERED, NEEDS_OPERATOR,
-    or None when the message is not an acknowledgement for this supplier.
+    AMBIGUOUS, or None when the message is not an acknowledgement for this supplier.
+
+    AMBIGUOUS: an ack keyword was found but no single sale could be identified
+    (no order code in the text, and multiple DISPATCHED sales exist for this
+    supplier). The caller must flag it for operator review instead of guessing.
     """
     body = _fold(text)
-    if not (_ACK_CONFIRM.search(body) or _ACK_DELIVERED.search(body) or _ACK_OUT_OF_STOCK.search(body)):
+    is_ack = bool(
+        _ACK_CONFIRM.search(body)
+        or _ACK_DELIVERED.search(body)
+        or _ACK_OUT_OF_STOCK.search(body)
+    )
+    if not is_ack:
         return None, None
     sale = _ack_sale(conn, supplier_id, text)
     if sale is None:
+        # No matching sale: wrong supplier (code exists but not for this supplier)
+        # or no DISPATCHED sales at all. Not ambiguous -- just ignore.
+        if _ORDER_CODE.search(text or ""):
+            return None, None
+        # No code: ambiguous only if multiple DISPATCHED sales exist for this supplier.
+        rows = conn.execute(
+            """SELECT id FROM sales
+               WHERE supplier_id = ? AND status = 'DISPATCHED'""",
+            (supplier_id,),
+        ).fetchall()
+        if len(rows) > 1:
+            return None, "AMBIGUOUS"
         return None, None
 
     if _ACK_OUT_OF_STOCK.search(body):

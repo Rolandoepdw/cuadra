@@ -341,6 +341,10 @@ def resolve_zone(conn, raw: str) -> dict | None:
     There is no hardcoded municipality list: the active `zones` catalog is the
     source of truth. Returns the zone row or None when the text is ambiguous or
     unknown (the caller must ask instead of guessing).
+
+    Zone names/aliases are searched as whole words inside the sentence. A hint
+    word (vivo, zona, entrega...) is no longer required: "Esto es Marianao"
+    resolves to the Marianao zone just like "vivo en Marianao".
     """
     folded = _fold(raw).strip()
     if not folded:
@@ -348,30 +352,53 @@ def resolve_zone(conn, raw: str) -> dict | None:
     zones = list_zones(conn, active=True)
     by_id = {int(zone["id"]): zone for zone in zones}
 
+    # 1. Exact match on canonical name
     for zone in zones:
         if _fold(zone["name"]) == folded:
             return zone
+    # 2. Exact match on alias
     for alias in list_zone_aliases(conn):
         zone = by_id.get(int(alias["zone_id"]))
         if zone is not None and _fold(alias["alias"]) == folded:
             return zone
 
-    # A sentence like "vivo en San Miguel del Padrón" contains the real name.
-    # Longest match wins, with word boundaries to avoid partial-word collisions.
-    if not _ZONE_HINT_RE.search(raw or ""):
-        return None
-    candidates = [(zone["name"], zone) for zone in zones]
-    candidates += [
-        (alias["alias"], by_id[int(alias["zone_id"])])
-        for alias in list_zone_aliases(conn)
-        if int(alias["zone_id"]) in by_id
-    ]
-    for name, zone in sorted(candidates, key=lambda item: -len(item[0])):
-        folded_name = _fold(name)
-        if len(folded_name) >= 4 and re.search(
+    # 3. Whole-word substring match on canonical names and aliases.
+    # Zones with short names (< 6 chars) need a delivery/hint word to avoid
+    # false positives on common words ("regla" = measuring tool, not the zone).
+    has_hint = bool(_ZONE_HINT_RE.search(raw or ""))
+    candidates = []
+    for zone in zones:
+        folded_name = _fold(zone["name"])
+        if len(folded_name) < 4:
+            continue
+        if len(folded_name) < 6 and not has_hint:
+            continue
+        if re.search(
             rf"(?<!\w){re.escape(folded_name)}(?!\w)", folded
         ):
-            return zone
+            candidates.append(zone)
+    for alias in list_zone_aliases(conn):
+        zone = by_id.get(int(alias["zone_id"]))
+        if zone is not None:
+            folded_alias = _fold(alias["alias"])
+            if len(folded_alias) < 4:
+                continue
+            if len(folded_alias) < 6 and not has_hint:
+                continue
+            if re.search(
+                rf"(?<!\w){re.escape(folded_alias)}(?!\w)", folded
+            ):
+                candidates.append(zone)
+
+    # Deduplicate by zone id; ambiguous (multiple zones) -> None, caller asks.
+    seen = {}
+    for zone in candidates:
+        zone_id = int(zone["id"])
+        if zone_id not in seen:
+            seen[zone_id] = zone
+
+    if len(seen) == 1:
+        return next(iter(seen.values()))
     return None
 
 
