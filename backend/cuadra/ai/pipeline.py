@@ -13,7 +13,7 @@ import time
 
 from cuadra import config
 from cuadra.ai import guardrails, llm, memory, prompts, retrieval
-from cuadra.ai.context import ContextBuilder
+from cuadra.ai.context import ContextBuilder, build_nlu_messages
 from cuadra.domain import (
     catalog,
     conversations,
@@ -883,6 +883,30 @@ async def _classify(conn, conversation, messages: list[dict], text: str, message
         return llm.Intent(intencion="otro", confianza=0.0), True
 
 
+async def _classify_light(
+    conn, conversation, messages: list[dict], text: str, message_id
+):
+    """Lightweight NLU classification using a minimal prompt."""
+    try:
+        return (
+            await llm.classify_light(
+                messages, text, conversation_id=conversation["id"]
+            ),
+            False,
+        )
+    except llm.LLMInvalidOutput as exc:
+        log.warning("NLU light degraded to intent=otro: %s", exc)
+        events.log(
+            conn,
+            "llm",
+            "nlu_invalid_output",
+            entity="conversations",
+            entity_id=conversation["id"],
+            details={"message_id": message_id},
+        )
+        return llm.Intent(intencion="otro", confianza=0.0), True
+
+
 async def handle_turn(conn, conversation, turn: dict) -> dict:
     """Run the full pipeline once for a consolidated customer turn."""
     started = time.perf_counter()
@@ -918,18 +942,12 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
         product=current_product,
         source_message_id=last_message_id,
     )
-    nlu_messages, prompt_text = _build_base_messages(
-        conn,
-        conversation,
-        history,
-        context,
-        product=current_product,
-        turn_text=text,
-    )
+    # NLU ligero: prompt mínimo (~600 tokens) para clasificar intención.
+    nlu_messages = build_nlu_messages(history, text)
 
     intent_started = time.perf_counter()
-    intent, degraded = await _classify(
-        conn, conversation, nlu_messages, prompt_text, last_message_id
+    intent, degraded = await _classify_light(
+        conn, conversation, nlu_messages, text, last_message_id
     )
     intent_ms = int((time.perf_counter() - intent_started) * 1000)
 
@@ -1014,7 +1032,7 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
         "intent_ms": intent_ms,
         "compose_ms": compose_ms,
         "context_tokens": llm.estimate_tokens(
-            [*nlu_messages, {"role": "user", "content": prompt_text}]
+            [*nlu_messages, {"role": "user", "content": text}]
         ),
     }
 

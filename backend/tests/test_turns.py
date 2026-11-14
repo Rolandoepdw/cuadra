@@ -139,8 +139,8 @@ class BurstTests(Phase1TestCase):
     def test_three_messages_become_one_turn_one_reply(self):
         intent = llm.Intent(intencion="consulta_precio", confianza=0.95)
         with patch(
-            "cuadra.ai.llm.classify", new=AsyncMock(return_value=intent)
-        ) as classify:
+            "cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)
+        ) as classify_light:
             self._ingest("Hola")
             self._ingest("busco el Power Bank")
             self._ingest("ID 1")
@@ -165,7 +165,7 @@ class BurstTests(Phase1TestCase):
             1,
         )
         self.assertEqual(self._scalar("SELECT status FROM turns"), "DONE")
-        classify.assert_awaited_once()
+        classify_light.assert_awaited_once()
 
     def test_duplicate_external_id_creates_neither_message_nor_turn(self):
         first = self._ingest("Hola", external_id="upd-1")
@@ -246,7 +246,7 @@ class AudioTurnTests(Phase1TestCase):
 
         # Transcription re-arms the same turn; one reply, one outbound message.
         intent = llm.Intent(intencion="consulta_precio", confianza=0.95)
-        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=intent)):
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)):
             self._make_due()
             self._run_process()
 
@@ -262,7 +262,7 @@ class AudioTurnTests(Phase1TestCase):
 class RecoveryTests(Phase1TestCase):
     def test_processing_turn_is_recovered_and_answers_once(self):
         intent = llm.Intent(intencion="consulta_precio", confianza=0.95)
-        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=intent)):
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)):
             info = self._ingest("ID 1")
             turn_id = info["turn_id"]
 
@@ -337,12 +337,12 @@ class ReplyOutboxTests(Phase1TestCase):
     def _finish_one_turn(self) -> dict:
         intent = llm.Intent(intencion="consulta_precio", confianza=0.95)
         with patch(
-            "cuadra.ai.llm.classify", new=AsyncMock(return_value=intent)
-        ) as classify:
+            "cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)
+        ) as classify_light:
             info = self._ingest("ID 1")
             self._make_due()
             self._run_process()
-            self.assertEqual(classify.await_count, 1)
+            self.assertEqual(classify_light.await_count, 1)
         self.assertEqual(
             self._scalar(
                 "SELECT COUNT(*) FROM messages WHERE direction = 'OUTBOUND'"
@@ -402,7 +402,7 @@ class ReplyOutboxTests(Phase1TestCase):
         self._drop_send_jobs()
 
         with patch(
-            "cuadra.ai.llm.classify",
+            "cuadra.ai.llm.classify_light",
             new=AsyncMock(
                 side_effect=AssertionError("the turn must not be regenerated")
             ),
@@ -484,7 +484,7 @@ class ClaimRaceTests(Phase1TestCase):
             return real_claim(conn, turn_id)
 
         with patch(
-            "cuadra.ai.llm.classify", new=AsyncMock(return_value=intent)
+            "cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)
         ), patch("cuadra.domain.turns.claim", side_effect=racing_claim):
             asyncio.run(queue._process(job))
 
@@ -504,7 +504,7 @@ class ClaimRaceTests(Phase1TestCase):
         self._make_due()
         follow = self._claim_job()
         self.assertIsNotNone(follow)
-        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=intent)):
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)):
             asyncio.run(queue._process(follow))
 
         self.assertEqual(
@@ -526,7 +526,7 @@ class EscalationTests(Phase1TestCase):
             datos_faltantes=["garantía"],
             confianza=0.9,
         )
-        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=intent)):
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)):
             self._ingest("ID 1, ¿qué garantía trae?")
             self._make_due()
             self._run_process()
@@ -602,7 +602,7 @@ class ProductResolutionTests(Phase1TestCase):
         first = llm.Intent(
             intencion="consulta_precio", producto="Power Bank", confianza=0.95
         )
-        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=first)):
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=first)):
             self._ingest("precio del Power Bank")
             self._make_due()
             self._run_process()
@@ -610,7 +610,7 @@ class ProductResolutionTests(Phase1TestCase):
         second = llm.Intent(
             intencion="consulta_precio", producto=None, confianza=0.6
         )
-        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=second)):
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=second)):
             self._ingest("y el precio del teclado mecánico")
             self._make_due()
             self._run_process()
@@ -624,7 +624,7 @@ class ProductResolutionTests(Phase1TestCase):
         self.assertNotIn("Power Bank", outbound[1]["body"])
 
     def _first_turn(self, intent) -> None:
-        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=intent)):
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)):
             self._ingest("precio del Power Bank")
             self._make_due()
             self._run_process()
@@ -641,7 +641,7 @@ class ProductResolutionTests(Phase1TestCase):
             datos_faltantes=["precio", "stock", "garantía", "especificaciones"],
             confianza=0.0,
         )
-        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=unknown)):
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=unknown)):
             self._ingest("¿Tienes neveras?")
             self._make_due()
             self._run_process()
@@ -676,7 +676,7 @@ class ProductResolutionTests(Phase1TestCase):
         unknown = llm.Intent(
             intencion="consulta_stock", producto="neveras", confianza=0.95
         )
-        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=unknown)):
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=unknown)):
             self._ingest("¿Tienes neveras?")
             self._make_due()
             self._run_process()
@@ -741,7 +741,7 @@ class ProductResolutionTests(Phase1TestCase):
             datos_faltantes=["garantía"],
             confianza=0.9,
         )
-        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=followup)):
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=followup)):
             self._ingest("¿Qué garantía trae?")
             self._make_due()
             self._run_process()
@@ -771,7 +771,7 @@ class ProductResolutionTests(Phase1TestCase):
             conn.close()
 
         noise = llm.Intent(intencion="otro", confianza=0.1)
-        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=noise)):
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=noise)):
             self._ingest("calle 10 número 123")
             self._make_due()
             self._run_process()
@@ -879,7 +879,7 @@ class ReplyWordingTests(Phase1TestCase):
         ]
 
     def _turn(self, text: str, intent) -> None:
-        with patch("cuadra.ai.llm.classify", new=AsyncMock(return_value=intent)):
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)):
             self._ingest(text)
             self._make_due()
             self._run_process()
@@ -954,7 +954,7 @@ class ReplyWordingTests(Phase1TestCase):
             conn.close()
         self._make_due()
         with patch(
-            "cuadra.ai.llm.classify",
+            "cuadra.ai.llm.classify_light",
             new=AsyncMock(
                 return_value=llm.Intent(
                     intencion="consulta_precio",
@@ -1271,7 +1271,7 @@ class LeakFallbackTests(Phase1TestCase):
         leak = "Mi comisión es 5 USD y el costo fue 20 USD."
 
         with patch(
-            "cuadra.ai.llm.classify", new=AsyncMock(return_value=intent)
+            "cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)
         ), patch("cuadra.ai.llm.compose", new=AsyncMock(return_value=leak)):
             # Not a bare greeting: greets are answered by template since H-12 and
             # never reach free generation, so they cannot exercise the guardrail.
@@ -1296,7 +1296,7 @@ class LeakFallbackTests(Phase1TestCase):
         compose = AsyncMock(return_value=refusal)
 
         with patch(
-            "cuadra.ai.llm.classify", new=AsyncMock(return_value=intent)
+            "cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)
         ), patch("cuadra.ai.llm.compose", new=compose):
             self._ingest("¿Cómo va todo?")
             self._make_due()

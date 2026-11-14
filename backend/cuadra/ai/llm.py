@@ -286,6 +286,58 @@ async def classify(
             raise LLMInvalidOutput(str(second_error)) from second_error
 
 
+async def classify_light(
+    base_messages: list[dict],
+    text: str,
+    *,
+    conversation_id: int | None = None,
+) -> Intent:
+    """Lightweight NLU: minimal prompt for intent classification only.
+
+    Uses NLU_TASK_LIGHT (~600 tokens) instead of the full system prompt
+    (~2171 tokens). Intended for turns where we only need to classify, not
+    compose a free-form reply.
+    """
+    task = {
+        "role": "user",
+        "content": prompts.NLU_TASK_LIGHT.format(text=text),
+    }
+    messages = [*base_messages, task]
+    raw = await chat(
+        messages,
+        schema=INTENT_SCHEMA,
+        schema_name="intent",
+        temperature=0.0,
+        purpose="intent",
+        conversation_id=conversation_id,
+    )
+    try:
+        return Intent.model_validate_json(raw)
+    except ValidationError as first_error:
+        log.warning("NLU light output invalid, retrying once: %s", first_error)
+        correction = {
+            "role": "user",
+            "content": (
+                "Tu respuesta anterior no validó contra el esquema JSON. "
+                f"Error: {first_error.errors(include_url=False)}. "
+                "Responde de nuevo SOLO con el JSON correcto."
+            ),
+        }
+        retry = [*messages, {"role": "assistant", "content": raw}, correction]
+        raw_retry = await chat(
+            retry,
+            schema=INTENT_SCHEMA,
+            schema_name="intent",
+            temperature=0.0,
+            purpose="intent",
+            conversation_id=conversation_id,
+        )
+        try:
+            return Intent.model_validate_json(raw_retry)
+        except ValidationError as second_error:
+            raise LLMInvalidOutput(str(second_error)) from second_error
+
+
 async def compose(
     base_messages: list[dict],
     last_message: str,

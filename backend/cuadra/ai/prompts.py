@@ -89,6 +89,24 @@ Ejemplos:
 "hola buenas" -> {"intencion": "otro", "producto": null, "datos_faltantes": [], "confianza": 1.0}
 """
 
+# NLU ligero: prompt mínimo para clasificación de intención. Se usa en lugar del
+# system prompt completo cuando solo se necesita clasificar (no componer). Ahorra
+# ~1500 tokens y varios segundos por turno. El historial reciente se pasa en
+# base_messages; este task solo añade la instrucción y el mensaje actual.
+NLU_TASK_LIGHT = """\
+Clasifica la intención del cliente en una de: consulta_precio, consulta_stock,
+consulta_dato, comparar, comprar, queja, otro.
+Responde SOLO con JSON:
+{{"intencion": "...", "producto": "nombre o null", "datos_faltantes": [], "confianza": 0.0-1.0}}
+
+- producto: nombre que escribió el cliente, null si no menciona ninguno.
+- datos_faltantes: lista vacía salvo que pregunte un dato concreto del producto.
+- confianza: 0.9-1.0 clara, 0.6-0.89 probable, 0.3-0.59 ambigua, <0.3 no se entiende.
+
+MENSAJE DEL CLIENTE:
+{text}
+"""
+
 COMPOSE_INSTRUCTION = """\
 Redacta la respuesta al último mensaje del cliente siguiendo tus reglas de voz y
 usando SOLO los datos reales del contexto. Máximo 3 párrafos cortos. Responde solo

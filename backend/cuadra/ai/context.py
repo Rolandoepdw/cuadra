@@ -220,3 +220,20 @@ class ContextBuilder:
             tail["content"] = tail["content"][:keep_chars]
 
         return [head, *recent], tail["content"]
+
+
+def build_nlu_messages(
+    history: list[dict], turn_text: str, max_history: int = 3
+) -> list[dict]:
+    """Build a minimal message list for intent classification (NLU).
+
+    Only the last ``max_history`` messages plus the current turn text are used,
+    keeping the prompt under ~600 tokens instead of the full system prompt.
+    """
+    messages = []
+    for message in history[-max_history:]:
+        role = "user" if message["direction"] == "INBOUND" else "assistant"
+        body = message["body"] or f"[{message['type']}]"
+        messages.append({"role": role, "content": body[:MAX_MESSAGE_CHARS]})
+    messages.append({"role": "user", "content": turn_text or ""})
+    return messages
