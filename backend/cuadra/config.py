@@ -209,6 +209,18 @@ OUT_OF_HOURS_DELAY_MAX = float(os.environ.get("CUADRA_OUT_OF_HOURS_DELAY_MAX", "
 ESCALATION_TIMEOUT_MIN = int(os.environ.get("CUADRA_ESCALATION_TIMEOUT_MIN", "30"))
 ESCALATION_MAX_RETRIES = int(os.environ.get("CUADRA_ESCALATION_MAX_RETRIES", "1"))
 
+# Execution tracing: record input/output of critical methods to debug failures
+# without guessing. Levels: OFF, ERROR (only failures), SAMPLE (10% successes +
+# 100% failures), ALL (everything).
+CUADRA_TRACE_LEVEL = os.environ.get("CUADRA_TRACE_LEVEL", "ERROR").upper()
+CUADRA_TRACE_SAMPLE_RATE = float(os.environ.get("CUADRA_TRACE_SAMPLE_RATE", "0.1"))
+CUADRA_TRACE_LOG_FILE = Path(
+    os.environ.get("CUADRA_TRACE_LOG_FILE", LOGS_DIR / "traces.log")
+)
+CUADRA_TRACE_MAX_FILES = int(os.environ.get("CUADRA_TRACE_MAX_FILES", "10"))
+CUADRA_TRACE_MAX_BYTES = int(os.environ.get("CUADRA_TRACE_MAX_BYTES", "52428800"))  # 50 MB
+CUADRA_TRACE_MASK_PII = os.environ.get("CUADRA_TRACE_MASK_PII", "1") == "1"
+
 
 def ensure_dirs() -> None:
     for d in (

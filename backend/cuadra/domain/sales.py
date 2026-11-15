@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 from cuadra.domain import catalog, clock, events, settings
 from cuadra.domain.errors import Invalid, NotFound
+from cuadra.ai import tracing
 
 SALE_STATUSES = (
     "DRAFT",
@@ -400,6 +401,29 @@ def create_sale(
             "mode": choice,
         },
     )
+    tracing.trace_call(
+        "sales.create_sale",
+        {
+            "conversation_id": conversation_id,
+            "customer_id": customer_id,
+            "product_id": product_id,
+            "quantity": quantity,
+            "recipient_name": recipient_name,
+            "delivery_zone": delivery_zone,
+            "delivery_address": delivery_address,
+            "customer_phone": customer_phone,
+            "mode": mode,
+            "source": source,
+        },
+        {
+            "sale_id": sale["id"],
+            "order_code": sale["order_code"],
+            "amount": sale["amount"],
+            "currency": sale["currency"],
+            "status": sale["status"],
+        },
+        ok=True,
+    )
     return sale
 
 
@@ -418,6 +442,12 @@ def update_sale_quantity(
         raise Invalid("quantity must be positive")
 
     sale = get_sale(conn, sale_id)
+    tracing.trace_call(
+        "sales.update_sale_quantity",
+        {"sale_id": sale_id, "new_quantity": new_quantity, "old_quantity": sale["quantity"] if sale else None},
+        None,
+        ok=True,
+    )
     if sale is None:
         raise Invalid("sale not found")
     if sale["status"] not in ("PENDING_DISPATCH", "PENDING_APPROVAL"):
@@ -472,7 +502,20 @@ def update_sale_quantity(
             (total, earned, ccurrency, _now(), sale_id),
         )
 
-    return get_sale(conn, sale_id)
+    updated_sale = get_sale(conn, sale_id)
+    tracing.trace_call(
+        "sales.update_sale_quantity",
+        {"sale_id": sale_id, "new_quantity": new_quantity, "old_quantity": sale["quantity"] if sale else None},
+        {
+            "sale_id": updated_sale["id"],
+            "order_code": updated_sale["order_code"],
+            "quantity": updated_sale["quantity"],
+            "amount": updated_sale["amount"],
+            "status": updated_sale["status"],
+        },
+        ok=True,
+    )
+    return updated_sale
 
 
 # ---------------------------------------------------------------- transitions
@@ -742,12 +785,24 @@ def apply_tcp_ack(conn, supplier_id: int, text: str) -> tuple[dict | None, str |
         or _ACK_OUT_OF_STOCK.search(body)
     )
     if not is_ack:
+        tracing.trace_call(
+            "sales.apply_tcp_ack",
+            {"supplier_id": supplier_id, "text": text[:200]},
+            None,
+            ok=True,
+        )
         return None, None
     sale = _ack_sale(conn, supplier_id, text)
     if sale is None:
         # No matching sale: wrong supplier (code exists but not for this supplier)
         # or no DISPATCHED sales at all. Not ambiguous -- just ignore.
         if _ORDER_CODE.search(text or ""):
+            tracing.trace_call(
+                "sales.apply_tcp_ack",
+                {"supplier_id": supplier_id, "text": text[:200]},
+                {"action": None, "reason": "wrong_supplier_or_no_dispatched"},
+                ok=True,
+            )
             return None, None
         # No code: ambiguous only if multiple DISPATCHED sales exist for this supplier.
         rows = conn.execute(
@@ -756,6 +811,12 @@ def apply_tcp_ack(conn, supplier_id: int, text: str) -> tuple[dict | None, str |
             (supplier_id,),
         ).fetchall()
         if len(rows) > 1:
+            tracing.trace_call(
+                "sales.apply_tcp_ack",
+                {"supplier_id": supplier_id, "text": text[:200]},
+                {"action": "AMBIGUOUS", "candidate_count": len(rows)},
+                ok=True,
+            )
             return None, "AMBIGUOUS"
         return None, None
 
@@ -769,9 +830,6 @@ def apply_tcp_ack(conn, supplier_id: int, text: str) -> tuple[dict | None, str |
             return confirm(conn, sale["id"]), "CONFIRMED"
         return sale, None
     return None, None
-
-
-# --------------------------------------------------------------- lists/summary
 
 def list_sales(
     conn,

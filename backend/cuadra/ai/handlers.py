@@ -10,6 +10,7 @@ from cuadra import channels, config, db
 from cuadra.channels import rate_limit
 from cuadra.channels.telegram_user import _USERBOT_SENDER
 from cuadra.channels import telegram_user
+from cuadra.ai import tracing
 from cuadra.ai import (
     assembler,
     memory,
@@ -65,6 +66,14 @@ async def _check_token_bucket(sender) -> None:
         return
     wait = await rate_limit.consume_token(_USERBOT_SENDER, 1.0)
     if wait > 0:
+        tracing.trace_call(
+            "handlers._check_token_bucket",
+            {"sender": _USERBOT_SENDER, "wait_s": wait},
+            {"action": "rate_limited", "reason": "token_bucket_empty"},
+            ok=False,
+            error=f"token bucket empty: wait {wait:.2f}s",
+            error_type="RateLimited",
+        )
         retry_at = datetime.now(timezone.utc) + timedelta(seconds=wait)
         raise queue.RateLimited(
             wait,
@@ -582,6 +591,14 @@ async def _pace_send(adapter, target: str) -> None:
 
     cwait = rate_limit.chat_floor_remaining(target)
     if cwait > 0:
+        tracing.trace_call(
+            "handlers._pace_send",
+            {"target": target, "chat_floor_wait_s": cwait},
+            {"action": "rate_limited", "reason": "chat_floor_active"},
+            ok=False,
+            error=f"chat floor active: wait {cwait:.2f}s",
+            error_type="RateLimited",
+        )
         retry_at = datetime.now(timezone.utc) + timedelta(seconds=cwait)
         raise queue.RateLimited(
             cwait,
@@ -605,6 +622,16 @@ async def send_message(payload: dict) -> None:
     """
     conversation_id = payload["conversation_id"]
     message_id = payload["message_id"]
+
+    tracing.trace_call(
+        "handlers.send_message",
+        {
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+        },
+        None,
+        ok=True,
+    )
 
     conn = db.connect()
     try:
@@ -666,6 +693,21 @@ async def send_message(payload: dict) -> None:
         )
     finally:
         conn.close()
+    tracing.trace_call(
+        "handlers.send_message",
+        {
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+            "target": target,
+            "message_type": message["type"],
+        },
+        {
+            "provider_message_id": provider_message_id,
+            "sent": True,
+        },
+        ok=True,
+        conversation_id=conversation_id,
+    )
 
 
 async def send_escalation(payload: dict) -> None:

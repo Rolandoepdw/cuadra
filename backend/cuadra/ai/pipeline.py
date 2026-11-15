@@ -12,7 +12,7 @@ import re
 import time
 
 from cuadra import config
-from cuadra.ai import guardrails, llm, memory, prompts, retrieval
+from cuadra.ai import guardrails, llm, memory, prompts, retrieval, tracing
 from cuadra.ai.context import ContextBuilder, build_nlu_messages
 from cuadra.domain import (
     catalog,
@@ -930,6 +930,21 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
     )
     text = _turn_text(turn_messages) or "[mensaje sin texto]"
 
+    # Trace: entrada del turno
+    tracing.trace_call(
+        "pipeline.handle_turn",
+        {
+            "turn_id": turn.get("id"),
+            "conversation_id": conversation["id"],
+            "text": text,
+            "message_count": len(turn_messages),
+        },
+        None,  # output se llena al final
+        ok=True,
+        conversation_id=conversation["id"],
+        turn_id=turn.get("id"),
+    )
+
     context = conversations.get_context(conn, conversation["id"])
     history = [
         message
@@ -962,6 +977,26 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
     )
     intent_ms = int((time.perf_counter() - intent_started) * 1000)
 
+    # Trace: resultado del NLU
+    tracing.trace_call(
+        "pipeline._classify_light",
+        {
+            "text": text,
+            "message_count": len(nlu_messages),
+        },
+        {
+            "intencion": intent.intencion,
+            "producto": intent.producto,
+            "datos_faltantes": intent.datos_faltantes,
+            "confianza": intent.confianza,
+            "cantidad": intent.cantidad,
+            "degraded": degraded,
+        },
+        ok=True,
+        conversation_id=conversation["id"],
+        turn_id=turn.get("id"),
+    )
+
     product, product_source = _resolve_product(conn, intent, context, text)
     # H-09: a low-confidence read must not inherit the previous product. An
     # unknown product ("¿Tienes neveras?") would otherwise be answered or
@@ -984,6 +1019,26 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
         text,
         product=product,
         source_message_id=last_message_id,
+    )
+
+    # Trace: producto resuelto
+    tracing.trace_call(
+        "pipeline._resolve_product",
+        {
+            "intent": intent.intencion,
+            "producto_solicitado": intent.producto,
+            "confianza": intent.confianza,
+            "product_source_in": product_source,
+            "context_stage": str(context.get("stage") or ""),
+        },
+        {
+            "product_id": product["id"] if product else None,
+            "product_name": product["name"] if product else None,
+            "product_source_out": product_source,
+        },
+        ok=True,
+        conversation_id=conversation["id"],
+        turn_id=turn.get("id"),
     )
 
     sale = None
@@ -1022,6 +1077,32 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
         escalate,
         stage=stage,
         sale=sale,
+    )
+    # Trace: salida completa del turno
+    tracing.trace_call(
+        "pipeline.handle_turn",
+        {
+            "turn_id": turn.get("id"),
+            "conversation_id": conversation["id"],
+            "text": text,
+            "message_count": len(turn_messages),
+        },
+        {
+            "reply": reply[:500] if reply else None,
+            "intent": intent.intencion,
+            "confianza": intent.confianza,
+            "generator": generator,
+            "stage": stage,
+            "sale_id": sale["id"] if sale else None,
+            "sale_status": sale["status"] if sale else None,
+            "escalate": escalate,
+            "latency_ms": int((time.perf_counter() - started) * 1000),
+            "intent_ms": intent_ms,
+            "compose_ms": compose_ms,
+        },
+        ok=True,
+        conversation_id=conversation["id"],
+        turn_id=turn.get("id"),
     )
     return {
         "turn_id": turn.get("id"),

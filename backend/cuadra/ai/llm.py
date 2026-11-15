@@ -314,7 +314,26 @@ async def classify_light(
         conversation_id=conversation_id,
     )
     try:
-        return Intent.model_validate_json(raw)
+        intent = Intent.model_validate_json(raw)
+        # Trace: clasificación NLU
+        tracing.trace_call(
+            "llm.classify_light",
+            {
+                "text": text[:200],
+                "message_count": len(messages),
+                "conversation_id": conversation_id,
+            },
+            {
+                "intencion": intent.intencion,
+                "producto": intent.producto,
+                "datos_faltantes": intent.datos_faltantes,
+                "confianza": intent.confianza,
+                "cantidad": intent.cantidad,
+            },
+            ok=True,
+            conversation_id=conversation_id,
+        )
+        return intent
     except ValidationError as first_error:
         log.warning("NLU light output invalid, retrying once: %s", first_error)
         correction = {
@@ -353,7 +372,24 @@ async def compose(
         {"role": "user", "content": f"{instruction}\n\nMENSAJE DEL CLIENTE:\n{last_message}"},
     ]
     try:
-        return await chat(messages, purpose="compose", conversation_id=conversation_id)
+        reply = await chat(messages, purpose="compose", conversation_id=conversation_id)
+        # Trace: composición LLM
+        tracing.trace_call(
+            "llm.compose",
+            {
+                "last_message": last_message[:200],
+                "extra": extra[:200] if extra else None,
+                "message_count": len(messages),
+                "conversation_id": conversation_id,
+            },
+            {
+                "reply": reply[:500] if reply else None,
+                "reply_length": len(reply) if reply else 0,
+            },
+            ok=True,
+            conversation_id=conversation_id,
+        )
+        return reply
     except LLMUnavailable as exc:
         # H-24: after a hard restart the server may reset the connection of the
         # request orphaned by the dead core. One short retry avoids paying the

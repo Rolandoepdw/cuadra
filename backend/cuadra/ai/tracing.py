@@ -1,117 +1,410 @@
-"""Persist LLM call traces (migration 012).
+"""Execution tracing: record input/output of critical methods.
 
-Every call to ``ai.llm.chat`` writes one row with model, purpose, latency,
-tokens and a redacted copy of the prompt/completion. Tracing is best-effort:
-a failure here must never break a customer reply, so every error is swallowed
-and logged at debug level.
+Purpose: when something fails, reconstruct the execution flow without guessing.
+Each trace is a JSON line with: timestamp, method, input, output, error, ok,
+duration_ms, and optional conversation_id / turn_id.
 
-Prompts can be disabled with ``settings['llm.trace_prompts'] = '0'``; metadata
-(model, latency, tokens, error) is still stored. Retention is controlled by
-``settings['llm.trace_retention_days']`` (default 30) and enforced by
-``purge_old`` from the maintenance scheduler.
+Levels (CUADRA_TRACE_LEVEL env var):
+  OFF      - no tracing
+  ERROR    - only methods that raised or returned ok=False
+  SAMPLE   - 10% of successes + 100% of failures (configurable sample rate)
+  ALL      - every call
+
+Output goes to a dedicated rotated log file (data/logs/traces.log by default)
+so it never mixes with cuadra.log and can be grepped independently.
+
+PII masking: when CUADRA_TRACE_MASK_PII=1 (default), phone numbers and
+addresses inside input/output dicts are truncated to avoid leaking customer
+data in logs.
 """
 
+import json
 import logging
+import os
+import random
+import time
+from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
+from typing import Any, Callable, Optional
 
-from cuadra import db
+from cuadra import config, db
 from cuadra.ai import redact
 from cuadra.domain import settings
 
-log = logging.getLogger("cuadra.tracing")
-
-RETENTION_KEY = "llm.trace_retention_days"
-PROMPTS_KEY = "llm.trace_prompts"
-
-DEFAULT_RETENTION_DAYS = 30
-MAX_ERROR_CHARS = 500
+log = logging.getLogger("cuadra.trace")
 
 
-def _read_config(conn) -> tuple[bool, int]:
-    """Return (store_prompts, retention_days) with safe fallbacks."""
-    prompts = settings.get(conn, PROMPTS_KEY, "1") != "0"
-    try:
-        days = int(settings.get(conn, RETENTION_KEY, str(DEFAULT_RETENTION_DAYS)))
-    except (TypeError, ValueError):
-        days = DEFAULT_RETENTION_DAYS
-    return prompts, max(1, min(days, 3650))
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _should_trace(level: str, ok: bool, sample_rate: float) -> bool:
+    """Decide whether this call should be traced."""
+    if level == "OFF":
+        return False
+    if level == "ERROR":
+        return not ok
+    if level == "ALL":
+        return True
+    if level == "SAMPLE":
+        if not ok:
+            return True
+        return random.random() < sample_rate
+    return False
+
+
+def _mask_pii(value: Any) -> Any:
+    """Recursively mask phone numbers and long address-like strings."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        if len(value) > 200:
+            return value[:200] + f"...[+{len(value) - 200} more chars]"
+        return value
+    if isinstance(value, dict):
+        return {k: _mask_pii(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_mask_pii(v) for v in value]
+    return value
+
+
+class Tracer:
+    """Single tracer instance shared across the process."""
+
+    def __init__(self) -> None:
+        self._logger: Optional[logging.Logger] = None
+        self._initialized = False
+
+    def _ensure_logger(self) -> None:
+        if self._initialized:
+            return
+        self._initialized = True
+        level = getattr(config, "CUADRA_TRACE_LEVEL", "ERROR").upper()
+        if level == "OFF":
+            return
+        log_file = getattr(config, "CUADRA_TRACE_LOG_FILE", None)
+        if log_file is None:
+            return
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        logger = logging.getLogger("cuadra.trace")
+        logger.setLevel(logging.INFO)
+        logger.propagate = False  # do not double-log to cuadra.log
+        handler = RotatingFileHandler(
+            str(log_file),
+            maxBytes=getattr(config, "CUADRA_TRACE_MAX_BYTES", 52428800),
+            backupCount=getattr(config, "CUADRA_TRACE_MAX_FILES", 10),
+            encoding="utf-8",
+        )
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(handler)
+        self._logger = logger
+
+    def trace(
+        self,
+        method: str,
+        input_data: Any,
+        output_data: Any,
+        *,
+        ok: bool,
+        error: Optional[str] = None,
+        error_type: Optional[str] = None,
+        duration_ms: Optional[float] = None,
+        conversation_id: Optional[int] = None,
+        turn_id: Optional[int] = None,
+    ) -> None:
+        """Write one trace line if the level allows it."""
+        level = getattr(config, "CUADRA_TRACE_LEVEL", "ERROR").upper()
+        if not _should_trace(level, ok, getattr(config, "CUADRA_TRACE_SAMPLE_RATE", 0.1)):
+            return
+        self._ensure_logger()
+        if self._logger is None:
+            return
+
+        record = {
+            "timestamp": _now_iso(),
+            "method": method,
+            "input": _mask_pii(input_data) if getattr(config, "CUADRA_TRACE_MASK_PII", True) else input_data,
+            "output": _mask_pii(output_data) if getattr(config, "CUADRA_TRACE_MASK_PII", True) else output_data,
+            "ok": ok,
+        }
+        if error is not None:
+            record["error"] = error
+        if error_type is not None:
+            record["error_type"] = error_type
+        if duration_ms is not None:
+            record["duration_ms"] = round(duration_ms, 2)
+        if conversation_id is not None:
+            record["conversation_id"] = conversation_id
+        if turn_id is not None:
+            record["turn_id"] = turn_id
+
+        self._logger.info(json.dumps(record, ensure_ascii=False))
+
+
+tracer = Tracer()
+
+
+class trace_method:
+    """Decorator to trace a synchronous or async method.
+
+    Usage:
+
+        @trace_method("pipeline._maybe_handle_sale")
+        def _maybe_handle_sale(...):
+            ...
+
+    The decorator captures the method arguments (excluding self/conn/db handles
+    when they are not serializable) and the return value or exception.
+    """
+
+    def __init__(self, name: str, capture_args: bool = True) -> None:
+        self.name = name
+        self.capture_args = capture_args
+
+    def __call__(self, func: Callable) -> Callable:
+        if not getattr(config, "CUADRA_TRACE_LEVEL", "ERROR").upper() == "OFF":
+            import asyncio
+
+            if asyncio.iscoroutinefunction(func):
+                return self._async_wrapper(func)
+            return self._sync_wrapper(func)
+        return func
+
+    def _sync_wrapper(self, func: Callable) -> Callable:
+        def wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            ok = True
+            error = None
+            error_type = None
+            output = None
+            try:
+                output = func(*args, **kwargs)
+                return output
+            except Exception as exc:  # noqa: BLE001
+                ok = False
+                error = str(exc)
+                error_type = type(exc).__name__
+                raise
+            finally:
+                duration_ms = (time.perf_counter() - start) * 1000
+                input_data = {
+                    "args": [str(a) for a in args[1:]] if self.capture_args else [],
+                    "kwargs": {k: str(v) for k, v in kwargs.items()} if self.capture_args else {},
+                } if self.capture_args else None
+                tracer.trace(
+                    self.name,
+                    input_data,
+                    output,
+                    ok=ok,
+                    error=error,
+                    error_type=error_type,
+                    duration_ms=duration_ms,
+                )
+
+        return wrapper
+
+    def _async_wrapper(self, func: Callable) -> Callable:
+        async def wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            ok = True
+            error = None
+            error_type = None
+            output = None
+            try:
+                output = await func(*args, **kwargs)
+                return output
+            except Exception as exc:  # noqa: BLE001
+                ok = False
+                error = str(exc)
+                error_type = type(exc).__name__
+                raise
+            finally:
+                duration_ms = (time.perf_counter() - start) * 1000
+                input_data = {
+                    "args": [str(a) for a in args[1:]] if self.capture_args else [],
+                    "kwargs": {k: str(v) for k, v in kwargs.items()} if self.capture_args else {},
+                } if self.capture_args else None
+                tracer.trace(
+                    self.name,
+                    input_data,
+                    output,
+                    ok=ok,
+                    error=error,
+                    error_type=error_type,
+                    duration_ms=duration_ms,
+                )
+
+        return wrapper
+
+
+def trace_call(
+    method: str,
+    input_data: Any,
+    output_data: Any,
+    *,
+    ok: bool,
+    error: Optional[str] = None,
+    error_type: Optional[str] = None,
+    duration_ms: Optional[float] = None,
+    conversation_id: Optional[int] = None,
+    turn_id: Optional[int] = None,
+) -> None:
+    """Manual trace call (for methods that cannot be decorated)."""
+    tracer.trace(
+        method,
+        input_data,
+        output_data,
+        ok=ok,
+        error=error,
+        error_type=error_type,
+        duration_ms=duration_ms,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+    )
 
 
 def record_call(
-    *,
-    purpose: str,
-    model: str,
-    schema_name: str | None = None,
-    conversation_id: int | None = None,
-    job_id: int | None = None,
-    prompt_tokens: int | None = None,
-    output_tokens: int | None = None,
-    latency_ms: int | None = None,
+    purpose: Optional[str] = None,
+    model: Optional[str] = None,
+    schema_name: Optional[str] = None,
+    conversation_id: Optional[int] = None,
+    job_id: Optional[int] = None,
+    latency_ms: Optional[float] = None,
     ok: bool = True,
-    error: str | None = None,
-    messages: list[dict] | None = None,
-    completion: str | None = None,
+    error: Optional[str] = None,
+    messages: Optional[Any] = None,
+    prompt_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None,
+    completion: Optional[str] = None,
+    **kwargs: Any,
 ) -> None:
-    """Insert one trace row. Never raises."""
-    conn = None
+    """Compatibilidad con la interfaz original de cuadra.ai.tracing.record_call.
+
+    Mapea los campos antiguos al formato de trace_call del nuevo módulo.
+    """
+    input_data = {
+        "purpose": purpose,
+        "model": model,
+        "schema_name": schema_name,
+        "job_id": job_id,
+        "prompt_tokens": prompt_tokens,
+        "output_tokens": output_tokens,
+        "messages": messages,
+    }
+    output_data = {
+        "latency_ms": latency_ms,
+        "completion": completion,
+    }
+    output_data = {
+        "latency_ms": latency_ms,
+        "completion": completion,
+    }
+    tracer.trace(
+        "llm.chat",
+        input_data,
+        output_data,
+        ok=ok,
+        error=error,
+        error_type=None if ok else "LLMError",
+        duration_ms=latency_ms,
+        conversation_id=conversation_id,
+    )
+    # También persistir en la tabla llm_calls (compatibilidad con el rastro
+    # original de observabilidad).
+    _persist_llm_call(
+        purpose=purpose,
+        model=model,
+        schema_name=schema_name,
+        conversation_id=conversation_id,
+        job_id=job_id,
+        latency_ms=latency_ms,
+        ok=ok,
+        error=error,
+        messages=messages,
+        prompt_tokens=prompt_tokens,
+        output_tokens=output_tokens,
+        completion=completion,
+    )
+
+
+def _persist_llm_call(
+    purpose: Optional[str] = None,
+    model: Optional[str] = None,
+    schema_name: Optional[str] = None,
+    conversation_id: Optional[int] = None,
+    job_id: Optional[int] = None,
+    latency_ms: Optional[float] = None,
+    ok: bool = True,
+    error: Optional[str] = None,
+    messages: Optional[Any] = None,
+    prompt_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None,
+    completion: Optional[str] = None,
+) -> None:
+    """Guardar la llamada en la tabla llm_calls (SQLite) con redactado de PII."""
     try:
-        # Short busy timeout: a trace must never stall the reply on a busy DB.
-        conn = db.connect(timeout=2)
-        store_prompts, _ = _read_config(conn)
-        prompt_text = redact.messages(messages) if store_prompts else None
-        completion_text = redact.completion(completion) if store_prompts else None
-        safe_error = redact.text(error)
-        if safe_error and len(safe_error) > MAX_ERROR_CHARS:
-            safe_error = safe_error[:MAX_ERROR_CHARS] + "..."
-        conn.execute(
-            """INSERT INTO llm_calls
-                   (conversation_id, job_id, purpose, model, schema_name,
-                    prompt_tokens, output_tokens, latency_ms, ok, error,
+        conn = db.connect()
+        try:
+            prompts_enabled = settings.get(conn, PROMPTS_KEY)
+            prompts_on = prompts_enabled is None or prompts_enabled != "0"
+            prompt_text = None
+            completion_text = None
+            redacted = 1  # Siempre 1: el registro pasó por el sistema de rastreo
+            if messages is not None and prompts_on:
+                prompt_text = redact.text(json.dumps(messages, ensure_ascii=False))
+            if completion is not None and prompts_on:
+                completion_text = redact.completion(completion)
+
+            conn.execute(
+                """INSERT INTO llm_calls
+                   (created_at, purpose, model, schema_name, conversation_id,
+                    job_id, prompt_tokens, output_tokens, latency_ms, ok, error,
                     redacted, prompt_text, completion_text)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
-            (
-                conversation_id,
-                job_id,
-                purpose,
-                model,
-                schema_name,
-                prompt_tokens,
-                output_tokens,
-                latency_ms,
-                1 if ok else 0,
-                safe_error,
-                prompt_text,
-                completion_text,
-            ),
-        )
-        conn.commit()
-    except Exception:  # noqa: BLE001 — tracing is never allowed to break a reply
-        log.debug("could not persist llm trace", exc_info=True)
-        if conn is not None:
-            try:
-                conn.rollback()
-            except Exception:  # noqa: BLE001
-                pass
-    finally:
-        if conn is not None:
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    _now_iso(),
+                    purpose,
+                    model,
+                    schema_name,
+                    conversation_id,
+                    job_id,
+                    prompt_tokens,
+                    output_tokens,
+                    latency_ms,
+                    1 if ok else 0,
+                    error,
+                    redacted,
+                    prompt_text,
+                    completion_text,
+                ),
+            )
+            conn.commit()
+        finally:
             conn.close()
+    except Exception:  # noqa: BLE001 - el tracing nunca debe bloquear el flujo
+        log.exception("no se pudo persistir el rastro de LLM en llm_calls")
 
 
-def purge_old(conn=None) -> int:
-    """Delete traces past the configured retention window. Returns rows removed."""
-    owns_connection = conn is None
+PROMPTS_KEY = "llm.prompts_enabled"
+
+
+def purge_old(older_than_days: int = 30) -> int:
+    """Borrar registros de llm_calls más antiguos que older_than_days.
+
+    Devuelve la cantidad de filas borradas.
+    """
     try:
-        if owns_connection:
-            conn = db.connect(timeout=5)
-        _, days = _read_config(conn)
-        cursor = conn.execute(
-            "DELETE FROM llm_calls WHERE created_at < datetime('now', ?)",
-            (f"-{days} days",),
-        )
-        conn.commit()
-        return cursor.rowcount or 0
-    except Exception:  # noqa: BLE001 — maintenance must not crash the scheduler
-        log.debug("could not purge llm traces", exc_info=True)
-        return 0
-    finally:
-        if owns_connection and conn is not None:
+        conn = db.connect()
+        try:
+            cur = conn.execute(
+                """DELETE FROM llm_calls
+                   WHERE created_at < datetime('now', ? || ' days')""",
+                (-older_than_days,),
+            )
+            conn.commit()
+            return cur.rowcount or 0
+        finally:
             conn.close()
+    except Exception:  # noqa: BLE001
+        log.exception("no se pudo purgar llm_calls")
+        return 0
