@@ -1,17 +1,14 @@
 """Execution tracing: record input/output of critical methods.
 
 Purpose: when something fails, reconstruct the execution flow without guessing.
-Each trace is a JSON line with: timestamp, method, input, output, error, ok,
-duration_ms, and optional conversation_id / turn_id.
+Each trace is written both to a dedicated rotated log file (data/logs/traces.log)
+and to the SQLite table `traces` so the dashboard can query it.
 
 Levels (CUADRA_TRACE_LEVEL env var):
   OFF      - no tracing
   ERROR    - only methods that raised or returned ok=False
   SAMPLE   - 10% of successes + 100% of failures (configurable sample rate)
   ALL      - every call
-
-Output goes to a dedicated rotated log file (data/logs/traces.log by default)
-so it never mixes with cuadra.log and can be grepped independently.
 
 PII masking: when CUADRA_TRACE_MASK_PII=1 (default), phone numbers and
 addresses inside input/output dicts are truncated to avoid leaking customer
@@ -32,6 +29,8 @@ from cuadra.ai import redact
 from cuadra.domain import settings
 
 log = logging.getLogger("cuadra.trace")
+
+PROMPTS_KEY = "llm.prompts_enabled"
 
 
 def _now_iso() -> str:
@@ -112,7 +111,7 @@ class Tracer:
         conversation_id: Optional[int] = None,
         turn_id: Optional[int] = None,
     ) -> None:
-        """Write one trace line if the level allows it."""
+        """Write one trace if the level allows it, to both log file and SQLite."""
         level = getattr(config, "CUADRA_TRACE_LEVEL", "ERROR").upper()
         if not _should_trace(level, ok, getattr(config, "CUADRA_TRACE_SAMPLE_RATE", 0.1)):
             return
@@ -139,6 +138,19 @@ class Tracer:
             record["turn_id"] = turn_id
 
         self._logger.info(json.dumps(record, ensure_ascii=False))
+
+        # Also persist to SQLite so the dashboard can query it.
+        _persist_trace(
+            method=method,
+            input_data=input_data,
+            output_data=output_data,
+            ok=ok,
+            error=error,
+            error_type=error_type,
+            duration_ms=duration_ms,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+        )
 
 
 tracer = Tracer()
@@ -295,10 +307,6 @@ def record_call(
         "latency_ms": latency_ms,
         "completion": completion,
     }
-    output_data = {
-        "latency_ms": latency_ms,
-        "completion": completion,
-    }
     tracer.trace(
         "llm.chat",
         input_data,
@@ -325,6 +333,48 @@ def record_call(
         output_tokens=output_tokens,
         completion=completion,
     )
+
+
+def _persist_trace(
+    method: str,
+    input_data: Any,
+    output_data: Any,
+    *,
+    ok: bool,
+    error: Optional[str] = None,
+    error_type: Optional[str] = None,
+    duration_ms: Optional[float] = None,
+    conversation_id: Optional[int] = None,
+    turn_id: Optional[int] = None,
+) -> None:
+    """Guardar la traza en la tabla `traces` (SQLite) para que el dashboard
+    pueda consultarla con SQL."""
+    try:
+        conn = db.connect()
+        try:
+            conn.execute(
+                """INSERT INTO traces
+                   (timestamp, method, input_json, output_json, ok, error,
+                    error_type, duration_ms, conversation_id, turn_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    _now_iso(),
+                    method,
+                    json.dumps(input_data, ensure_ascii=False) if input_data is not None else None,
+                    json.dumps(output_data, ensure_ascii=False) if output_data is not None else None,
+                    1 if ok else 0,
+                    error,
+                    error_type,
+                    duration_ms,
+                    conversation_id,
+                    turn_id,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - el tracing nunca debe bloquear el flujo
+        log.exception("no se pudo persistir el rastro en tabla traces")
 
 
 def _persist_llm_call(
@@ -385,13 +435,10 @@ def _persist_llm_call(
         log.exception("no se pudo persistir el rastro de LLM en llm_calls")
 
 
-PROMPTS_KEY = "llm.prompts_enabled"
-
-
 def purge_old(older_than_days: int = 30) -> int:
-    """Borrar registros de llm_calls más antiguos que older_than_days.
+    """Borrar registros de llm_calls y traces más antiguos que older_than_days.
 
-    Devuelve la cantidad de filas borradas.
+    Devuelve la cantidad de filas borradas en llm_calls.
     """
     try:
         conn = db.connect()
@@ -401,10 +448,17 @@ def purge_old(older_than_days: int = 30) -> int:
                    WHERE created_at < datetime('now', ? || ' days')""",
                 (-older_than_days,),
             )
+            removed = cur.rowcount or 0
+            cur2 = conn.execute(
+                """DELETE FROM traces
+                   WHERE created_at < datetime('now', ? || ' days')""",
+                (-older_than_days,),
+            )
+            removed += cur2.rowcount or 0
             conn.commit()
-            return cur.rowcount or 0
+            return removed
         finally:
             conn.close()
     except Exception:  # noqa: BLE001
-        log.exception("no se pudo purgar llm_calls")
+        log.exception("no se pudo purgar llm_calls/traces")
         return 0
