@@ -403,6 +403,78 @@ def create_sale(
     return sale
 
 
+def update_sale_quantity(
+    conn,
+    sale_id: int,
+    new_quantity: int,
+) -> dict:
+    """Update the quantity of an existing open sale.
+
+    Recalculates amount and commission, adjusts stock_reserved by the
+    difference, and returns the updated sale row.
+    """
+    new_quantity = int(new_quantity or 0)
+    if new_quantity <= 0:
+        raise Invalid("quantity must be positive")
+
+    sale = get_sale(conn, sale_id)
+    if sale is None:
+        raise Invalid("sale not found")
+    if sale["status"] not in ("PENDING_DISPATCH", "PENDING_APPROVAL"):
+        raise Invalid("sale is not in an editable state")
+
+    product = catalog.get_product(conn, sale["product_id"])
+    if product["status"] != "ACTIVE":
+        raise Invalid("product is not sellable")
+
+    old_quantity = int(sale["quantity"] or 0)
+    diff = new_quantity - old_quantity
+    if diff == 0:
+        return sale
+
+    available = int(product.get("stock") or 0) - int(
+        product.get("stock_reserved") or 0
+    ) + old_quantity
+    if available < new_quantity:
+        raise Invalid("not enough stock")
+
+    earned, payout, total, ccurrency, ctype = calculate_commission(
+        product, new_quantity, product["currency"]
+    )
+
+    with conn:
+        conn.execute(
+            """UPDATE sales
+               SET quantity = ?, amount = ?, commission_type = ?,
+                   commission = ?, commission_currency = ?, updated_at = ?
+             WHERE id = ?""",
+            (
+                new_quantity,
+                total,
+                ctype,
+                earned,
+                ccurrency,
+                _now(),
+                sale_id,
+            ),
+        )
+        conn.execute(
+            """UPDATE products
+               SET stock_reserved = stock_reserved + ?, updated_at = ?
+             WHERE id = ?""",
+            (diff, _now(), sale["product_id"]),
+        )
+        conn.execute(
+            """UPDATE commission_ledger
+               SET sale_total = ?, commission = ?, commission_currency = ?,
+                   updated_at = ?
+             WHERE sale_id = ?""",
+            (total, earned, ccurrency, _now(), sale_id),
+        )
+
+    return get_sale(conn, sale_id)
+
+
 # ---------------------------------------------------------------- transitions
 
 def _transition(conn, sale_id: int, from_statuses: tuple[str, ...], action: str) -> dict:

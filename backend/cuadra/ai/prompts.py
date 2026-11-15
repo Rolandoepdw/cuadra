@@ -85,8 +85,10 @@ Ejemplos:
 "¿y el precio?" -> {"intencion": "consulta_precio", "producto": null, "datos_faltantes": [], "confianza": 0.9}
 "a cómo está el cable" -> {"intencion": "consulta_precio", "producto": "cable", "datos_faltantes": [], "confianza": 0.9}
 "¿es de 1 metro el cable?" -> {"intencion": "consulta_dato", "producto": "cable", "datos_faltantes": [], "confianza": 0.9}
-"me llevo la tablet" -> {"intencion": "comprar", "producto": "tablet", "datos_faltantes": [], "confianza": 0.95}
-"hola buenas" -> {"intencion": "otro", "producto": null, "datos_faltantes": [], "confianza": 1.0}
+"me llevo la tablet" -> {"intencion": "comprar", "producto": "tablet", "datos_faltantes": [], "confianza": 0.95, "cantidad": 1}
+"me llevo dos tablets" -> {"intencion": "comprar", "producto": "tablet", "datos_faltantes": [], "confianza": 0.95, "cantidad": 2}
+"quiero 3 laptops" -> {"intencion": "comprar", "producto": "laptop", "datos_faltantes": [], "confianza": 0.95, "cantidad": 3}
+"hola buenas" -> {"intencion": "otro", "producto": null, "datos_faltantes": [], "confianza": 1.0, "cantidad": null}
 """
 
 # NLU ligero: prompt mínimo para clasificación de intención. Se usa en lugar del
@@ -97,11 +99,12 @@ NLU_TASK_LIGHT = """\
 Clasifica la intención del cliente en una de: consulta_precio, consulta_stock,
 consulta_dato, comparar, comprar, queja, otro.
 Responde SOLO con JSON:
-{{"intencion": "...", "producto": "nombre o null", "datos_faltantes": [], "confianza": 0.0-1.0}}
+{{"intencion": "...", "producto": "nombre o null", "datos_faltantes": [], "confianza": 0.0-1.0, "cantidad": null}}
 
 - producto: nombre que escribió el cliente, null si no menciona ninguno.
 - datos_faltantes: lista vacía salvo que pregunte un dato concreto del producto.
 - confianza: 0.9-1.0 clara, 0.6-0.89 probable, 0.3-0.59 ambigua, <0.3 no se entiende.
+- cantidad: número de unidades si el cliente quiere comprar algo (ej. "dos tablets" -> 2, "quiero 3" -> 3), null si no especifica cantidad o no es una compra.
 
 MENSAJE DEL CLIENTE:
 {text}

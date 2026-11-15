@@ -66,6 +66,7 @@ class Intent(BaseModel):
     producto: str | None = None
     datos_faltantes: list[str] = Field(default_factory=list)
     confianza: float = Field(default=0.0, ge=0.0, le=1.0)
+    cantidad: int | None = Field(default=None, ge=1)
 
 
 INTENT_SCHEMA = {
@@ -75,8 +76,9 @@ INTENT_SCHEMA = {
         "producto": {"type": ["string", "null"]},
         "datos_faltantes": {"type": "array", "items": {"type": "string"}},
         "confianza": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        "cantidad": {"type": ["integer", "null"], "minimum": 1},
     },
-    "required": ["intencion", "producto", "datos_faltantes", "confianza"],
+    "required": ["intencion", "producto", "datos_faltantes", "confianza", "cantidad"],
     "additionalProperties": False,
 }
 

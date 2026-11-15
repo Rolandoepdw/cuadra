@@ -90,6 +90,17 @@ _ADDRESS_STREET = re.compile(
     r"consejo popular|calzada|pasaje)\b[^\n,;.]{2,120}",
     re.IGNORECASE,
 )
+# Dirección sin etiqueta explícita: texto con número y palabras de entrecalles,
+# o patrón "número, entre X y Y", o "calle X #N". Captura casos como
+# "Domingo mujica 110, entre Insolación y Luisa la Osa, número 110".
+_ADDRESS_FLEXIBLE = re.compile(
+    r"(?:"
+    r"(?:calle|avenida|av\.?|carrera|transversal|camino)\s+[^\n,;.]{2,60}"
+    r"|[^\n,;.]{2,40}\s+(?:#|nro|número|no\.?)\s*\d{1,5}"
+    r"|[^\n,;.]{2,40}\s*,\s*entre\s+[^\n,;.]{2,40}"
+    r")",
+    re.IGNORECASE,
+)
 _ADDRESS_REJECT = {"mi casa", "casa", "aqui", "aquí", "alla", "allá", "por ahi", "por ahí"}
 _OBJECTIONS = (
     (re.compile(r"\b(muy caro|caro|costoso|no me alcanza|fuera de presupuesto)\b", re.I), "precio"),
@@ -262,6 +273,9 @@ def _extract_address(text: str) -> str | None:
     if match and _looks_like_address(match.group(1)):
         return _clean(match.group(1), 200).strip(" .,;:-")
     match = _ADDRESS_STREET.search(body)
+    if match and _looks_like_address(match.group(0)):
+        return _clean(match.group(0), 200).strip(" .,;:-")
+    match = _ADDRESS_FLEXIBLE.search(body)
     if match and _looks_like_address(match.group(0)):
         return _clean(match.group(0), 200).strip(" .,;:-")
     return None

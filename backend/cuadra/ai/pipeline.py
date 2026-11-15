@@ -429,8 +429,18 @@ def _maybe_handle_sale(
     missing = _missing_slots(slots)
     guard = _sale_guard(product, float(product["price"]))
 
+    # Cantidad solicitada: viene del NLU (ej. "dos tablets" -> 2) o default 1.
+    qty = int(intent.cantidad) if intent.cantidad else 1
+
     existing = sales_domain.active_sale_for_conversation(conn, conversation["id"])
     if existing is not None and int(existing.get("product_id", -1)) == int(product["id"]):
+        # Ya hay una venta abierta de este producto: permitir actualizar cantidad.
+        if intent.intencion == "comprar" and qty != int(existing["quantity"]):
+            try:
+                sales_domain.update_sale_quantity(conn, existing["id"], qty)
+            except sales_domain.Invalid as exc:
+                return _sale_failure(conn, conversation, product, context, exc)
+            existing = sales_domain.get_sale(conn, existing["id"])
         guard = _sale_guard(product, float(existing["amount"]))
         reply, generator = _fast_template(
             conn,
@@ -455,7 +465,7 @@ def _maybe_handle_sale(
                 conversation_id=conversation["id"],
                 customer_id=conversation["customer_id"],
                 product_id=product["id"],
-                quantity=1,
+                quantity=qty,
                 recipient_name=slots["recipient_name"],
                 delivery_zone=slots["delivery_zone"],
                 delivery_address=slots["delivery_address"],
@@ -509,7 +519,7 @@ def _maybe_handle_sale(
             "stage": "CLOSE",
         }
 
-    total = round(float(product["price"]), 2)
+    total = round(float(product["price"]) * qty, 2)
     guard = _sale_guard(product, total)
     reply, generator = _fast_template(
         conn,
@@ -517,7 +527,7 @@ def _maybe_handle_sale(
         "sale_confirm",
         guard,
         producto=product["name"],
-        cantidad=1,
+        cantidad=qty,
         total=f"{total:g}",
         moneda=product["currency"],
         cliente=slots["recipient_name"],
@@ -530,6 +540,7 @@ def _maybe_handle_sale(
         "generator": generator,
         "escalation_question": None,
         "stage": "CONFIRM",
+        "qty_solicitada": qty,
     }
 
 
