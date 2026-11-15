@@ -27,6 +27,8 @@ import type {
   LogCategory,
   LogList,
   LogWindow,
+  MetricsSummary,
+  MetricsTimeline,
   MutationReasonIn,
   Product,
   ProductImage,
@@ -39,6 +41,8 @@ import type {
   Supplier,
   SupplierIn,
   SupplierPatch,
+  TraceEntry,
+  TracesPage,
   Zone,
   ZoneIn,
   ZonePatch,
@@ -379,3 +383,28 @@ export const revertCatalogMutation = (id: number, reason = "") =>
     method: "POST",
     body: JSON.stringify({ reason } satisfies MutationReasonIn),
   });
+
+// ------------------------------------------------------------------ execution traces
+export const listTraces = (
+  params: {
+    conversation_id?: number;
+    method?: string;
+    ok?: boolean;
+    limit?: number;
+    offset?: number;
+  } = {},
+) => {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== "") qs.set(k, String(v));
+  }
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return request<TracesPage>(`/api/traces${suffix}`);
+};
+
+export const getTrace = (id: number) => request<TraceEntry>(`/api/traces/${id}`);
+
+// ----------------------------------------------------------------------- metrics
+export const getMetricsSummary = () => request<MetricsSummary>("/api/metrics/summary");
+export const getMetricsTimeline = (days = 7) =>
+  request<MetricsTimeline>(`/api/metrics/timeline?days=${days}`);

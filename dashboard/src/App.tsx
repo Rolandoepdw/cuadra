@@ -13,6 +13,8 @@ import { StrategyPanel } from "@/panels/strategy/strategy_panel";
 import { FinancePanel } from "@/panels/finance/finance_panel";
 import { AuditPanel } from "@/panels/audit/audit_panel";
 import { LogsPanel } from "@/panels/logs/logs_panel";
+import { TracesPanel } from "@/panels/traces/traces_panel";
+import { MetricsPanel } from "@/panels/metrics/metrics_panel";
 
 function Gated() {
   const { authed } = useAuth();
@@ -28,6 +30,8 @@ function Gated() {
         <Route path="finance" element={<FinancePanel />} />
         <Route path="audit" element={<AuditPanel />} />
         <Route path="logs" element={<LogsPanel />} />
+        <Route path="traces" element={<TracesPanel />} />
+        <Route path="metrics" element={<MetricsPanel />} />
         <Route path="health" element={<HealthPanel />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

@@ -496,7 +496,51 @@ export interface CancelSaleIn {
   reason: string;
 }
 
-// ------------------------------------------------------------ catalog audit
+// ------------------------------------------------------------- execution traces
+export type TraceEntry = {
+  id: number;
+  timestamp: string;
+  method: string;
+  input: any;
+  output: any;
+  ok: boolean;
+  error: string | null;
+  error_type: string | null;
+  duration_ms: number | null;
+  conversation_id: number | null;
+  turn_id: number | null;
+};
+
+export interface TracesPage {
+  items: TraceEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+// ------------------------------------------------------------- metrics
+export interface MetricsSummary {
+  total_traces_today: number;
+  failed_traces_today: number;
+  avg_duration_ms: number | null;
+  stuck_sales_dispatched: number;
+  open_escalations: number;
+  ambiguous_acks_today: number;
+  active_conversations: number;
+}
+
+export interface MetricsTimelinePoint {
+  dia: string;
+  total_traces: number;
+  failed_traces: number;
+  avg_duration_ms: number | null;
+}
+
+export interface MetricsTimeline {
+  timeline: MetricsTimelinePoint[];
+}
+
+// ------------------------------------------------------------- catalog audit
 
 export type MutationStatus = "APPLIED" | "PENDING_REVIEW" | "REVERTED" | "REJECTED";
 export type MutationType = "PRICE" | "STOCK" | "STATUS" | "SPECS" | "ZONE" | "MIXED";

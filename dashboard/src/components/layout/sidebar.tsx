@@ -10,6 +10,8 @@ import {
   SlidersHorizontal,
   Users,
   Wallet,
+  Code,
+  BarChart3,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -24,6 +26,8 @@ const items = [
   { to: "/finance", label: "Finanzas", icon: Wallet, end: false },
   { to: "/audit", label: "Auditoría", icon: History, end: false },
   { to: "/logs", label: "Logs", icon: ScrollText, end: false },
+  { to: "/traces", label: "Trazas", icon: Code, end: false },
+  { to: "/metrics", label: "Métricas", icon: BarChart3, end: false },
   { to: "/health", label: "Salud", icon: Activity, end: false },
 ];
 
