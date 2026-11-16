@@ -212,7 +212,11 @@ ESCALATION_MAX_RETRIES = int(os.environ.get("CUADRA_ESCALATION_MAX_RETRIES", "1"
 # Execution tracing: record input/output of critical methods to debug failures
 # without guessing. Levels: OFF, ERROR (only failures), SAMPLE (10% successes +
 # 100% failures), ALL (everything).
-CUADRA_TRACE_LEVEL = os.environ.get("CUADRA_TRACE_LEVEL", "ERROR").upper()
+#
+# Default is ALL so the dashboard "Trazas" panel is useful out of the box; a
+# production deployment can set CUADRA_TRACE_LEVEL=ERROR (or OFF) to keep the
+# volume down.
+CUADRA_TRACE_LEVEL = os.environ.get("CUADRA_TRACE_LEVEL", "ALL").upper()
 CUADRA_TRACE_SAMPLE_RATE = float(os.environ.get("CUADRA_TRACE_SAMPLE_RATE", "0.1"))
 CUADRA_TRACE_LOG_FILE = Path(
     os.environ.get("CUADRA_TRACE_LOG_FILE", LOGS_DIR / "traces.log")

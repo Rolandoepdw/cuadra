@@ -228,7 +228,7 @@ async def list_traces(
     finally:
         conn.close()
 
-    return {"traces": traces, "total": total, "limit": limit, "offset": offset}
+    return {"items": traces, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/traces/{trace_id}")
@@ -355,7 +355,7 @@ async def metrics_timeline(days: int = 7) -> dict:
                  FROM traces
                 WHERE created_at >= datetime('now', ? || ' days')
                 GROUP BY date(created_at)
-                ORDER BY dia DESC""",
+                ORDER BY dia ASC""",
             (-days,),
         ).fetchall()
 

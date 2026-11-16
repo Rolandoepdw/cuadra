@@ -145,6 +145,23 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Cuadra Core", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def _api_no_store(request, call_next):
+    """Las respuestas de /api nunca se cachean en el navegador.
+
+    Antes, cuando una ruta /api todavía no existía, el fallback del SPA
+    devolvía index.html con 200 y el navegador lo guardaba en caché: al
+    agregar el endpoint el dashboard seguía recibiendo HTML y fallaba con
+    "Unexpected token '<'".
+    """
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 app.include_router(routes_dashboard.router)
 app.include_router(routes_catalog.router)
 app.include_router(routes_broadcasts.router)
@@ -167,6 +184,11 @@ async def spa(path: str = ""):
     /api and /media are matched by their own routes/mounts first, so only
     client-side routes reach here.
     """
+    # Un endpoint /api inexistente debe fallar como JSON 404, nunca devolver
+    # HTML: si devolvemos index.html el dashboard lo intenta parsear como JSON
+    # y el error real ("ruta no encontrada") queda oculto.
+    if path == "api" or path.startswith("api/"):
+        return JSONResponse({"detail": f"unknown endpoint /{path}"}, status_code=404)
     index = config.WEB_DIR / "index.html"
     if not index.exists():
         return JSONResponse(
@@ -175,8 +197,17 @@ async def spa(path: str = ""):
         )
     candidate = (config.WEB_DIR / path).resolve()
     if path and candidate.is_file() and config.WEB_DIR.resolve() in candidate.parents:
-        return FileResponse(candidate)
-    return FileResponse(index)
+        # Vite emite nombres con hash para los assets: se pueden cachear para
+        # siempre. El resto (logo) debe revalidar.
+        if path.startswith("assets/"):
+            headers = {"Cache-Control": "public, max-age=31536000, immutable"}
+        else:
+            headers = {"Cache-Control": "no-cache"}
+        return FileResponse(candidate, headers=headers)
+    # index.html siempre debe revalidarse: si el navegador guarda una copia
+    # vieja, apunta a assets que el build nuevo ya borró y el dashboard queda en
+    # blanco.
+    return FileResponse(index, headers={"Cache-Control": "no-cache"})
 
 
 @app.exception_handler(DomainError)

@@ -20,19 +20,27 @@ import {
   Tooltip,
   CartesianGrid,
 } from "recharts";
+import { Select } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 
 export function MetricsPanel() {
-  const [days, setDays] = useState(7);
+  const [days, setDays] = useState("7");
 
-  const { data: summary } = useQuery({
+  const { data: summary, error: summaryError } = useQuery({
     queryKey: ["metrics/summary"],
     queryFn: getMetricsSummary,
+    refetchInterval: 30000,
   });
 
-  const { data: timelineData } = useQuery({
+  const { data: timelineData, error: timelineError } = useQuery({
     queryKey: ["metrics/timeline", days],
-    queryFn: () => getMetricsTimeline(days),
+    queryFn: () => getMetricsTimeline(Number(days)),
+    refetchInterval: 30000,
   });
+
+  const failedToday = summary?.failed_traces_today ?? 0;
+  const queryError = summaryError ?? timelineError;
+  const timeline = timelineData?.timeline ?? [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -43,22 +51,26 @@ export function MetricsPanel() {
         </p>
       </div>
 
+      {queryError && (
+        <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          No se pudieron cargar las métricas: {queryError.message}
+        </p>
+      )}
+
       {/* Tarjetas resumen */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard
           title="Trazas hoy"
           value={summary?.total_traces_today ?? 0}
           icon={Activity}
-          subtitle={
-            summary?.failed_traces_today ?? 0 > 0
-              ? `${summary?.failed_traces_today ?? 0} con error`
-              : "Sin fallos"
-          }
+          subtitle={failedToday > 0 ? `${failedToday} con error` : "Sin fallos"}
         />
         <MetricCard
           title="Latencia media"
           value={
-            summary?.avg_duration_ms != null ? `${summary.avg_duration_ms} ms` : "—"
+            summary?.avg_duration_ms != null
+              ? `${summary.avg_duration_ms} ms`
+              : "—"
           }
           icon={Clock}
           subtitle="Tiempo medio por traza"
@@ -90,68 +102,79 @@ export function MetricsPanel() {
       </div>
 
       <div className="mt-6">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-end justify-between gap-4">
           <h2 className="text-lg font-semibold">Trazas por día</h2>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-muted-foreground">Últimos {days} días</span>
-            <select
+            <Label htmlFor="metrics-days">Días</Label>
+            <Select
+              id="metrics-days"
+              className="w-32"
               value={days}
-              onChange={(e) => setDays(parseInt(e.target.value))}
-              className="text-xs border rounded-md px-2 py-1"
+              onChange={(event) => setDays(event.target.value)}
             >
-              <option value={3}>3 días</option>
-              <option value={7}>7 días</option>
-              <option value={14}>14 días</option>
-              <option value={30}>30 días</option>
-            </select>
+              {["3", "7", "14", "30"].map((value) => (
+                <option key={value} value={value}>
+                  {value} días
+                </option>
+              ))}
+            </Select>
           </div>
         </div>
 
-        <div className="mt-4 h-64 w-full">
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={timelineData?.timeline ?? []}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="dia" tick={{ fontSize: 12 }} />
-              <YAxis tickFormatter={(v) => String(Math.round(v))} tickCount={5} />
-              <Tooltip
-                content={({ active, payload }: any) => {
-                  if (!active || !payload || !payload.length) return null;
-                  const dataPoint = payload[0].payload as MetricsTimelinePoint;
-                  return (
-                    <div className="p-2 bg-card border border-border">
-                      <p className="text-xs font-bold">{dataPoint.dia}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {dataPoint.total_traces} trazas
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {dataPoint.failed_traces} fallos
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {dataPoint.avg_duration_ms != null
-                          ? `${dataPoint.avg_duration_ms} ms`
-                          : "—"
-                        } media
-                      </p>
-                    </div>
-                  );
-                }}
-              />
-              <Line
-                type="monotone"
-                dataKey="total_traces"
-                stroke="#3b82f6"
-                strokeWidth={2}
-                dot={{ fill: "#3b82f6", strokeWidth: 2 }}
-              />
-              <Line
-                type="monotone"
-                dataKey="failed_traces"
-                stroke="#ef4444"
-                strokeWidth={2}
-                dot={{ fill: "#ef4444", strokeWidth: 2 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+        <div className="mt-4 w-full">
+          {timeline.length === 0 ? (
+            <p className="rounded-lg border border-dashed px-4 py-10 text-center text-sm text-muted-foreground">
+              Sin trazas en los últimos {days} días. En cuanto el agente procese mensajes
+              aparecerán aquí.
+            </p>
+          ) : (
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={timeline}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis dataKey="dia" tick={{ fontSize: 12 }} />
+                <YAxis tickFormatter={(v) => String(Math.round(v))} tickCount={5} />
+                <Tooltip
+                  content={({ active, payload }: any) => {
+                    if (!active || !payload || !payload.length) return null;
+                    const dataPoint = payload[0].payload as MetricsTimelinePoint;
+                    return (
+                      <div className="p-2 bg-card border border-border">
+                        <p className="text-xs font-bold">{dataPoint.dia}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {dataPoint.total_traces} trazas
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {dataPoint.failed_traces} fallos
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {dataPoint.avg_duration_ms != null
+                            ? `${dataPoint.avg_duration_ms} ms`
+                            : "—"}{" "}
+                          media
+                        </p>
+                      </div>
+                    );
+                  }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="total_traces"
+                  name="Trazas"
+                  stroke="#3b82f6"
+                  strokeWidth={2}
+                  dot={{ fill: "#3b82f6", strokeWidth: 2 }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="failed_traces"
+                  name="Fallos"
+                  stroke="#ef4444"
+                  strokeWidth={2}
+                  dot={{ fill: "#ef4444", strokeWidth: 2 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
 

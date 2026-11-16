@@ -64,7 +64,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
 
-  const res = await fetch(path, { ...init, headers });
+  const res = await fetch(path, { cache: "no-store", ...init, headers });
   if (res.status === 401) {
     clearPin();
     throw new ApiError(401, "PIN inválido o ausente");
@@ -81,7 +81,20 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();
-  return (text ? JSON.parse(text) : undefined) as T;
+  const contentType = res.headers.get("content-type") ?? "";
+  if (text && !contentType.includes("json")) {
+    // Sin esta validación el error real queda oculto detrás de un
+    // "Unexpected token '<'" cuando el backend devuelve el index.html del SPA.
+    throw new ApiError(
+      res.status,
+      `${path} devolvió ${contentType || "contenido no JSON"} en lugar de JSON (¿endpoint inexistente?)`,
+    );
+  }
+  try {
+    return (text ? JSON.parse(text) : undefined) as T;
+  } catch {
+    throw new ApiError(res.status, `Respuesta JSON inválida de ${path}`);
+  }
 }
 
 // --------------------------------------------------------------- summary/health

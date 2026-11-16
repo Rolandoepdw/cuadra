@@ -33,6 +33,7 @@ export function TracesPanel() {
         limit,
       }),
     placeholderData: (previous) => previous,
+    refetchInterval: 10000,
   });
 
   const items = data?.items ?? [];
