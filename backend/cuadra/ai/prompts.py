@@ -150,9 +150,26 @@ TEMPLATES = {
         "{segunda} ¿Te echo un vistazo a alguna?"
     ),
     "ask_which_product": (
-        "¡Buenas! Dime cuál producto te interesa y te paso precio y "
+        "Dime cuál producto te interesa y te paso precio y "
         "disponibilidad al momento."
     ),
+    # F7 (prueba #2): un saludo suelto merece un saludo, no la plantilla de
+    # producto. Se responde con esta ruta antes del NLU.
+    "greeting": (
+        "¡Buenas! Soy el asistente de Cuadra. Dime qué producto te interesa y te "
+        "paso precio y disponibilidad al momento."
+    ),
+    # F3 (prueba #2): "¿qué laptops tienes?" se responde con la lista corta.
+    "catalog_list": "De {categoria} tengo: {lista}. ¿Cuál te interesa?",
+    # F4 (prueba #2): "¿no tiene otro tipo de laptop?" -> alternativas reales.
+    "siblings": (
+        "Además de {producto} tengo {alternativa_1} en {precio_1} {moneda_1}"
+        "{segunda}. ¿Te enseño alguno?"
+    ),
+    "siblings_none": (
+        "De {producto} no tengo otro modelo por ahora. ¿Te aviso si entra alguno?"
+    ),
+    "ask_product_data": "Sobre {producto}, ¿qué dato necesitas? Te lo confirmo.",
     "ask_client_data": (
         "Para dejarte el pedido listo me falta {dato}. ¿Me lo pasas?"
     ),
@@ -204,7 +221,8 @@ TEMPLATES = {
         "Si quieres, te lo confirmo de nuevo antes de reservar."
     ),
     "sale_ask_data": (
-        "Para dejarte el pedido listo me falta {faltan}. ¿Me lo pasas?"
+        "Son {total} {moneda} por {cantidad} x {producto}. Todavía me falta "
+        "{faltan} para dejarlo listo. ¿Me lo pasas?"
     ),
     "sale_confirm": (
         "Te confirmo: {producto} x{cantidad} en {total} {moneda}, para {cliente} "
@@ -265,6 +283,14 @@ TEMPLATES = {
 # ---------------------------------------------------------------------------
 
 TEMPLATE_VARIANTS = {
+    "greeting": [
+        "¡Buenas! Soy el asistente de Cuadra. Dime qué producto te interesa y te "
+        "paso precio y disponibilidad al momento.",
+        "¡Hola! Bienvenido a Cuadra. ¿Qué estás buscando? Te digo precio y "
+        "disponibilidad ahora mismo.",
+        "¡Buenas! Cuéntame qué producto necesitas y te ayudo con precio, stock y "
+        "entrega.",
+    ],
     "greeting_product": [
         "¡Buenas! Sí, tenemos {producto}. Está en {precio} {moneda}."
         "{transporte_clause} Entregamos en {zona}{zona_clause}.",
@@ -273,10 +299,32 @@ TEMPLATE_VARIANTS = {
         "¡Buenas! {producto}, {precio} {moneda}. {transporte_clause} Entrega en {zona}{zona_clause}.",
     ],
     "ask_which_product": [
-        "¡Buenas! Dime cuál producto te interesa y te paso precio y "
+        "Dime cuál producto te interesa y te paso precio y "
         "disponibilidad al momento.",
-        "¡Buenas! ¿Qué estás buscando? Te paso precio y disponibilidad al momento.",
-        "¡Hola! Dime qué producto necesitas y te doy precio y stock ahora mismo.",
+        "¿Qué estás buscando? Te paso precio y disponibilidad al momento.",
+        "Dime qué producto necesitas y te doy precio y stock ahora mismo.",
+    ],
+    "catalog_list": [
+        "De {categoria} tengo: {lista}. ¿Cuál te interesa?",
+        "Te muestro lo que hay en {categoria}: {lista}. Dime cuál y te paso el detalle.",
+        "En {categoria} ahora mismo tengo {lista}. ¿Te reservo alguno?",
+    ],
+    "siblings": [
+        "Además de {producto} tengo {alternativa_1} en {precio_1} {moneda_1}"
+        "{segunda}. ¿Te enseño alguno?",
+        "También está {alternativa_1} en {precio_1} {moneda_1}{segunda}. "
+        "¿Quieres que te pase el detalle?",
+        "Tengo otra opción: {alternativa_1} en {precio_1} {moneda_1}{segunda}. "
+        "¿Te la cotizo?",
+    ],
+    "siblings_none": [
+        "De {producto} no tengo otro modelo por ahora. ¿Te aviso si entra alguno?",
+        "Por ahora {producto} es el único que tengo de esa línea. ¿Quieres que te "
+        "avise cuando entre otro?",
+    ],
+    "ask_product_data": [
+        "Sobre {producto}, ¿qué dato necesitas? Te lo confirmo.",
+        "¿Qué quieres saber de {producto}? Te paso el dato.",
     ],
     "ask_client_data": [
         "Para dejarte el pedido listo me falta {dato}. ¿Me lo pasas?",
@@ -288,6 +336,26 @@ TEMPLATE_VARIANTS = {
         "¿Te reservo uno y coordinamos la entrega?",
         "¡Buenas! {producto} a {precio} {moneda}. ¿Te lo reservo?",
         "¡Buenas! Sí, {producto}, {precio} {moneda}. ¿Quieres que lo reserve?",
+    ],
+    "sale_ask_data": [
+        "Son {total} {moneda} por {cantidad} x {producto}. Todavía me falta "
+        "{faltan} para dejarlo listo. ¿Me lo pasas?",
+        "{producto} x{cantidad}: {total} {moneda}. Me falta {faltan} para cerrar "
+        "el pedido. ¿Me los pasas?",
+        "Te lo dejo en {total} {moneda} ({cantidad} x {producto}). Me falta "
+        "{faltan}. ¿Me lo pasas?",
+    ],
+    "sale_confirm": [
+        "Te confirmo: {producto} x{cantidad} en {total} {moneda}, para {cliente} "
+        "en {direccion}, {zona}. ¿Lo dejo registrado?",
+        "Resumen: {cantidad} x {producto}, {total} {moneda}. Entrega a {cliente}, "
+        "{direccion}, {zona}. ¿Confirmo?",
+        "Serían {total} {moneda} por {cantidad} x {producto}, para {cliente} en "
+        "{direccion}, {zona}. ¿Lo registro?",
+    ],
+    "sale_declined": [
+        "Sin problema, lo dejamos para cuando quieras. Aquí seguimos.",
+        "Entendido, no lo registro. Si más adelante lo quieres, me dices.",
     ],
 }
 
@@ -304,22 +372,24 @@ import hashlib
 
 
 def _variant_index(name: str, context: dict, n: int) -> int:
-    """Deterministic index for a template variant, avoiding the last used one.
+    """Deterministic index for a template variant, rotating instead of ping-pong.
 
-    Returns an index in [0, n). If the context remembers the last variant used
-    for this template, picks a different one when n > 1. First time always uses
-    variant 0 (the canonical template) so existing behavior is preserved.
+    Returns an index in [0, n). The context remembers the last variant used for
+    this template, so the same customer does not get the same string twice in a
+    row. F5 (prueba #2): the old code alternated 0/1 forever, so with three
+    variants the third was never used and two consecutive identical replies were
+    still possible after a restart of the cycle.
     """
     key = f"last_template_{name}"
-    last = context.get(key)
     if n <= 1:
         return 0
-    if last is None:
-        # First time: use the canonical variant (index 0).
+    try:
+        last = int(context.get(key))
+    except (TypeError, ValueError):
         return 0
-    # Pick a different variant than last time.
-    candidates = [i for i in range(n) if i != last]
-    return candidates[0]
+    if not 0 <= last < n:
+        return 0
+    return (last + 1) % n
 
 
 def template_variant(name: str, context: dict, **kwargs) -> str:

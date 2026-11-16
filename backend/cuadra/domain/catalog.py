@@ -995,6 +995,41 @@ def _tokens(text: str) -> set[str]:
     return {t for t in cleaned.split() if len(t) > 2 and t not in _STOPWORDS}
 
 
+def _words(text: str) -> list[str]:
+    """Content words of a phrase, in order, without duplicates."""
+    cleaned = "".join(c if c.isalnum() else " " for c in _fold(text))
+    found: list[str] = []
+    for word in cleaned.split():
+        if len(word) > 2 and word not in _STOPWORDS and word not in found:
+            found.append(word)
+    return found
+
+
+def _singular(word: str) -> str:
+    """Best-effort Spanish singular ("laptops" -> "laptop", "motos" -> "moto")."""
+    value = _fold(word).strip()
+    if len(value) <= 3:
+        return value
+    # "lápices"/"jueves"-style endings keep the consonant; "laptops" just drops the s.
+    if value.endswith("es") and len(value) > 4 and value[-3] in "rlnzjd":
+        return value[:-2]
+    if value.endswith("s"):
+        return value[:-1]
+    return value
+
+
+def _name_head(name: str) -> str:
+    """First significant word of a product name ("Laptop Gamer RTX" -> "laptop").
+
+    Used to recognise the same product family: the real catalog keeps every
+    laptop under the "tecnología" category, together with a monitor and a tablet.
+    """
+    for word in _words(name):
+        if not word.isdigit():
+            return word
+    return ""
+
+
 def search_products(
     conn, query: str, *, limit: int = 5, statuses: tuple[str, ...] = ("ACTIVE",)
 ) -> list[dict]:
@@ -1042,6 +1077,59 @@ def find_product(conn, query: str, *, min_score: float = 0.45) -> dict | None:
     if matches and matches[0]["match_score"] >= min_score:
         return matches[0]
     return None
+
+
+def _products_for_word(conn, word: str, *, limit: int) -> list[dict]:
+    """Active products named by a category ("motos") or a name family ("laptop")."""
+    if not word:
+        return []
+    # 1) A real category whose name is that word (singular or plural). Category
+    #    names like "motos_eléctricas" are split, so "motos" still matches.
+    for row in conn.execute("SELECT id, name FROM categories ORDER BY id"):
+        names = {_singular(part) for part in _words(row["name"])}
+        names.add(_fold(row["name"]))
+        if word not in names:
+            continue
+        rows = conn.execute(
+            """SELECT * FROM products
+               WHERE status = 'ACTIVE' AND category_id = ?
+               ORDER BY price LIMIT ?""",
+            (row["id"], limit),
+        ).fetchall()
+        if rows:
+            return [dict(r) for r in rows]
+    # 2) The word is part of the product name ("laptops" -> "Laptop Empresarial").
+    ranked = search_products(conn, word, limit=max(limit * 4, 12))
+    found = []
+    for product in ranked:
+        name_tokens = _tokens(product["name"])
+        if any(word in token or token in word for token in name_tokens):
+            found.append(product)
+    return found[:limit]
+
+
+def category_products(conn, query: str, *, limit: int = 5) -> list[dict]:
+    """Products the customer asked about as a group ("¿qué laptops tienes?").
+
+    F3 (prueba #2): "laptops" is not a product name, so `find_product` returned
+    nothing and the bot answered with the generic "dime cuál producto" template.
+    The query is tried word by word, singularized, so "laptops que tengas en
+    venta" still lands on the laptop family.
+    """
+    for word in _words(query):
+        found = _products_for_word(conn, _singular(word), limit=limit)
+        if found:
+            return found
+    return []
+
+
+def category_terms(text: str) -> list[str]:
+    """Content words of a phrase, in order, for category matching.
+
+    Kept in their original form so replies can echo what the customer wrote
+    ("laptops", not "laptop"); `category_products` singularizes internally.
+    """
+    return _words(text)
 
 
 def delivery_zone_names(conn, supplier_id: int) -> list[str]:
@@ -1129,3 +1217,35 @@ def alternatives(conn, product: dict, *, limit: int = 2) -> list[dict]:
         ),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def siblings(conn, product: dict, *, limit: int = 3) -> list[dict]:
+    """Other active products the customer may want instead (F4, prueba #2).
+
+    The name family wins over the category: the real catalog keeps every laptop
+    in "tecnología" together with a monitor and a tablet, so category alone would
+    offer unrelated items to someone asking for "otro tipo de laptop".
+    """
+    head = _name_head(product.get("name") or "")
+    rows = conn.execute(
+        "SELECT * FROM products WHERE status = 'ACTIVE' AND id != ? ORDER BY price",
+        (product["id"],),
+    ).fetchall()
+    found: list[dict] = []
+    if head:
+        for row in rows:
+            if len(found) >= limit:
+                break
+            if _name_head(row["name"]) == head:
+                found.append(dict(row))
+    # A real family is never padded with unrelated items: someone asking for
+    # "otro tipo de laptop" must not be offered a monitor. The category is only
+    # a fallback for products whose name is unique in the catalog.
+    if found or product.get("category_id") is None:
+        return found
+    for row in rows:
+        if len(found) >= limit:
+            break
+        if row["category_id"] == product["category_id"]:
+            found.append(dict(row))
+    return found

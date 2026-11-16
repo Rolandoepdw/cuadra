@@ -206,11 +206,16 @@ def _comparison_products(conn, text: str, intent, product: dict | None) -> list[
     return list(found.values())[:4]
 
 
-def _render_greeting(conn, product: dict, conversation: dict) -> str:
+def _render_greeting(
+    conn, product: dict, conversation: dict, context: dict | None = None
+) -> str:
     info = catalog.llm_product_json(conn, product)
     zona, zona_clause = _reply_zone(conn, conversation, info)
     policy = settings.transport_policy(conn)
-    context = conversations.get_context(conn, conversation["id"])
+    # F5 (prueba #2): usa el contexto del turno, no una copia recargada, para que
+    # `last_template_greeting_product` llegue a `_update_context` y se guarde.
+    if context is None:
+        context = conversations.get_context(conn, conversation["id"])
     context["conversation_id"] = conversation["id"]
     return prompts.template_variant(
         "greeting_product",
@@ -265,6 +270,72 @@ def _render_out_of_stock(alternatives: list[dict]) -> str:
     )
 
 
+def _format_product_list(products: list[dict]) -> str:
+    return ", ".join(
+        f"{item['name']} ({item['price']:g} {item['currency']})" for item in products
+    )
+
+
+def _render_siblings(
+    conn, conversation, product: dict, alternatives: list[dict], context: dict
+) -> str:
+    """F4: list the other models of the same family, or say there is only one."""
+    if not alternatives:
+        return prompts.template_variant(
+            "siblings_none", context, producto=product["name"]
+        )
+    first = alternatives[0]
+    segunda = ""
+    if len(alternatives) > 1:
+        second = alternatives[1]
+        segunda = f" y {second['name']} en {second['price']:g} {second['currency']}"
+    return prompts.template_variant(
+        "siblings",
+        context,
+        producto=product["name"],
+        alternativa_1=first["name"],
+        precio_1=f"{first['price']:g}",
+        moneda_1=first["currency"],
+        segunda=segunda,
+    )
+
+
+def _category_listing(
+    conn, conversation, intent, context: dict, text: str
+) -> tuple[str, bool, str, None] | None:
+    """F3: "¿qué laptops tienes?" -> short list with prices, then ask which one.
+
+    Returns None when the customer did not name a category or product family, so
+    the caller falls back to "dime cuál producto".
+    """
+    query = (intent.producto or "").strip()
+    words = catalog.category_terms(query) if query else []
+    if not words:
+        words = catalog.category_terms(text)
+    for word in words:
+        if len(word) < 4:
+            continue
+        products = catalog.category_products(conn, word, limit=4)
+        if not products:
+            continue
+        if intent.cantidad:
+            # "quiero 3 laptops": la cantidad se conserva para cuando elija una.
+            context["sale_qty"] = int(intent.cantidad)
+            context["sale_qty_product_id"] = None
+        guard_context = _guard_context(None, None, context, extra_products=products)
+        reply = prompts.template_variant(
+            "catalog_list",
+            context,
+            categoria=word,
+            lista=_format_product_list(products),
+        )
+        reply, generator = _safe_template(
+            conn, conversation, reply, guard_context, "template"
+        )
+        return reply, False, generator, None
+    return None
+
+
 def _guard_context(
     product: dict | None,
     candidates: list[dict] | None,
@@ -292,8 +363,20 @@ _AFFIRMATIVE = re.compile(
     r"vamos|lo quiero|lo llevo|res[eé]rvamelo|res[eé]rvalo|pa'?lante)\b",
     re.IGNORECASE,
 )
+_AFFIRMATIVE_START = re.compile(
+    r"^[\s¡!¿?.,]*(s[ií]|dale|ok|okay|confirmo|confirmado|claro|de acuerdo|"
+    r"perfecto|vamos|lo quiero|lo llevo|res[eé]rvamelo|res[eé]rvalo|pa'?lante)\b",
+    re.IGNORECASE,
+)
 _NEGATIVE = re.compile(
     r"\b(no|todav[ií]a no|ahora no|d[eé]jalo|lo pienso|despu[eé]s)\b", re.IGNORECASE
+)
+# Prueba #2 (F1): `_NEGATIVE` busca "no" en cualquier parte, así que "quiero 3
+# no 1" o "¿no tiene otro modelo?" cancelaban el pedido. Solo una respuesta que
+# *empieza* rechazando cancela la venta.
+_DECLINE = re.compile(
+    r"^\s*(?:no|nop|nel|todav[ií]a no|ahora no|d[eé]jalo|lo pienso|despu[eé]s)\b",
+    re.IGNORECASE,
 )
 _SALE_STAGES = ("CAPTURE_DATA", "CONFIRM")
 
@@ -311,14 +394,65 @@ _GREETING = re.compile(
 # the engine must not inherit the product of the previous turn (H-09).
 LOW_CONFIDENCE = 0.35
 
+# F4 (prueba #2): "¿y no tiene otro tipo de laptop?" pide alternativas, no un
+# dato del proveedor.
+_ALTERNATIVES = re.compile(
+    r"\b(?:otro|otra|otros|otras|otro\s+modelo|modelo|modelos|similar|"
+    r"similares|opci[oó]n|opciones|variante|variantes|diferente|diferentes|"
+    r"algo\s+m[aá]s)\b",
+    re.IGNORECASE,
+)
+
+# F3 (prueba #2): el cliente pide explícitamente el catálogo de una categoría
+# ("dame un listado de laptops"), aunque el contexto tenga un producto abierto.
+_LIST_REQUEST = re.compile(
+    r"\b(?:listado|lista|cat[aá]logo|opciones|cu[aá]les|"
+    r"qu[eé]\s+\w+\s+tienes)\b",
+    re.IGNORECASE,
+)
+
 
 def _is_greeting(text: str) -> bool:
     return bool(_GREETING.match((text or "").strip()))
 
 
-def _is_affirmative(text: str) -> bool:
+def _asks_for_alternatives(text: str) -> bool:
+    return bool(_ALTERNATIVES.search(text or ""))
+
+
+def _confirms(text: str, intent=None) -> bool:
+    """True when the customer accepts the order, not just mentions it.
+
+    Prueba #2 (m15): "Sí, pero quiero 3 no 1" empieza afirmando y el "no" corrige
+    la cantidad, no rechaza el pedido; sin esto la venta no se cerraba nunca.
+    """
     body = text or ""
-    return bool(_AFFIRMATIVE.search(body)) and not _NEGATIVE.search(body)
+    if bool(_AFFIRMATIVE.search(body)) and not _NEGATIVE.search(body):
+        return True
+    return bool(
+        intent is not None and intent.cantidad and _AFFIRMATIVE_START.match(body)
+    )
+
+
+def _is_decline(text: str) -> bool:
+    """True only when the message opens by refusing ("no", "déjalo", ...)."""
+    return bool(_DECLINE.match((text or "").strip()))
+
+
+def _sale_quantity(intent, context: dict, product: dict) -> int:
+    """Quantity agreed so far in this sale (F2, prueba #2).
+
+    The NLU only reports a quantity on the turn the customer states it, so the
+    rest of the turns of the same sale must reuse the remembered one instead of
+    silently falling back to 1. A remembered quantity belongs to a product: when
+    the customer switches product the draft starts again at 1.
+    """
+    if intent.cantidad:
+        return int(intent.cantidad)
+    remembered = int(context.get("sale_qty") or 0)
+    if context.get("sale_qty_product_id") not in (None, product["id"]):
+        return 1
+    return remembered or 1
 
 
 def _sale_slots(conn, conversation, facts: dict[str, str]) -> dict:
@@ -348,14 +482,29 @@ def _missing_slots(slots: dict) -> list[str]:
     return labels
 
 
-def _sale_guard(product: dict, total: float) -> dict:
-    """Guard context whose only price is the sale total (no internal data)."""
+def _sale_guard(product: dict, total: float, *, unit: float | None = None) -> dict:
+    """Guard context whose only price is the sale total (no internal data).
+
+    ``unit`` also allows the unit price, so the quote can say "350 cada una,
+    1050 en total" without tripping the price guardrail.
+    """
     safe = {**product, "price": round(total, 2)}
-    return {"product": safe, "products": [safe], "quoted_prices": []}
+    quoted = [round(float(unit), 2)] if unit is not None else []
+    return {"product": safe, "products": [safe], "quoted_prices": quoted}
 
 
-def _fast_template(conn, conversation, key: str, guard_context: dict, **values):
-    text = prompts.TEMPLATES[key].format(**values)
+def _fast_template(
+    conn, conversation, key: str, guard_context: dict, *, context=None, **values
+):
+    """Render a template with anti-repetition variants.
+
+    ``context`` is the turn's context dict: without it the variant choice cannot
+    be remembered (F5, prueba #2), so callers inside a turn must pass it.
+    """
+    if context is not None:
+        text = prompts.template_variant(key, context, **values)
+    else:
+        text = prompts.TEMPLATES[key].format(**values)
     return _safe_template(conn, conversation, text, guard_context, "template")
 
 
@@ -410,6 +559,24 @@ def _sale_failure(
     }
 
 
+def _sale_product(conn, conversation, context: dict) -> dict | None:
+    """Product of the sale in progress, when this turn did not resolve one (F1).
+
+    The open sale wins over the context: the context product can be overwritten
+    by a later turn, the sale row is the order being built.
+    """
+    existing = sales_domain.active_sale_for_conversation(conn, conversation["id"])
+    product_id = existing.get("product_id") if existing is not None else None
+    if not product_id:
+        product_id = context.get("product_id")
+    if not product_id:
+        return None
+    try:
+        return catalog.get_product(conn, product_id)
+    except catalog.NotFound:
+        return None
+
+
 def _maybe_handle_sale(
     conn, conversation, text: str, intent, product: dict | None, context: dict
 ) -> dict | None:
@@ -419,18 +586,34 @@ def _maybe_handle_sale(
     None when the turn is not part of a sale.
     """
     stage = str(context.get("stage") or "DISCOVERY").upper()
+    in_sale = stage in _SALE_STAGES
+    if intent.intencion != "comprar" and not in_sale:
+        return None
     if product is None:
-        return None
-    if intent.intencion != "comprar" and stage not in _SALE_STAGES:
-        return None
+        if intent.producto:
+            # H-10: el cliente nombró un producto que no está en el catálogo; no
+            # se responde sobre el de la venta anterior.
+            return None
+        # F1: el NLU no repitió el producto ("null"), pero la venta sigue abierta.
+        product = _sale_product(conn, conversation, context)
+        if product is None:
+            return None
+    if in_sale and intent.intencion != "comprar" and stage == "CONFIRM":
+        # Una pregunta abierta sobre la confirmación ("¿no tiene otro modelo?")
+        # no cancela ni re-confirma el pedido: la responde `_decide` y la venta
+        # sigue intacta (F4). Una corrección de cantidad sí entra al flujo (F2).
+        correcting = bool(intent.cantidad)
+        if not _confirms(text, intent) and not _is_decline(text) and not correcting:
+            return None
 
     facts = memory.facts_map(conn, conversation["id"])
     slots = _sale_slots(conn, conversation, facts)
     missing = _missing_slots(slots)
     guard = _sale_guard(product, float(product["price"]))
 
-    # Cantidad solicitada: viene del NLU (ej. "dos tablets" -> 2) o default 1.
-    qty = int(intent.cantidad) if intent.cantidad else 1
+    # Cantidad solicitada: viene del NLU (ej. "dos tablets" -> 2), si no, la que
+    # ya se acordó en esta venta, y solo entonces 1.
+    qty = _sale_quantity(intent, context, product)
 
     existing = sales_domain.active_sale_for_conversation(conn, conversation["id"])
     if existing is not None and int(existing.get("product_id", -1)) == int(product["id"]):
@@ -447,6 +630,7 @@ def _maybe_handle_sale(
             conversation,
             "sale_created",
             guard,
+            context=context,
             order_code=existing["order_code"],
         )
         return {
@@ -456,9 +640,10 @@ def _maybe_handle_sale(
             "escalation_question": None,
             "stage": "DONE",
             "sale": existing,
+            "sale_qty": qty,
         }
 
-    if not missing and _is_affirmative(text):
+    if not missing and _confirms(text, intent):
         try:
             sale = sales_domain.create_sale(
                 conn,
@@ -480,6 +665,7 @@ def _maybe_handle_sale(
             conversation,
             "sale_created",
             guard,
+            context=context,
             order_code=sale["order_code"],
         )
         return {
@@ -489,14 +675,25 @@ def _maybe_handle_sale(
             "escalation_question": None,
             "stage": "DONE",
             "sale": sale,
+            "sale_qty": qty,
         }
 
     if missing:
+        # F3b (prueba #2): cotizar antes de pedir datos. El cliente preguntó
+        # precio y recibía "me falta la zona, la dirección y un teléfono" sin
+        # ver un solo número.
+        total = round(float(product["price"]) * qty, 2)
+        guard = _sale_guard(product, total, unit=float(product["price"]))
         reply, generator = _fast_template(
             conn,
             conversation,
             "sale_ask_data",
             guard,
+            context=context,
+            producto=product["name"],
+            cantidad=qty,
+            total=f"{total:g}",
+            moneda=product["currency"],
             faltan=", ".join(missing),
         )
         return {
@@ -505,11 +702,12 @@ def _maybe_handle_sale(
             "generator": generator,
             "escalation_question": None,
             "stage": "CAPTURE_DATA",
+            "sale_qty": qty,
         }
 
-    if stage == "CONFIRM" and _NEGATIVE.search(text or ""):
+    if stage == "CONFIRM" and _is_decline(text) and not intent.cantidad:
         reply, generator = _fast_template(
-            conn, conversation, "sale_declined", guard
+            conn, conversation, "sale_declined", guard, context=context
         )
         return {
             "reply": reply,
@@ -520,12 +718,13 @@ def _maybe_handle_sale(
         }
 
     total = round(float(product["price"]) * qty, 2)
-    guard = _sale_guard(product, total)
+    guard = _sale_guard(product, total, unit=float(product["price"]))
     reply, generator = _fast_template(
         conn,
         conversation,
         "sale_confirm",
         guard,
+        context=context,
         producto=product["name"],
         cantidad=qty,
         total=f"{total:g}",
@@ -540,20 +739,30 @@ def _maybe_handle_sale(
         "generator": generator,
         "escalation_question": None,
         "stage": "CONFIRM",
-        "qty_solicitada": qty,
+        "sale_qty": qty,
     }
 
 
 def _stage_for(context: dict, intent, product: dict | None, escalate: bool) -> str:
+    previous = str(context.get("stage") or "").upper()
     if escalate:
         return "HANDOFF"
     if product is None:
-        return "DISCOVERY"
+        # F1: un turno sin producto no reinicia una venta en curso. CAPTURE_DATA
+        # y CONFIRM describen el pedido, no el último mensaje.
+        return previous if previous in _SALE_STAGES else "DISCOVERY"
     if intent.intencion == "queja":
         return "OBJECTION"
+    # Una pregunta sobre el mismo producto no saca el pedido de CONFIRM /
+    # CAPTURE_DATA: el estado describe la venta, no el último mensaje (F1/F4).
+    if (
+        previous in _SALE_STAGES
+        and intent.intencion != "comprar"
+        and context.get("product_id") == product["id"]
+    ):
+        return previous
     if intent.intencion in ("consulta_precio", "consulta_stock", "comprar", "comparar"):
         return "QUOTE"
-    previous = str(context.get("stage") or "").upper()
     if previous in ("CONFIRM", "CAPTURE_DATA", "DONE", "HANDOFF"):
         return previous
     return "PRODUCT_MATCH"
@@ -601,9 +810,10 @@ async def _decide(
 
     # H-12: a bare greeting starts over; answering it with the product remembered
     # from the previous turn ("Hola, buenas" -> Pan con Croqueta) looks deaf.
+    # F7 (prueba #2): un saludo suelto recibe un saludo, no la plantilla de producto.
     if product_source in ("", "context") and _is_greeting(text):
         guard_context = _guard_context(None, None, context)
-        reply = prompts.template_variant("ask_which_product", context)
+        reply = prompts.template_variant("greeting", context)
         reply, generator = _safe_template(
             conn,
             conversation,
@@ -615,6 +825,9 @@ async def _decide(
 
     if intent.intencion in ("consulta_precio", "consulta_stock", "comprar"):
         if product is None:
+            listing = _category_listing(conn, conversation, intent, context, text)
+            if listing is not None:
+                return listing
             guard_context = _guard_context(None, None, context)
             reply = prompts.template_variant("ask_which_product", context)
             reply, generator = _safe_template(
@@ -625,6 +838,12 @@ async def _decide(
                 "template",
             )
             return reply, False, generator, None
+        if product_source == "context" and _LIST_REQUEST.search(text or ""):
+            # F3: "dame un listado de laptops" no se responde con el producto que
+            # quedó abierto de un turno anterior.
+            listing = _category_listing(conn, conversation, intent, context, text)
+            if listing is not None:
+                return listing
         if product["status"] != "ACTIVE" or (product.get("stock") or 0) <= 0:
             alternatives = catalog.alternatives(conn, product)
             guard_context = _guard_context(
@@ -645,7 +864,7 @@ async def _decide(
         guard_context = _guard_context(
             product, None, context, product_source=product_source
         )
-        reply = _render_greeting(conn, product, conversation)
+        reply = _render_greeting(conn, product, conversation, context)
         if intent.intencion == "comprar":
             canonical = catalog.llm_product_json(conn, product)
             reply += f" ¿Te reservo {canonical['nombre']} y coordinamos la entrega?"
@@ -692,14 +911,40 @@ async def _decide(
             return reply, False, generator, None
 
         if not datos_proveedor:
-            # No hay datos del proveedor que pedir: no escalar, pedir aclaración.
+            # F4 (prueba #2): si el cliente pide otro modelo, listar alternativas
+            # reales del mismo tipo en vez de preguntar "¿cuál producto?".
+            if _asks_for_alternatives(text):
+                alternatives = catalog.siblings(conn, product)
+                guard_context = _guard_context(
+                    product,
+                    None,
+                    context,
+                    extra_products=alternatives,
+                    product_source=product_source,
+                )
+                reply = _render_siblings(
+                    conn, conversation, product, alternatives, context
+                )
+                reply, generator = _safe_template(
+                    conn,
+                    conversation,
+                    reply,
+                    guard_context,
+                    "template",
+                )
+                return reply, False, generator, None
+            # No hay datos del proveedor que pedir: preguntar por ese producto,
+            # no por "cuál producto" cuando ya sabemos cuál es.
             guard_context = _guard_context(
                 product, None, context, product_source=product_source
+            )
+            reply = prompts.template_variant(
+                "ask_product_data", context, producto=product["name"]
             )
             reply, generator = _safe_template(
                 conn,
                 conversation,
-                prompts.TEMPLATES["ask_which_product"],
+                reply,
                 guard_context,
                 "template",
             )
@@ -770,7 +1015,7 @@ async def _decide(
             reply, generator = _safe_template(
                 conn,
                 conversation,
-                prompts.TEMPLATES["ask_which_product"],
+                prompts.template_variant("ask_which_product", context),
                 guard_context,
                 "template",
             )
@@ -835,8 +1080,13 @@ def _update_context(
     *,
     stage: str | None = None,
     sale: dict | None = None,
+    sale_qty: int | None = None,
+    context: dict | None = None,
 ) -> None:
-    context = conversations.get_context(conn, conversation["id"])
+    # F5 (prueba #2): guardar el mismo dict que mutó el turno. Recargarlo desde
+    # la BD borraba `last_template_*` y las variantes nunca rotaban.
+    if context is None:
+        context = conversations.get_context(conn, conversation["id"])
     context["conversation_id"] = conversation["id"]
     if product is not None:
         context["product_id"] = product["id"]
@@ -851,6 +1101,12 @@ def _update_context(
         # Una venta nueva cierra el bucle de 'otro' y de quejas.
         context["otro_count"] = 0
         context["queja_count"] = 0
+        # La cantidad acordada ya vive en la venta: no debe reaparecer en otra.
+        context.pop("sale_qty", None)
+        context.pop("sale_qty_product_id", None)
+    elif sale_qty is not None:
+        context["sale_qty"] = int(sale_qty)
+        context["sale_qty_product_id"] = product["id"] if product is not None else None
     conversations.set_context(conn, conversation["id"], context)
 
 
@@ -1042,6 +1298,7 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
     )
 
     sale = None
+    sale_qty = None
     compose_started = time.perf_counter()
     sale_outcome = _maybe_handle_sale(conn, conversation, text, intent, product, context)
     if sale_outcome is not None:
@@ -1051,6 +1308,7 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
         escalation_question = sale_outcome["escalation_question"]
         stage = sale_outcome["stage"]
         sale = sale_outcome.get("sale")
+        sale_qty = sale_outcome.get("sale_qty")
     else:
         reply, escalate, generator, escalation_question = await _decide(
             conn,
@@ -1077,6 +1335,8 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
         escalate,
         stage=stage,
         sale=sale,
+        sale_qty=sale_qty,
+        context=context,
     )
     # Trace: salida completa del turno
     tracing.trace_call(

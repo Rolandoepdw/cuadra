@@ -922,7 +922,8 @@ class ReplyWordingTests(Phase1TestCase):
         )
         self._turn("Hola, buenas", llm.Intent(intencion="otro", confianza=0.9))
         body = self._outbound()[-1]
-        self.assertEqual(body, prompts.TEMPLATES["ask_which_product"])
+        # F7 (prueba #2): el saludo recibe un saludo, no la plantilla de producto.
+        self.assertEqual(body, prompts.TEMPLATES["greeting"])
         self.assertNotIn("Power Bank", body)
 
     def test_greeting_does_not_list_every_zone(self):
@@ -1376,6 +1377,377 @@ class QueueScheduleTests(Phase1TestCase):
         finally:
             conn.close()
         self.assertEqual(job["type"], "test_now")
+
+
+class SaleFlowTests(Phase1TestCase):
+    """F1/F2 de la prueba #2: la venta no muere y la cantidad no se pierde."""
+
+    def setUp(self):
+        super().setUp()
+        conn = db.connect()
+        try:
+            conn.execute(
+                "INSERT INTO zones (id, name, active) VALUES (1, 'San Miguel', 1)"
+            )
+            conn.execute(
+                """INSERT INTO supplier_delivery_zones (supplier_id, zone_id)
+                   VALUES (1, 1)"""
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _store_facts(self) -> None:
+        conn = db.connect()
+        try:
+            for key, value in (
+                (memory.FACT_ZONE, "San Miguel"),
+                (memory.FACT_ADDRESS, "Calle 10 numero 123"),
+                (memory.FACT_PHONE, "+5355500001"),
+                (memory.FACT_CUSTOMER_NAME, "Rolando"),
+            ):
+                memory.upsert_fact(conn, 1, key, value)
+        finally:
+            conn.close()
+
+    def _advance(self, text, intent, context, product="resolve"):
+        conn = db.connect()
+        try:
+            conversation = conversations.get_conversation(conn, 1)
+            if product == "resolve":
+                product, _ = pipeline._resolve_product(conn, intent, context, text)
+            return pipeline._maybe_handle_sale(
+                conn, conversation, text, intent, product, context
+            )
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------------- F1 (NLU)
+
+    def test_null_string_producto_is_normalized(self):
+        self.assertIsNone(llm.Intent(intencion="comprar", producto="null").producto)
+        self.assertIsNone(llm.Intent(intencion="comprar", producto=" NULL ").producto)
+        self.assertIsNone(llm.Intent(intencion="comprar", producto="").producto)
+        self.assertEqual(
+            llm.Intent(intencion="comprar", producto="Power Bank").producto,
+            "Power Bank",
+        )
+        parsed = llm.Intent.model_validate_json(
+            '{"intencion": "comprar", "producto": "null",'
+            ' "datos_faltantes": ["null"], "confianza": 0.9, "cantidad": "null"}'
+        )
+        self.assertIsNone(parsed.producto)
+        self.assertEqual(parsed.datos_faltantes, [])
+        self.assertIsNone(parsed.cantidad)
+
+    def test_open_sale_is_not_reset_to_discovery(self):
+        intent = llm.Intent(intencion="otro", confianza=0.1)
+        self.assertEqual(
+            pipeline._stage_for(
+                {"stage": "CONFIRM", "product_id": 1}, intent, None, False
+            ),
+            "CONFIRM",
+        )
+        self.assertEqual(
+            pipeline._stage_for({"stage": "CAPTURE_DATA"}, intent, None, False),
+            "CAPTURE_DATA",
+        )
+        self.assertEqual(
+            pipeline._stage_for({"stage": "QUOTE"}, intent, None, False), "DISCOVERY"
+        )
+
+    def test_sale_uses_the_context_product_when_the_nlu_forgets_it(self):
+        self._ingest("quiero 3 Power Bank")
+        self._store_facts()
+        context = {"stage": "CONFIRM", "product_id": 1}
+        outcome = self._advance(
+            "si, dale", llm.Intent(intencion="otro", confianza=0.1), context, product=None
+        )
+        self.assertIsNotNone(outcome)
+        self.assertEqual(outcome["stage"], "DONE")
+        self.assertEqual(outcome["sale"]["product_id"], 1)
+
+    def test_a_question_does_not_cancel_the_order(self):
+        self._ingest("quiero 3 Power Bank")
+        self._store_facts()
+        context = {"stage": "CONFIRM", "product_id": 1}
+        outcome = self._advance(
+            "y no tiene otro tipo de laptop?",
+            llm.Intent(intencion="consulta_dato", confianza=0.8),
+            context,
+        )
+        self.assertIsNone(outcome)
+
+    def test_only_a_real_refusal_declines_the_order(self):
+        self._ingest("quiero 3 Power Bank")
+        self._store_facts()
+        context = {"stage": "CONFIRM", "product_id": 1}
+        kept = self._advance(
+            "quiero 3 no 1",
+            llm.Intent(intencion="otro", cantidad=3, confianza=0.5),
+            context,
+        )
+        self.assertEqual(kept["stage"], "CONFIRM")
+        self.assertIn("x3", kept["reply"])
+
+        declined = self._advance(
+            "no, gracias", llm.Intent(intencion="otro", confianza=0.5), context
+        )
+        self.assertEqual(declined["stage"], "CLOSE")
+
+    def test_yes_but_i_want_three_creates_the_order(self):
+        # m15 de la prueba #2: el "no" corrige la cantidad, no rechaza el pedido.
+        self._ingest("quiero 3 Power Bank")
+        self._store_facts()
+        context = {"stage": "CONFIRM", "product_id": 1, "sale_qty": 3,
+                   "sale_qty_product_id": 1}
+        outcome = self._advance(
+            "Si, pero quiero 3 no 1",
+            llm.Intent(intencion="comprar", producto="null", cantidad=3, confianza=0.95),
+            context,
+        )
+        self.assertEqual(outcome["stage"], "DONE")
+        self.assertEqual(outcome["sale"]["quantity"], 3)
+
+    # -------------------------------------------------------- F2 (cantidad)
+
+    def test_quantity_draft_belongs_to_one_product(self):
+        other = llm.Intent(intencion="otro", confianza=0.1)
+        context = {"sale_qty": 3, "sale_qty_product_id": 1}
+        self.assertEqual(pipeline._sale_quantity(other, context, {"id": 1}), 3)
+        self.assertEqual(pipeline._sale_quantity(other, context, {"id": 2}), 1)
+        self.assertEqual(
+            pipeline._sale_quantity(
+                llm.Intent(intencion="comprar", cantidad=2), context, {"id": 1}
+            ),
+            2,
+        )
+
+    def test_quantity_is_reused_across_turns(self):
+        self._ingest("quiero 3 Power Bank")
+        self._store_facts()
+        context = {
+            "stage": "CAPTURE_DATA",
+            "product_id": 1,
+            "sale_qty": 3,
+            "sale_qty_product_id": 1,
+        }
+        outcome = self._advance(
+            "+5355500001", llm.Intent(intencion="otro", confianza=0.1), context
+        )
+        self.assertEqual(outcome["sale_qty"], 3)
+        self.assertIn("x3", outcome["reply"])
+
+    def test_quantity_survives_until_the_sale_is_created(self):
+        first = llm.Intent(
+            intencion="comprar", producto="Power Bank", cantidad=3, confianza=0.95
+        )
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=first)):
+            self._ingest("quiero 3 Power Bank")
+            self._make_due()
+            self._run_process()
+
+        data = llm.Intent(intencion="otro", confianza=0.1)
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=data)):
+            self._ingest(
+                "soy de San Miguel, calle 10 numero 123, +5355500001, me llamo Rolando"
+            )
+            self._make_due()
+            self._run_process()
+
+        confirm = llm.Intent(intencion="otro", confianza=0.1)
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=confirm)):
+            self._ingest("si, dale")
+            self._make_due()
+            self._run_process()
+
+        sales = self._rows("SELECT quantity, product_id FROM sales")
+        self.assertEqual(len(sales), 1)
+        self.assertEqual(sales[0]["quantity"], 3)
+        self.assertEqual(sales[0]["product_id"], 1)
+
+
+class CatalogConversationTests(Phase1TestCase):
+    """F3/F3b/F4/F5/F7 de la prueba #2 (bloque B)."""
+
+    def _add_product(self, product_id: int, name: str, price: float, stock: int = 5):
+        conn = db.connect()
+        try:
+            conn.execute(
+                """INSERT INTO products
+                   (id, supplier_id, name, price, currency, commission, stock, status)
+                   VALUES (?, 1, ?, ?, 'USD', 1, ?, 'ACTIVE')""",
+                (product_id, name, price, stock),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _turn(self, text: str, intent) -> None:
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)):
+            self._ingest(text)
+            self._make_due()
+            self._run_process()
+
+    def _outbound(self) -> list[str]:
+        return [
+            row["body"]
+            for row in self._rows(
+                "SELECT body FROM messages WHERE direction = 'OUTBOUND' ORDER BY id"
+            )
+        ]
+
+    # ------------------------------------------------------------------ F3
+
+    def test_a_category_question_lists_the_family(self):
+        self._add_product(2, "Laptop Empresarial", 350.0)
+        self._add_product(3, "Laptop Ultraligera", 720.0)
+        self._add_product(4, "Monitor LED 24", 180.0)
+        self._turn(
+            "¿Qué laptops tienes a la venta?",
+            llm.Intent(
+                intencion="consulta_precio", producto="laptops", confianza=0.95
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("Laptop Empresarial", body)
+        self.assertIn("Laptop Ultraligera", body)
+        self.assertIn("350 USD", body)
+        self.assertNotIn("Monitor LED", body)
+        self.assertNotIn(prompts.TEMPLATES["ask_which_product"], body)
+
+    def test_category_matching_is_word_by_word_and_singular(self):
+        self._add_product(2, "Laptop Empresarial", 350.0)
+        conn = db.connect()
+        try:
+            for query in (
+                "laptops",
+                "que laptops tienes a la venta",
+                "ando en busca de laptops",
+            ):
+                names = [p["name"] for p in catalog.category_products(conn, query)]
+                self.assertIn("Laptop Empresarial", names, query)
+            self.assertEqual(catalog.category_products(conn, "neveras"), [])
+        finally:
+            conn.close()
+
+    def test_buying_a_category_keeps_the_quantity_for_later(self):
+        self._add_product(2, "Laptop Empresarial", 350.0)
+        self._turn(
+            "Quiero 3 laptops",
+            llm.Intent(
+                intencion="comprar", producto="laptops", cantidad=3, confianza=0.95
+            ),
+        )
+        conn = db.connect()
+        try:
+            context = conversations.get_context(conn, 1)
+        finally:
+            conn.close()
+        self.assertEqual(context.get("sale_qty"), 3)
+        self.assertIn("Laptop Empresarial", self._outbound()[-1])
+
+    # ----------------------------------------------------------------- F3b
+
+    def test_the_quote_comes_before_asking_for_data(self):
+        self._turn(
+            "Quiero 3 Power Bank",
+            llm.Intent(
+                intencion="comprar",
+                producto="Power Bank",
+                cantidad=3,
+                confianza=0.95,
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("37.5", body)
+        self.assertIn("me falta", body)
+
+    # ------------------------------------------------------------------ F4
+
+    def test_a_question_about_other_models_lists_them(self):
+        self._add_product(2, "Laptop Empresarial", 350.0)
+        self._add_product(3, "Laptop Ultraligera", 720.0)
+        self._add_product(4, "Monitor LED 24", 180.0)
+        self._turn(
+            "precio de la Laptop Empresarial",
+            llm.Intent(
+                intencion="consulta_precio",
+                producto="Laptop Empresarial",
+                confianza=0.95,
+            ),
+        )
+        self._turn(
+            "¿y no tiene otro tipo de laptop?",
+            llm.Intent(intencion="consulta_dato", producto=None, confianza=0.9),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("Laptop Ultraligera", body)
+        self.assertNotIn("Monitor LED", body)
+        self.assertNotIn("Dime cuál producto", body)
+
+    def test_a_unique_product_says_there_is_no_other_model(self):
+        self._turn(
+            "precio del Power Bank",
+            llm.Intent(
+                intencion="consulta_precio", producto="Power Bank", confianza=0.95
+            ),
+        )
+        self._turn(
+            "¿tiene otro modelo?",
+            llm.Intent(intencion="consulta_dato", producto=None, confianza=0.9),
+        )
+        self.assertIn("no tengo otro modelo", self._outbound()[-1])
+
+    def test_siblings_stay_inside_the_name_family(self):
+        self._add_product(2, "Laptop Empresarial", 350.0)
+        self._add_product(3, "Laptop Ultraligera", 720.0)
+        self._add_product(4, "Monitor LED 24", 180.0)
+        conn = db.connect()
+        try:
+            names = [
+                p["name"]
+                for p in catalog.siblings(conn, catalog.get_product(conn, 2))
+            ]
+        finally:
+            conn.close()
+        self.assertEqual(names, ["Laptop Ultraligera"])
+
+    # ------------------------------------------------------------------ F5
+
+    def test_variants_rotate_through_every_option(self):
+        context: dict = {}
+        seen = [
+            prompts.template_variant("ask_which_product", context) for _ in range(3)
+        ]
+        self.assertEqual(len(set(seen)), 3)
+        self.assertEqual(context["last_template_ask_which_product"], 2)
+
+    def test_the_chosen_variant_is_persisted(self):
+        self._turn("Hola", llm.Intent(intencion="otro", confianza=0.0))
+        self._turn(
+            "¿Tienes neveras?",
+            llm.Intent(
+                intencion="consulta_stock", producto="neveras", confianza=0.9
+            ),
+        )
+        conn = db.connect()
+        try:
+            context = conversations.get_context(conn, 1)
+        finally:
+            conn.close()
+        self.assertIn("last_template_greeting", context)
+        self.assertIn("last_template_ask_which_product", context)
+        bodies = self._outbound()
+        self.assertNotEqual(bodies[0], bodies[1])
+
+    # ------------------------------------------------------------------ F7
+
+    def test_a_greeting_gets_a_greeting(self):
+        self._turn("buenas noches", llm.Intent(intencion="otro", confianza=0.0))
+        body = self._outbound()[-1]
+        self.assertEqual(body, prompts.TEMPLATES["greeting"])
+        self.assertIn("Buenas", body)
 
 
 if __name__ == "__main__":

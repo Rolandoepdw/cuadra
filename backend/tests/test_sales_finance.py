@@ -595,6 +595,19 @@ class AddressFactTests(Phase3TestCase):
         profile = memory.customer_profile(self.conn, 2)
         self.assertIn("Avenida 26", profile["direccion_habitual"])
 
+    def test_a_purchase_phrase_is_not_an_address(self):
+        # Prueba #2 (F6): "Si, pero quiero 3 no 1" pisaba la dirección real.
+        memory.capture_facts(
+            self.conn, self.conversation(), "Mi direccion es Calle 23 #456, Vedado"
+        )
+        memory.capture_facts(self.conn, self.conversation(), "Si, pero quiero 3 no 1")
+        self.assertEqual(
+            memory.facts_map(self.conn, 2)[memory.FACT_ADDRESS],
+            "Calle 23 #456, Vedado",
+        )
+        profile = memory.customer_profile(self.conn, 2)
+        self.assertNotIn("quiero", profile["direccion_habitual"])
+
 
 class SupplierPeerTests(Phase3TestCase):
     def test_supplier_is_resolved_from_the_numeric_peer(self):

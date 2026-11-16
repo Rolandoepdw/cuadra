@@ -96,12 +96,26 @@ _ADDRESS_STREET = re.compile(
 _ADDRESS_FLEXIBLE = re.compile(
     r"(?:"
     r"(?:calle|avenida|av\.?|carrera|transversal|camino)\s+[^\n,;.]{2,60}"
-    r"|[^\n,;.]{2,40}\s+(?:#|nro|número|no\.?)\s*\d{1,5}"
+    r"|[^\n,;.]{2,40}\s+(?:#|nro\.?|n[uú]m(?:ero)?\.?|no\.)\s*\d{1,5}"
     r"|[^\n,;.]{2,40}\s*,\s*entre\s+[^\n,;.]{2,40}"
     r")",
     re.IGNORECASE,
 )
 _ADDRESS_REJECT = {"mi casa", "casa", "aqui", "aquí", "alla", "allá", "por ahi", "por ahí"}
+# "Si, pero quiero 3 no 1" no es una dirección aunque tenga un número (F6, prueba
+# #2): se rechaza cualquier frase de compra o queja.
+_ADDRESS_REJECT_WORDS = re.compile(
+    r"\b(?:quiero|quisiera|precio|cu[aá]nto|cuesta|vale|comprar|llevo|pero|"
+    r"tambi[eé]n|solamente|solo|s[oó]lo)\b",
+    re.IGNORECASE,
+)
+# Una dirección necesita una vía o un marcador de número, no un dígito suelto.
+_ADDRESS_ANCHOR = re.compile(
+    r"\b(?:calle|avenida|av\.?|carrera|transversal|camino|calzada|pasaje|"
+    r"reparto|carretera|autopista|edificio|edif\.?|consejo popular|entre|"
+    r"n[uú]m(?:ero)?\.?|nro\.?|#)\b",
+    re.IGNORECASE,
+)
 _OBJECTIONS = (
     (re.compile(r"\b(muy caro|caro|costoso|no me alcanza|fuera de presupuesto)\b", re.I), "precio"),
     (re.compile(r"\b(no conf[ií]o|desconf[ií]o|es falso|estafa)\b", re.I), "confianza"),
@@ -201,16 +215,17 @@ def _set_profile_pref(conn, customer_id: int, key: str, value: str) -> None:
 
 
 def _extract_name(text: str) -> str | None:
-    match = _NAME_RE.search(text or "")
-    if not match:
-        return None
-    candidate = _clean(match.group(1), 60)
-    if not candidate:
-        return None
-    first = candidate.split()[0].lower()
-    if first in _NAME_STOPWORDS:
-        return None
-    return candidate
+    # Prueba #2: "soy de San Miguel, me llamo Rolando" devolvía None porque solo
+    # se miraba la primera coincidencia y "de" es stopword. Se prueban todas.
+    for match in _NAME_RE.finditer(text or ""):
+        candidate = _clean(match.group(1), 60)
+        if not candidate:
+            continue
+        first = candidate.split()[0].lower()
+        if first in _NAME_STOPWORDS:
+            continue
+        return candidate
+    return None
 
 
 def _extract_budget(text: str) -> str | None:
@@ -264,7 +279,10 @@ def _looks_like_address(value: str) -> bool:
     candidate = _clean(value, 200).strip(" .,;:-")
     if len(candidate) < 6 or candidate.casefold() in _ADDRESS_REJECT:
         return False
-    return bool(re.search(r"\d", candidate) or _ADDRESS_STREET.search(candidate))
+    if _ADDRESS_REJECT_WORDS.search(candidate):
+        return False
+    # Número de casa y una vía (calle, avenida, "número", "#", "entre").
+    return bool(re.search(r"\d", candidate)) and bool(_ADDRESS_ANCHOR.search(candidate))
 
 
 def _extract_address(text: str) -> str | None:

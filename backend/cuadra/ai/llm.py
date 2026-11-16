@@ -18,7 +18,7 @@ import time
 from typing import Literal
 
 import httpx
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from cuadra import config, db
 from cuadra.ai import prompts, tracing
@@ -53,6 +53,24 @@ class LLMInvalidOutput(Exception):
     """The model answered twice with invalid JSON for a structured task."""
 
 
+# El modelo a veces devuelve el string "null" en lugar de JSON null (prueba #2,
+# 2026-11-16). Si se cuela, el pipeline lo lee como "el cliente nombró un
+# producto que no existe" y tira la venta en curso, así que se normaliza aquí.
+_NULLISH = frozenset(
+    {"", "null", "none", "nil", "ninguno", "ninguna", "n/a", "na", "-", "sin producto"}
+)
+
+
+def _clean_nullish(value):
+    """Turn ``None``/``"null"``/``""`` into ``None``; leave anything else alone."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return value
+    text = value.strip().strip("\"'").strip()
+    return None if text.casefold() in _NULLISH else text
+
+
 class Intent(BaseModel):
     intencion: Literal[
         "consulta_precio",
@@ -67,6 +85,30 @@ class Intent(BaseModel):
     datos_faltantes: list[str] = Field(default_factory=list)
     confianza: float = Field(default=0.0, ge=0.0, le=1.0)
     cantidad: int | None = Field(default=None, ge=1)
+
+    @field_validator("producto", mode="before")
+    @classmethod
+    def _normalize_producto(cls, value):
+        return _clean_nullish(value)
+
+    @field_validator("datos_faltantes", mode="before")
+    @classmethod
+    def _normalize_datos(cls, value):
+        if not isinstance(value, list):
+            return value
+        return [item for item in (_clean_nullish(entry) for entry in value) if item]
+
+    @field_validator("cantidad", mode="before")
+    @classmethod
+    def _normalize_cantidad(cls, value):
+        cleaned = _clean_nullish(value)
+        if cleaned is None:
+            return None
+        try:
+            number = int(cleaned)
+        except (TypeError, ValueError):
+            return None
+        return number if number >= 1 else None
 
 
 INTENT_SCHEMA = {
