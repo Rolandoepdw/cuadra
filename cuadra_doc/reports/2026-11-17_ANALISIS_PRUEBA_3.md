@@ -141,9 +141,9 @@
 
 **Causa:** la pregunta de entrega se clasifica como `consulta_dato` sin comprobar la etapa. La fecha depende del pedido (zona + dirección), así que preguntarla antes es una promesa que el TCP no puede cumplir.
 
-**Arreglo propuesto:** las consultas de logística (`fecha de entrega`, `cuándo llega`, `envío`) solo se escalan cuando hay una venta en `DISPATCHED` o posterior; antes de eso se responde «se coordina al confirmar la entrega».
+**Arreglo aplicado:** `pipeline._logistics_outcome` responde `delivery_coordinated` («se coordina al confirmar el pedido») mientras no exista una venta en `DISPATCHED` o posterior. Una venta ya despachada deja pasar el turno al seguimiento post-venta.
 
-**Estado:** pendiente.
+**Estado:** hecho. `_LOGISTICS_QUESTION` + `_logistics_outcome`; 2 tests nuevos.
 
 ---
 
@@ -163,9 +163,9 @@
 
 **Causa:** `DONE` no tiene plantilla propia: cae en el compositor libre y en el flujo de cotización.
 
-**Arreglo propuesto:** etapa post-venta cerrada: solo seguimiento del pedido (`V-000001`), sin precio ni plazos inventados. «48h» es exactamente el tipo de promesa que no se puede hacer sin el TCP.
+**Arreglo aplicado:** `pipeline._post_sale_outcome` intercepta la etapa `DONE` y responde con el estado real del pedido (`post_sale_pending`, `post_sale_confirmed`, `post_sale_delivered`), siempre citando `V-000001`. Mientras el almacén no confirme, dice «pendiente de confirmación», no «en preparación». Una pregunta técnica real (`consulta_dato` sin pistas de pedido/logística) sigue su ruta normal con specs y guardrails; una nueva compra (`comprar`) no se intercepta.
 
-**Estado:** pendiente.
+**Estado:** hecho. 3 tests nuevos.
 
 ---
 
@@ -175,9 +175,9 @@
 
 **Causa:** la zona mencionada en lenguaje libre no se resuelve a `zones.id` en el turno de descubrimiento; solo se valida al crear la venta.
 
-**Arreglo propuesto:** resolver zona en el turno en que se menciona y responder cobertura/no cobertura antes de seguir cotizando. Si la zona no tiene cobertura, no se debe llegar a pedir dirección y teléfono.
+**Arreglo aplicado:** `pipeline._zone_coverage_outcome` resuelve la zona mencionada en el turno (`resolve_zone(..., active_only=False)`) y, si no está activa o el proveedor no la cubre, responde `zone_not_covered` antes de pedir dirección y teléfono. Los nombres de zona de 3 letras («UCI») se aceptan cuando el mensaje trae una pista («vivo en», «domicilio»).
 
-**Estado:** pendiente.
+**Estado:** hecho. 3 tests nuevos.
 
 ---
 
@@ -187,9 +187,9 @@
 
 **Causa:** el extractor de dirección corta en la primera coma y descarta el segmento «numero 20».
 
-**Arreglo propuesto:** conservar el número de casa como parte de la dirección (o campo aparte) y exigirlo en la confirmación al cliente, que es donde el cliente puede corregir.
+**Arreglo aplicado:** `memory._complete_house_number` anexa a la dirección el segmento `numero N` / `nro. N` / `#N` que sigue tras una coma, solo si la dirección aún no trae número de casa. La confirmación al cliente sigue mostrando la dirección completa para que pueda corregirla.
 
-**Estado:** pendiente.
+**Estado:** hecho. 2 tests nuevos.
 
 ---
 
@@ -199,9 +199,9 @@
 
 **Causa:** el listener del userbot solo persiste mensajes de peers identificados como TCP.
 
-**Arreglo propuesto:** registrar toda salida del userbot en `messages` con `author='operator'`, aunque el destino no sea un TCP. Sin esto, el historial no explica lo que ve el cliente y cualquier auditoría futura es incompleta.
+**Arreglo aplicado:** `telegram_user._on_private_outgoing` registra los mensajes privados salientes en `messages` con `direction='OUTBOUND'`, `author='operator'` y `external_id` de Telegram, más el evento `operator_message`. Los envíos programáticos del bot se marcan antes de enviarse (`_mark_programmatic`) y se omiten; los mensajes a contactos sin conversación no crean un lead. La función `record_operator_message` es testeable sin Telethon.
 
-**Estado:** pendiente. No hubo daño en datos: el mensaje no se persistió y la venta se creó correctamente por el flujo normal.
+**Estado:** hecho. 4 tests nuevos.
 
 ---
 
@@ -225,7 +225,7 @@ Especificaciones y mensajes del TCP (decisión §11):
 - `_customer_answers` no reenvía quejas; el último recurso es `escalation_unconfirmed`.
 - `scripts/clean_specs.py` reparó el `specifications_json` del producto 13.
 
-Suite: **338 tests OK**.
+Suite: **352 tests OK**.
 
 ---
 

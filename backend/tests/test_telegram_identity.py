@@ -19,8 +19,8 @@ from unittest.mock import AsyncMock, patch
 
 from cuadra import config, db
 from cuadra.ai import handlers, ingest
-from cuadra.channels import telegram
-from cuadra.domain import catalog
+from cuadra.channels import telegram, telegram_user
+from cuadra.domain import catalog, conversations
 
 
 class TelegramIdentityTests(unittest.TestCase):
@@ -336,6 +336,85 @@ class TelegramIdentityTests(unittest.TestCase):
         events = self._events("suppliers_missing_peer")
         self.assertEqual(len(events), 1)
         self.assertIn('"supplier_ids": [1]', events[0]["details_json"])
+
+
+class OperatorMessageTests(unittest.TestCase):
+    """F11 (prueba #3): las salidas manuales del userbot se registran."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._old_db_path = config.DB_PATH
+        config.DB_PATH = Path(self._tmp.name) / "test.db"
+        telegram_user._programmatic_sends.clear()
+        conn = db.connect()
+        try:
+            db.apply_migrations(conn)
+            customer = conversations.get_or_create_customer(
+                conn, "telegram", "55500001", "Cliente"
+            )
+            self.conversation = conversations.get_or_create_open_conversation(
+                conn, customer["id"], "telegram", identity="userbot"
+            )
+        finally:
+            conn.close()
+
+    def tearDown(self):
+        telegram_user._programmatic_sends.clear()
+        config.DB_PATH = self._old_db_path
+        self._tmp.cleanup()
+
+    def _messages(self) -> list[dict]:
+        conn = db.connect()
+        try:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM messages ORDER BY id"
+                ).fetchall()
+            ]
+        finally:
+            conn.close()
+
+    def _operator_events(self) -> list[dict]:
+        conn = db.connect()
+        try:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM events WHERE type = 'operator_message'"
+                ).fetchall()
+            ]
+        finally:
+            conn.close()
+
+    def test_a_manual_reply_is_stored_as_operator(self):
+        message = telegram_user.record_operator_message(
+            "55500001", "Ya te lo reservo", "77"
+        )
+        self.assertIsNotNone(message)
+        self.assertEqual(message["direction"], "OUTBOUND")
+        self.assertEqual(message["author"], "operator")
+        self.assertEqual(message["body"], "Ya te lo reservo")
+        self.assertEqual(len(self._operator_events()), 1)
+
+    def test_a_programmatic_send_is_not_duplicated(self):
+        telegram_user._mark_programmatic("55500001", "Tu pedido V-000001 quedó registrado")
+        result = telegram_user.record_operator_message(
+            "55500001", "Tu pedido V-000001 quedó registrado", "78"
+        )
+        self.assertIsNone(result)
+        self.assertEqual(self._messages(), [])
+
+    def test_the_same_telegram_id_is_not_stored_twice(self):
+        telegram_user.record_operator_message("55500001", "Hola", "79")
+        result = telegram_user.record_operator_message("55500001", "Hola", "79")
+        self.assertIsNone(result)
+        self.assertEqual(len(self._messages()), 1)
+
+    def test_writing_to_a_stranger_creates_nothing(self):
+        result = telegram_user.record_operator_message("99900001", "Hola", "80")
+        self.assertIsNone(result)
+        self.assertEqual(self._messages(), [])
 
 
 if __name__ == "__main__":

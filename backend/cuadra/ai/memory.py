@@ -102,6 +102,17 @@ _ADDRESS_FLEXIBLE = re.compile(
     re.IGNORECASE,
 )
 _ADDRESS_REJECT = {"mi casa", "casa", "aqui", "aquí", "alla", "allá", "por ahi", "por ahí"}
+# F10 (prueba #3): "calle 4 entre X y Y, numero 20" se guardaba sin "numero 20"
+# porque el extractor cortaba en la primera coma. Un número de casa explícito se
+# anexa a la dirección cuando esta aún no lo trae.
+_HOUSE_NUMBER = re.compile(
+    r"(?<!\w)(?:n[uú]m(?:ero)?\.?|nro\.?|no\.?|casa|apto\.?|#)\s*\d{1,5}\b",
+    re.IGNORECASE,
+)
+_HOUSE_NUMBER_TAIL = re.compile(
+    r"^[\s,;.-]*((?:n[uú]m(?:ero)?\.?|nro\.?|no\.?|casa|apto\.?|#)\s*\d{1,5})",
+    re.IGNORECASE,
+)
 # "Si, pero quiero 3 no 1" no es una dirección aunque tenga un número (F6, prueba
 # #2): se rechaza cualquier frase de compra o queja.
 _ADDRESS_REJECT_WORDS = re.compile(
@@ -285,17 +296,34 @@ def _looks_like_address(value: str) -> bool:
     return bool(re.search(r"\d", candidate)) and bool(_ADDRESS_ANCHOR.search(candidate))
 
 
+def _complete_house_number(body: str, match, value: str) -> str:
+    """Append a trailing house number ("numero 20") the match cut off at a comma."""
+    value = _clean(value, 200).strip(" .,;:-")
+    if _HOUSE_NUMBER.search(value):
+        return value
+    extra = _HOUSE_NUMBER_TAIL.match(body[match.end():])
+    if extra:
+        value = f"{value}, {extra.group(1).strip()}"
+    return value
+
+
 def _extract_address(text: str) -> str | None:
     body = text or ""
     match = _ADDRESS_LABEL.search(body)
-    if match and _looks_like_address(match.group(1)):
-        return _clean(match.group(1), 200).strip(" .,;:-")
+    if match:
+        candidate = _complete_house_number(body, match, match.group(1))
+        if _looks_like_address(candidate):
+            return candidate
     match = _ADDRESS_STREET.search(body)
-    if match and _looks_like_address(match.group(0)):
-        return _clean(match.group(0), 200).strip(" .,;:-")
+    if match:
+        candidate = _complete_house_number(body, match, match.group(0))
+        if _looks_like_address(candidate):
+            return candidate
     match = _ADDRESS_FLEXIBLE.search(body)
-    if match and _looks_like_address(match.group(0)):
-        return _clean(match.group(0), 200).strip(" .,;:-")
+    if match:
+        candidate = _complete_house_number(body, match, match.group(0))
+        if _looks_like_address(candidate):
+            return candidate
     return None
 
 

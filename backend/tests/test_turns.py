@@ -9,6 +9,7 @@ Run from `backend/`:
 """
 
 import asyncio
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -29,7 +30,7 @@ from cuadra.ai import (
     prompts,
     queue,
 )
-from cuadra.domain import catalog, conversations, settings, turns
+from cuadra.domain import catalog, conversations, sales, settings, turns
 
 
 def _past() -> str:
@@ -2021,6 +2022,225 @@ class CatalogConversationTests(Phase1TestCase):
         self.assertEqual(len(rows), 1)
         self.assertIsNotNone(rows[0]["duration_ms"])
         self.assertIn('"generator"', rows[0]["output_json"])
+
+
+class LogisticsZonePostSaleTests(Phase1TestCase):
+    """F6/F8/F9 de la prueba #3: logística, zona sin cobertura y post-venta."""
+
+    def setUp(self):
+        super().setUp()
+        conn = db.connect()
+        try:
+            conn.executemany(
+                "INSERT INTO zones (id, name, active) VALUES (?, ?, ?)",
+                [
+                    (1, "San Miguel", 1),
+                    (2, "UCI", 0),
+                ],
+            )
+            conn.execute(
+                """INSERT INTO supplier_delivery_zones (supplier_id, zone_id)
+                   VALUES (1, 1)"""
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    # --------------------------------------------------------------- helpers
+
+    def _turn(self, text: str, intent) -> None:
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)):
+            self._ingest(text)
+            self._make_due()
+            self._run_process()
+
+    def _outbound(self) -> list[str]:
+        return [
+            row["body"]
+            for row in self._rows(
+                "SELECT body FROM messages WHERE direction = 'OUTBOUND' ORDER BY id"
+            )
+        ]
+
+    def _conversation(self) -> dict:
+        conn = db.connect()
+        try:
+            customer = conversations.get_or_create_customer(
+                conn, "telegram", "55500001", "Cliente"
+            )
+            return conversations.get_or_create_open_conversation(
+                conn, customer["id"], "telegram", identity="bot"
+            )
+        finally:
+            conn.close()
+
+    def _set_context(self, context: dict) -> None:
+        conn = db.connect()
+        try:
+            conversations.set_context(conn, 1, context)
+        finally:
+            conn.close()
+
+    def _sale(self, status: str = "PENDING_DISPATCH") -> dict:
+        conversation = self._conversation()
+        conn = db.connect()
+        try:
+            sale = sales.create_sale(
+                conn,
+                conversation_id=conversation["id"],
+                customer_id=conversation["customer_id"],
+                product_id=1,
+                quantity=1,
+                recipient_name="Rolando",
+                delivery_zone="San Miguel",
+                delivery_address="Calle 10 numero 123",
+                customer_phone="+5355500001",
+            )
+            if sale["status"] != status:
+                conn.execute(
+                    "UPDATE sales SET status = ? WHERE id = ?", (status, sale["id"])
+                )
+                conn.commit()
+                sale = sales.get_sale(conn, sale["id"])
+            return sale
+        finally:
+            conn.close()
+
+    def _escalations(self) -> int:
+        return self._scalar("SELECT COUNT(*) FROM escalations")
+
+    # ------------------------------------------------------------------ F6
+
+    def test_logistics_is_not_escalated_before_an_order(self):
+        self._turn(
+            "¿Cuándo me la traes?",
+            llm.Intent(
+                intencion="consulta_dato", producto="Power Bank", confianza=0.9
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("se coordina al confirmar", body)
+        self.assertEqual(self._escalations(), 0)
+
+    def test_a_dispatched_order_is_not_answered_with_a_promise(self):
+        sale = self._sale("DISPATCHED")
+        conversation = self._conversation()
+        conn = db.connect()
+        try:
+            product = catalog.get_product(conn, 1)
+            outcome = pipeline._logistics_outcome(
+                conn,
+                conversation,
+                "¿Cuándo llega?",
+                product,
+                {"stage": "DONE", "sale_id": sale["id"]},
+            )
+        finally:
+            conn.close()
+        self.assertIsNone(outcome)
+
+    # ------------------------------------------------------------------ F8
+
+    def test_post_sale_reply_uses_the_order_status(self):
+        sale = self._sale("PENDING_DISPATCH")
+        self._set_context(
+            {
+                "stage": "DONE",
+                "sale_id": sale["id"],
+                "order_code": sale["order_code"],
+                "product_id": 1,
+            }
+        )
+        self._turn(
+            "¿Cuándo me la traes?",
+            llm.Intent(
+                intencion="consulta_dato", producto="Power Bank", confianza=0.9
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn(sale["order_code"], body)
+        self.assertIn("pendiente", body)
+        self.assertNotIn("12.5", body)
+        self.assertEqual(self._escalations(), 0)
+
+    def test_post_sale_delivered_order_says_so(self):
+        sale = self._sale("DELIVERED")
+        self._set_context(
+            {
+                "stage": "DONE",
+                "sale_id": sale["id"],
+                "order_code": sale["order_code"],
+                "product_id": 1,
+            }
+        )
+        self._turn(
+            "¿Ya llegó?",
+            llm.Intent(
+                intencion="consulta_dato", producto="Power Bank", confianza=0.9
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn(sale["order_code"], body)
+        self.assertIn("entregado", body.lower())
+
+    def test_a_post_sale_technical_question_keeps_its_route(self):
+        sale = self._sale("PENDING_DISPATCH")
+        conversation = self._conversation()
+        conn = db.connect()
+        try:
+            product = catalog.get_product(conn, 1)
+            outcome = pipeline._post_sale_outcome(
+                conn,
+                conversation,
+                "¿Qué garantía trae?",
+                llm.Intent(intencion="consulta_dato", confianza=0.9),
+                product,
+                {
+                    "stage": "DONE",
+                    "sale_id": sale["id"],
+                    "order_code": sale["order_code"],
+                    "product_id": 1,
+                },
+            )
+        finally:
+            conn.close()
+        self.assertIsNone(outcome)
+
+    # ------------------------------------------------------------------ F9
+
+    def test_an_uncovered_zone_is_rejected_before_the_address(self):
+        self._turn(
+            "Soy de la UCI, haces domicilio ahi",
+            llm.Intent(
+                intencion="consulta_precio", producto="Power Bank", confianza=0.9
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("no la cubre", body)
+        self.assertEqual(self._escalations(), 0)
+        self.assertEqual(self._scalar("SELECT COUNT(*) FROM sales"), 0)
+        context = json.loads(
+            self._rows("SELECT context_json FROM conversations")[0]["context_json"]
+        )
+        self.assertEqual(context.get("stage"), "CLOSE")
+
+    def test_a_covered_zone_is_not_rejected(self):
+        self._turn(
+            "Vivo en San Miguel",
+            llm.Intent(
+                intencion="consulta_precio", producto="Power Bank", confianza=0.9
+            ),
+        )
+        self.assertNotIn("no la cubre", self._outbound()[-1])
+
+    def test_short_zone_names_resolve_with_a_hint(self):
+        conn = db.connect()
+        try:
+            self.assertIsNone(catalog.resolve_zone(conn, "Vivo en la UCI"))
+            zone = catalog.resolve_zone(conn, "Vivo en la UCI", active_only=False)
+        finally:
+            conn.close()
+        self.assertEqual(zone["id"], 2)
 
 
 if __name__ == "__main__":

@@ -685,6 +685,28 @@ class AddressFactTests(Phase3TestCase):
         profile = memory.customer_profile(self.conn, 2)
         self.assertNotIn("quiero", profile["direccion_habitual"])
 
+    def test_the_house_number_after_a_comma_is_kept(self):
+        # F10 (prueba #3): "calle 4 entre ..., numero 20" perdía el número.
+        memory.capture_facts(
+            self.conn,
+            self.conversation(),
+            "La Lisa, calle 4 entre independencia y calixto, numero 20, 55645455",
+        )
+        address = memory.facts_map(self.conn, 2)[memory.FACT_ADDRESS]
+        self.assertIn("calle 4", address.lower())
+        self.assertIn("numero 20", address.lower())
+
+    def test_an_address_that_already_has_a_number_is_not_duplicated(self):
+        memory.capture_facts(
+            self.conn,
+            self.conversation(),
+            "Calle 10 numero 5, Vedado",
+        )
+        self.assertEqual(
+            memory.facts_map(self.conn, 2)[memory.FACT_ADDRESS],
+            "Calle 10 numero 5",
+        )
+
 
 class SupplierPeerTests(Phase3TestCase):
     def test_supplier_is_resolved_from_the_numeric_peer(self):

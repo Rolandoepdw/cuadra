@@ -335,12 +335,14 @@ _ZONE_HINT_RE = re.compile(
 )
 
 
-def resolve_zone(conn, raw: str) -> dict | None:
-    """Map free text to an active zone using canonical names or aliases.
+def resolve_zone(conn, raw: str, *, active_only: bool = True) -> dict | None:
+    """Map free text to a zone using canonical names or aliases.
 
-    There is no hardcoded municipality list: the active `zones` catalog is the
-    source of truth. Returns the zone row or None when the text is ambiguous or
-    unknown (the caller must ask instead of guessing).
+    There is no hardcoded municipality list: the `zones` catalog is the source
+    of truth. `active_only=False` also matches inactive zones, so the caller can
+    answer "no cubrimos esa zona" instead of silently ignoring the mention.
+    Returns the zone row or None when the text is ambiguous or unknown (the
+    caller must ask instead of guessing).
 
     Zone names/aliases are searched as whole words inside the sentence. A hint
     word (vivo, zona, entrega...) is no longer required: "Esto es Marianao"
@@ -349,7 +351,7 @@ def resolve_zone(conn, raw: str) -> dict | None:
     folded = _fold(raw).strip()
     if not folded:
         return None
-    zones = list_zones(conn, active=True)
+    zones = list_zones(conn, active=True if active_only else None)
     by_id = {int(zone["id"]): zone for zone in zones}
 
     # 1. Exact match on canonical name
@@ -369,7 +371,7 @@ def resolve_zone(conn, raw: str) -> dict | None:
     candidates = []
     for zone in zones:
         folded_name = _fold(zone["name"])
-        if len(folded_name) < 4:
+        if len(folded_name) < 3:
             continue
         if len(folded_name) < 6 and not has_hint:
             continue
@@ -381,7 +383,7 @@ def resolve_zone(conn, raw: str) -> dict | None:
         zone = by_id.get(int(alias["zone_id"]))
         if zone is not None:
             folded_alias = _fold(alias["alias"])
-            if len(folded_alias) < 4:
+            if len(folded_alias) < 3:
                 continue
             if len(folded_alias) < 6 and not has_hint:
                 continue

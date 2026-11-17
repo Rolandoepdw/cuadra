@@ -13,16 +13,23 @@ import logging
 import re
 import sqlite3
 import uuid
+from collections import deque
 from pathlib import Path
 
 from cuadra import config, db
 from cuadra.ai import ingest
 from cuadra.channels import rate_limit
+from cuadra.domain import conversations, events
 
 log = logging.getLogger("cuadra.telegram_user")
 
 _USERBOT_SENDER = "userbot"
 _entity_cache: dict[str, object] = {}
+
+# F11 (prueba #3): las respuestas del bot que salen por el userbot ya están en
+# `messages`. Se marcan *antes* de enviarlas para que el listener de salientes
+# no las duplique como mensajes manuales del operador.
+_programmatic_sends: deque = deque(maxlen=200)
 
 _client = None
 _me = None
@@ -88,6 +95,96 @@ def _ingest_userbot(
         identity="userbot",
         **kwargs,
     )
+
+
+def _programmatic_key(chat_id, text: str) -> tuple[str, str]:
+    return (
+        str(chat_id),
+        re.sub(r"\s+", " ", (text or "")).strip(),
+    )
+
+
+def _mark_programmatic(chat_id, text: str) -> None:
+    if chat_id is not None:
+        _programmatic_sends.append(_programmatic_key(chat_id, text))
+
+
+def _was_programmatic(chat_id, text: str) -> bool:
+    return _programmatic_key(chat_id, text) in _programmatic_sends
+
+
+def record_operator_message(
+    identifier: str, text: str, external_id: str
+) -> dict | None:
+    """Store a message the operator typed by hand in the userbot account (F11).
+
+    Before this, manual replies were invisible to the dashboard and to the next
+    turn's history: the bot could contradict an answer the operator had already
+    given. Only an existing Telegram conversation is touched; writing to a
+    stranger does not create a lead. Programmatic sends are skipped because the
+    bot already stored them (or they are TCP escalations, not customer chat).
+    """
+    body = (text or "").strip()
+    if not body or not identifier or not external_id:
+        return None
+    if _was_programmatic(identifier, body):
+        return None
+
+    conn = db.connect()
+    try:
+        row = conn.execute(
+            """SELECT cv.id FROM conversations cv
+               JOIN customer_channels cc ON cc.customer_id = cv.customer_id
+               WHERE cc.channel = 'telegram' AND cc.identifier = ?
+                 AND cv.channel = 'telegram'
+               ORDER BY (cv.identity = 'userbot') DESC, cv.id DESC LIMIT 1""",
+            (str(identifier),),
+        ).fetchone()
+        if row is None:
+            return None
+        conversation_id = int(row["id"])
+        if conversations.find_message_by_external_id(
+            conn, conversation_id, str(external_id)
+        ) is not None:
+            return None
+        message = conversations.add_message(
+            conn,
+            conversation_id,
+            "OUTBOUND",
+            "operator",
+            body=body,
+            external_id=str(external_id),
+        )
+        events.log(
+            conn,
+            "bot",
+            "operator_message",
+            entity="messages",
+            entity_id=message["id"],
+            details={
+                "channel": "telegram",
+                "identity": "userbot",
+                "external_id": str(external_id),
+            },
+        )
+        return message
+    finally:
+        conn.close()
+
+
+async def _on_private_outgoing(event) -> None:
+    try:
+        message = event.message
+        text = getattr(message, "text", None)
+        if not text:
+            return
+        record_operator_message(
+            identifier=str(event.chat_id),
+            text=text,
+            external_id=str(message.id),
+        )
+    except Exception:  # noqa: BLE001 - never let one bad update kill the userbot
+        log.exception("failed to record outgoing userbot message")
 
 
 async def _on_private_message(event) -> None:
@@ -196,6 +293,10 @@ async def start() -> None:
     client.add_event_handler(
         _on_private_message,
         events.NewMessage(incoming=True, func=lambda event: event.is_private),
+    )
+    client.add_event_handler(
+        _on_private_outgoing,
+        events.NewMessage(outgoing=True, func=lambda event: event.is_private),
     )
     log.info(
         "userbot connected as @%s (id %s); listening for private messages",
@@ -474,10 +575,18 @@ async def resolve_peer(target: str) -> str | None:
 async def send_text(target: str, text: str) -> str | None:
     client = _require_client()
     _guard_account()
+    entity = await _resolve(client, target)
+    # Mark before sending: the outgoing update can arrive before the response,
+    # and the listener must not store this send a second time (F11).
+    key = _programmatic_key(getattr(entity, "id", None), text)
+    _mark_programmatic(getattr(entity, "id", None), text)
     try:
-        entity = await _resolve(client, target)
         sent = await client.send_message(entity, text, link_preview=False)
     except Exception as exc:  # noqa: BLE001 - mapped below
+        try:
+            _programmatic_sends.remove(key)
+        except ValueError:
+            pass
         mapped = _map_or_cool_down(exc)
         if mapped is exc:
             raise

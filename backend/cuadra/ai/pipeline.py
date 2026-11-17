@@ -431,6 +431,25 @@ _LIST_REQUEST = re.compile(
     re.IGNORECASE,
 )
 
+# F6 (prueba #3): preguntas de logística. La fecha depende del pedido, así que
+# antes de una venta despachada no se escalan ni se promete un plazo.
+_LOGISTICS_QUESTION = re.compile(
+    r"\b(?:fecha\s+de\s+entrega|d[ií]a\s+de\s+entrega|plazo\s+de\s+entrega|"
+    r"tiempo\s+de\s+entrega|cu[aá]ndo\s+(?:llega|llegan|me\s+la\s+traes|"
+    r"me\s+lo\s+traes|la\s+traes|lo\s+traes|me\s+llega|lo\s+recibo)|"
+    r"cu[aá]nto\s+tarda|demora|hacen\s+env[ií]o|tienen\s+env[ií]o|"
+    r"me\s+la\s+traes|me\s+lo\s+traes)\b",
+    re.IGNORECASE,
+)
+
+# F8 (prueba #3): mensajes que en la etapa DONE se responden con el estado del
+# pedido. Una pregunta técnica real sigue su flujo normal.
+_POST_SALE_HINTS = re.compile(
+    r"\b(?:gracias|vale|ok|okay|perfecto|listo|de\s+acuerdo|pedido|orden|"
+    r"entreg\w*|lleg\w*|demora|tarda|cu[aá]ndo|d[oó]nde)\b",
+    re.IGNORECASE,
+)
+
 
 def _is_greeting(text: str) -> bool:
     return bool(_GREETING.match((text or "").strip()))
@@ -595,6 +614,144 @@ def _sale_product(conn, conversation, context: dict) -> dict | None:
         return catalog.get_product(conn, product_id)
     except catalog.NotFound:
         return None
+
+
+def _zone_coverage_outcome(
+    conn, conversation, text: str, product: dict | None, context: dict
+) -> dict | None:
+    """F9 (prueba #3): reject an uncovered zone in the turn it is mentioned.
+
+    Before this, "Soy de la UCI" was ignored (the zone was inactive) and the bot
+    kept quoting the product until the sale failed asking for the address. The
+    check uses inactive zones too: mentioning one is enough to answer honestly.
+    """
+    if product is None:
+        return None
+    zone = catalog.resolve_zone(conn, text or "", active_only=False)
+    if zone is None:
+        return None
+    covered = bool(zone.get("active")) and sales_domain.supplier_covers_zone(
+        conn, product["supplier_id"], int(zone["id"])
+    )
+    if covered:
+        return None
+    guard = _guard_context(product, None, context, product_source="text")
+    reply = prompts.template_variant(
+        "zone_not_covered", context, producto=product["name"]
+    )
+    reply, generator = _safe_template(conn, conversation, reply, guard, "template")
+    return {
+        "reply": reply,
+        "escalate": False,
+        "generator": generator,
+        "escalation_question": None,
+        "stage": "CLOSE",
+    }
+
+
+def _post_sale_outcome(
+    conn, conversation, text: str, intent, product: dict | None, context: dict
+) -> dict | None:
+    """F8 (prueba #3): after the sale, talk about the order, not a new quote.
+
+    DONE used to fall into free composition ("¿Te la traigo en 48h?") and back
+    into quoting. Here the answer only uses the stored sale status; prices and
+    delivery dates are never invented.
+    """
+    if str(context.get("stage") or "").upper() != "DONE":
+        return None
+    order_code = context.get("order_code")
+    if not order_code:
+        return None
+    if intent.intencion == "comprar":
+        # A new purchase starts a new flow, not a post-sale reply.
+        return None
+    if product is not None and context.get("product_id") not in (None, product["id"]):
+        return None
+    if _LIST_REQUEST.search(text or ""):
+        # "¿Qué laptops tienes?" is a new catalog question, not the order.
+        return None
+    if (
+        intent.intencion in ("consulta_dato", "queja", "comparar")
+        and not _POST_SALE_HINTS.search(text or "")
+        and not _LOGISTICS_QUESTION.search(text or "")
+    ):
+        # A real technical/complaint question keeps its normal route (specs and
+        # guardrails); only the post-sale conversation is intercepted here.
+        return None
+
+    sale = None
+    if context.get("sale_id"):
+        try:
+            sale = sales_domain.get_sale(conn, int(context["sale_id"]))
+        except Exception:  # noqa: BLE001 - a missing sale must not block the reply
+            sale = None
+    if sale is None:
+        sale = sales_domain.get_sale_by_code(conn, order_code)
+    status = str((sale or {}).get("status") or "")
+    if status in ("DELIVERED", "SETTLED"):
+        key = "post_sale_delivered"
+    elif status == "CONFIRMED":
+        key = "post_sale_confirmed"
+    elif status == "CANCELLED":
+        key = "sale_cancelled"
+    elif status == "NEEDS_OPERATOR":
+        key = "sale_unavailable"
+    else:
+        key = "post_sale_pending"
+    guard = _guard_context(None, None, context)
+    reply = prompts.template_variant(key, context, order_code=order_code)
+    reply, generator = _safe_template(conn, conversation, reply, guard, "template")
+    return {
+        "reply": reply,
+        "escalate": False,
+        "generator": generator,
+        "escalation_question": None,
+        "stage": "DONE",
+    }
+
+
+def _logistics_outcome(
+    conn, conversation, text: str, product: dict | None, context: dict
+) -> dict | None:
+    """F6 (prueba #3): no prometer una fecha antes de que exista el pedido.
+
+    La fecha de entrega depende de la zona, la dirección y el almacén, así que
+    escalarla cuando aún no hay pedido es una promesa que el TCP no puede
+    cumplir. Solo una venta ya despachada justifica consultar logística; en el
+    resto de etapas se responde que se coordina al confirmar.
+    """
+    if not _LOGISTICS_QUESTION.search(text or ""):
+        return None
+
+    sale = None
+    if context.get("sale_id"):
+        try:
+            sale = sales_domain.get_sale(conn, int(context["sale_id"]))
+        except Exception:  # noqa: BLE001 - a missing sale must not block the reply
+            sale = None
+    if sale is None:
+        sale = sales_domain.active_sale_for_conversation(conn, conversation["id"])
+    if str((sale or {}).get("status") or "") in (
+        "DISPATCHED",
+        "CONFIRMED",
+        "DELIVERED",
+        "SETTLED",
+    ):
+        # El pedido ya existe: `_post_sale_outcome` responde con su estado real.
+        return None
+
+    previous = str(context.get("stage") or "").upper()
+    guard = _guard_context(product, None, context)
+    reply = prompts.template_variant("delivery_coordinated", context)
+    reply, generator = _safe_template(conn, conversation, reply, guard, "template")
+    return {
+        "reply": reply,
+        "escalate": False,
+        "generator": generator,
+        "escalation_question": None,
+        "stage": previous if previous in (*_SALE_STAGES, "DONE") else "QUOTE",
+    }
 
 
 def _offer_product(conn, offer: dict | None) -> dict | None:
@@ -1510,6 +1667,23 @@ async def _run_turn(conn, conversation, turn: dict) -> dict:
             sale_outcome = _offered_alternatives_outcome(
                 conn, conversation, product, offer["kind"], context
             )
+    if sale_outcome is None:
+        # F8 (prueba #3): después de la venta se habla del pedido, no de una
+        # ficha nueva. Va antes de logística y zona: el estado real manda.
+        sale_outcome = _post_sale_outcome(
+            conn, conversation, text, intent, product, context
+        )
+    if sale_outcome is None:
+        # F9 (prueba #3): una zona sin cobertura se rechaza en el turno en que
+        # se menciona, antes de pedir dirección y teléfono.
+        sale_outcome = _zone_coverage_outcome(
+            conn, conversation, text, product, context
+        )
+    if sale_outcome is None:
+        # F6 (prueba #3): la fecha de entrega no se escala antes del pedido.
+        sale_outcome = _logistics_outcome(
+            conn, conversation, text, product, context
+        )
     if sale_outcome is None:
         sale_outcome = _maybe_handle_sale(
             conn, conversation, text, intent, product, context

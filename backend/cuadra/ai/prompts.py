@@ -255,6 +255,33 @@ TEMPLATES = {
         "¿Quieres que te busque otra opción o preferís que lo cancelemos?"
     ),
     "sale_declined": "Sin problema, lo dejamos para cuando quieras. Aquí seguimos.",
+    # F6 (prueba #3): la fecha de entrega depende del pedido; antes de existir
+    # no se promete un plazo ni se escala al TCP.
+    "delivery_coordinated": (
+        "La fecha de entrega se coordina al confirmar el pedido: primero necesito "
+        "tu zona y tu dirección, y el almacén confirma el día. No quiero darte un "
+        "plazo que no pueda cumplir."
+    ),
+    # F9 (prueba #3): zona sin cobertura se rechaza en el turno, antes de pedir
+    # dirección y teléfono.
+    "zone_not_covered": (
+        "Esa zona no la cubre el almacén de {producto}. Si quieres, te busco otra "
+        "opción del catálogo o lo consulto con el almacén."
+    ),
+    # F8 (prueba #3): post-venta cerrada. Solo el pedido y su estado; nunca
+    # precios ni plazos que el almacén no confirmó.
+    "post_sale_pending": (
+        "Tu pedido {order_code} quedó registrado y está pendiente de confirmación "
+        "del almacén. Te aviso cuando me confirme la entrega; si necesitas cambiar "
+        "la dirección o la hora, dímelo por aquí."
+    ),
+    "post_sale_confirmed": (
+        "Tu pedido {order_code} ya está confirmado y en preparación. Te aviso "
+        "cuando el almacén lo entregue."
+    ),
+    "post_sale_delivered": (
+        "Tu pedido {order_code} ya fue entregado. ¡Gracias por confiar en Cuadra!"
+    ),
     "tcp_order": (
         "📦 NUEVA ORDEN — Ref: {order_code}\n\n"
         "Producto: {producto} (ID: {product_id})\n"
