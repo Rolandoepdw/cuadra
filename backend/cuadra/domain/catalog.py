@@ -329,8 +329,9 @@ def delete_zone_alias(conn, alias: str) -> dict:
 # A zone mentioned inside a sentence only counts with delivery context; else
 # common words such as "regla" (a ruler) would be read as the Regla municipality.
 _ZONE_HINT_RE = re.compile(
-    r"\b(vivo|vive|resido|reside|estoy en|entrega|entregar|env[ií]o|enviar|"
-    r"zona|municipio|direcci[oó]n|domicilio|reparto|llevar|mandar)\b",
+    r"\b(vivo|vive|resido|reside|radico|radica|estoy en|soy de|somos de|"
+    r"es de|ubicad[oa] en|entrega|entregar|env[ií]o|enviar|"
+    r"zona|municipio|direcci[oó]n|domicilio|reparto|llevar|mandar|mi casa)\b",
     re.IGNORECASE,
 )
 
@@ -1132,6 +1133,37 @@ def category_terms(text: str) -> list[str]:
     ("laptops", not "laptop"); `category_products` singularizes internally.
     """
     return _words(text)
+
+
+def narrow_products(products: list[dict], query: str, *, exclude: str = "") -> list[dict]:
+    """Keep the products whose name matches every extra word in `query`.
+
+    F14 (prueba #4): "laptops gaming" is a category plus a qualifier. The
+    category lists three laptops; the qualifier must narrow the list to the
+    gamer one instead of answering about the cheapest laptop. If no product
+    matches, the original list is returned (the caller can still show it).
+    """
+    skip = _fold(exclude)
+    words = [word for word in _words(query) if word != skip and len(word) >= 4]
+    if not words or not products:
+        return list(products)
+    kept = []
+    for product in products:
+        tokens = _tokens(product["name"])
+        if all(_word_matches(word, tokens) for word in words):
+            kept.append(product)
+    return kept or list(products)
+
+
+def _word_matches(word: str, tokens: set[str]) -> bool:
+    prefix = word[:3] if len(word) >= 5 else word[:4]
+    for token in tokens:
+        token_prefix = token[:3] if len(token) >= 5 else token[:4]
+        if token.startswith(prefix) or word.startswith(token_prefix):
+            return True
+        if difflib.SequenceMatcher(None, word, token).ratio() >= 0.7:
+            return True
+    return False
 
 
 def delivery_zone_names(conn, supplier_id: int) -> list[str]:

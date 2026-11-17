@@ -1074,8 +1074,10 @@ class ReplyWordingTests(Phase1TestCase):
         self._turn("Hola, buenas", llm.Intent(intencion="otro", confianza=0.9))
         body = self._outbound()[-1]
         # F7 (prueba #2): el saludo recibe un saludo, no la plantilla de producto.
-        self.assertEqual(body, prompts.TEMPLATES["greeting"])
+        # F13 (prueba #4): dentro del cooldown no se repite "¡Buenas!".
         self.assertNotIn("Power Bank", body)
+        self.assertNotIn("Buenas", body)
+        self.assertIn("ayudo", body)
 
     def test_greeting_does_not_list_every_zone(self):
         self._link_zones([f"Zona {index}" for index in range(1, 5)])
@@ -2241,6 +2243,352 @@ class LogisticsZonePostSaleTests(Phase1TestCase):
         finally:
             conn.close()
         self.assertEqual(zone["id"], 2)
+
+
+class ConversationPolishTests(Phase1TestCase):
+    """Prueba #4: saludos repetidos, mensajes banales, stock y alternativas."""
+
+    def setUp(self):
+        super().setUp()
+        conn = db.connect()
+        try:
+            conn.executemany(
+                "INSERT INTO zones (id, name, active) VALUES (?, ?, ?)",
+                [(1, "San Miguel", 1), (2, "UCI", 0)],
+            )
+            conn.execute(
+                """INSERT INTO supplier_delivery_zones (supplier_id, zone_id)
+                   VALUES (1, 1)"""
+            )
+            conn.executemany(
+                """INSERT INTO products
+                   (id, supplier_id, name, price, currency, commission, stock, status)
+                   VALUES (?, 1, ?, ?, 'USD', 1, ?, 'ACTIVE')""",
+                [
+                    (10, "Laptop Gamer RTX 4060", 1100.0, 1),
+                    (11, "Laptop Empresarial", 350.0, 5),
+                    (12, "Laptop Ultraligera", 720.0, 5),
+                    (13, "Monitor LED 24", 180.0, 5),
+                    (14, "Tablet Android 10", 220.0, 5),
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    # --------------------------------------------------------------- helpers
+
+    def _turn(self, text: str, intent) -> None:
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)):
+            self._ingest(text)
+            self._make_due()
+            self._run_process()
+
+    def _outbound(self) -> list[str]:
+        return [
+            row["body"]
+            for row in self._rows(
+                "SELECT body FROM messages WHERE direction = 'OUTBOUND' ORDER BY id"
+            )
+        ]
+
+    def _store_facts(self) -> int:
+        conn = db.connect()
+        try:
+            customer = conversations.get_or_create_customer(
+                conn, "telegram", "55500001", "Cliente"
+            )
+            conversation = conversations.get_or_create_open_conversation(
+                conn, customer["id"], "telegram", identity="bot"
+            )
+            conversation_id = conversation["id"]
+            for key, value in (
+                (memory.FACT_ZONE, "San Miguel"),
+                (memory.FACT_ADDRESS, "Calle 10 numero 123"),
+                (memory.FACT_PHONE, "+5355500001"),
+                (memory.FACT_CUSTOMER_NAME, "Rolando"),
+            ):
+                memory.upsert_fact(conn, conversation_id, key, value)
+            return conversation_id
+        finally:
+            conn.close()
+
+    def _conversation_id(self) -> int:
+        return self._store_facts()
+
+    def _context(self) -> dict:
+        conn = db.connect()
+        try:
+            return conversations.get_context(conn, self._conversation_id())
+        finally:
+            conn.close()
+
+    def _sale(self, status: str = "PENDING_DISPATCH") -> dict:
+        conversation_id = self._store_facts()
+        conn = db.connect()
+        try:
+            sale = sales.create_sale(
+                conn,
+                conversation_id=conversation_id,
+                customer_id=1,
+                product_id=1,
+                quantity=1,
+                recipient_name="Rolando",
+                delivery_zone="San Miguel",
+                delivery_address="Calle 10 numero 123",
+                customer_phone="+5355500001",
+            )
+            if sale["status"] != status:
+                conn.execute(
+                    "UPDATE sales SET status = ? WHERE id = ?", (status, sale["id"])
+                )
+                conn.commit()
+                sale = sales.get_sale(conn, sale["id"])
+            return sale
+        finally:
+            conn.close()
+
+    def _set_context(self, context: dict) -> None:
+        conn = db.connect()
+        try:
+            conversations.set_context(conn, self._conversation_id(), context)
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------ F12 (banales)
+
+    def test_banal_classifier_only_matches_the_whole_message(self):
+        self.assertEqual(pipeline._banal_kind("gracias"), "thanks")
+        self.assertEqual(pipeline._banal_kind("muchas gracias!"), "thanks")
+        self.assertEqual(pipeline._banal_kind("disculpa"), "sorry")
+        self.assertEqual(pipeline._banal_kind("ok, vale"), "ack")
+        self.assertIsNone(pipeline._banal_kind("gracias, ¿y el precio?"))
+        self.assertIsNone(pipeline._banal_kind("si"))
+
+    def test_thanks_after_a_sale_gets_a_banal_reply(self):
+        sale = self._sale()
+        self._set_context(
+            {
+                "stage": "DONE",
+                "sale_id": sale["id"],
+                "order_code": sale["order_code"],
+                "product_id": 1,
+            }
+        )
+        # El NLU real clasificaba "gracias" como comprar; el fast path ni lo llama.
+        with patch(
+            "cuadra.ai.llm.classify_light",
+            new=AsyncMock(
+                return_value=llm.Intent(
+                    intencion="comprar", producto="Power Bank", confianza=0.95
+                )
+            ),
+        ) as classify_light:
+            self._ingest("gracias")
+            self._make_due()
+            self._run_process()
+        body = self._outbound()[-1]
+        self.assertIn(body, prompts.TEMPLATE_VARIANTS["banal_thanks"])
+        self.assertNotIn(sale["order_code"], body)
+        self.assertNotIn("quedó registrado", body)
+        self.assertEqual(classify_light.await_count, 0)
+        self.assertEqual(self._context().get("stage"), "DONE")
+
+    def test_banal_message_does_not_create_a_sale(self):
+        self._store_facts()
+        self._turn(
+            "ok",
+            llm.Intent(intencion="comprar", producto="Power Bank", confianza=0.95),
+        )
+        self.assertEqual(self._scalar("SELECT COUNT(*) FROM sales"), 0)
+        self.assertIn(self._outbound()[-1], prompts.TEMPLATE_VARIANTS["banal_ack"])
+
+    # ------------------------------------------------------ F13 (saludos)
+
+    def test_product_quote_does_not_greet_twice(self):
+        self._turn(
+            "precio del Power Bank",
+            llm.Intent(
+                intencion="consulta_precio", producto="Power Bank", confianza=0.95
+            ),
+        )
+        self._turn(
+            "precio del Power Bank",
+            llm.Intent(
+                intencion="consulta_precio", producto="Power Bank", confianza=0.95
+            ),
+        )
+        bodies = self._outbound()
+        self.assertTrue(bodies[0].startswith("¡Buenas!"))
+        self.assertNotIn("Buenas", bodies[1])
+
+    def test_greeting_typos_are_recognized(self):
+        for text in ("buens tardes", "bueas tardes", "buens dias"):
+            self.assertTrue(pipeline._is_greeting(text), text)
+
+    def test_second_greeting_within_cooldown_does_not_repeat_buenas(self):
+        self._turn("Hola", llm.Intent(intencion="otro", confianza=0.9))
+        self._turn("buens tardes", llm.Intent(intencion="otro", confianza=0.9))
+        bodies = self._outbound()
+        self.assertIn("Buenas", bodies[0])
+        self.assertNotIn("Buenas", bodies[1])
+        self.assertIn("ayudo", bodies[1])
+
+    # ------------------------------------------------------ F14 (stock)
+
+    def test_quantity_above_stock_says_how_many_remain(self):
+        self._store_facts()
+        self._turn(
+            "quiero 5 laptop gaming",
+            llm.Intent(
+                intencion="comprar",
+                producto="laptop gaming",
+                cantidad=5,
+                confianza=0.95,
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("solo me queda 1", body)
+        self.assertNotIn("Monitor LED", body)
+        self.assertNotIn("Tablet Android", body)
+        self.assertEqual(self._scalar("SELECT COUNT(*) FROM sales"), 0)
+        self.assertEqual(self._context().get("sale_qty"), 1)
+
+    def test_confirming_the_remaining_unit_creates_a_one_unit_sale(self):
+        self._store_facts()
+        self._turn(
+            "quiero 5 laptop gaming",
+            llm.Intent(
+                intencion="comprar",
+                producto="laptop gaming",
+                cantidad=5,
+                confianza=0.95,
+            ),
+        )
+        self._turn("Si", llm.Intent(intencion="otro", confianza=0.9))
+        sales_rows = self._rows("SELECT quantity, product_id FROM sales")
+        self.assertEqual(len(sales_rows), 1)
+        self.assertEqual(sales_rows[0]["quantity"], 1)
+        self.assertEqual(sales_rows[0]["product_id"], 10)
+
+    def test_stock_question_answers_the_available_quantity(self):
+        self._store_facts()
+        self._turn(
+            "quiero 5 laptop gaming",
+            llm.Intent(
+                intencion="comprar",
+                producto="laptop gaming",
+                cantidad=5,
+                confianza=0.95,
+            ),
+        )
+        self._turn(
+            "cuantas puedo comprar",
+            llm.Intent(intencion="consulta_stock", confianza=0.95),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("me queda 1", body)
+        self.assertIn("Laptop Gamer", body)
+
+    def test_category_plus_qualifier_answers_stock(self):
+        self._turn(
+            "Quiero comprar laptops gaming, que cantidad tienes en stock",
+            llm.Intent(
+                intencion="consulta_stock",
+                producto="laptops gaming",
+                confianza=0.95,
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("Laptop Gamer", body)
+        self.assertIn("1 unidad", body)
+        self.assertNotIn("Laptop Empresarial", body)
+
+    # ------------------------------------------- F13/F14 (catálogo)
+
+    def test_offers_of_laptops_lists_the_family(self):
+        self._turn(
+            "Que ofertas de laptops tienes",
+            llm.Intent(
+                intencion="consulta_precio", producto="laptop", confianza=0.95
+            ),
+        )
+        body = self._outbound()[-1]
+        for name in ("Laptop Empresarial", "Laptop Ultraligera", "Laptop Gamer"):
+            self.assertIn(name, body)
+        self.assertIn("¿Cuál te interesa?", body)
+
+    def test_no_other_model_lists_same_family_siblings(self):
+        self._set_context({"stage": "QUOTE", "product_id": 11})
+        self._turn(
+            "No tienes mas ningun tipo q no sea la empresarial",
+            llm.Intent(
+                intencion="consulta_stock",
+                producto="Laptop Empresarial",
+                confianza=0.95,
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("Laptop Ultraligera", body)
+        self.assertIn("Laptop Gamer", body)
+        self.assertNotIn("Monitor LED", body)
+        self.assertNotIn("Tablet Android", body)
+
+    # ------------------------------------------------------ F15 (specs)
+
+    def test_escalation_dedupes_processor_topics(self):
+        self._turn(
+            "Que microprocesador tiene",
+            llm.Intent(
+                intencion="consulta_dato",
+                producto="Laptop Gamer",
+                datos_faltantes=["microprocesador", "procesador"],
+                confianza=0.95,
+            ),
+        )
+        question = self._rows("SELECT question FROM escalations")[0]["question"]
+        self.assertIn("procesador", question)
+        self.assertNotIn("microprocesador", question)
+        self.assertEqual(question.count("procesador"), 1)
+
+    # ------------------------------------------- F16 (specs inventadas)
+
+    def test_guard_context_exposes_specs_from_a_search_row(self):
+        # `find_product` devuelve la fila SQL cruda: solo trae
+        # `specifications_json`. Sin normalizarla, `check_specs` no veía las
+        # especificaciones y dejaba pasar datos inventados (mensaje 14).
+        conn = db.connect()
+        try:
+            conn.execute(
+                "UPDATE products SET specifications_json = ? WHERE id = 10",
+                (json.dumps({"memoria RAM": "16 GB"}),),
+            )
+            conn.commit()
+            row = catalog.find_product(conn, "Laptop Gamer RTX 4060")
+            self.assertNotIn("specifications", row)
+            guard = pipeline._guard_context(row, None, {})
+            self.assertEqual(guard["product"]["specifications"], {"memoria RAM": "16 GB"})
+            self.assertTrue(guardrails.check_specs("Tiene 16 GB de RAM.", guard))
+            self.assertFalse(
+                guardrails.check_specs("Tiene una pantalla de 15 pulgadas.", guard)
+            )
+        finally:
+            conn.close()
+
+    # ------------------------------------------------------ F9 (zona)
+
+    def test_soy_de_an_inactive_zone_is_rejected(self):
+        self._turn(
+            "Perfecto, soy de la UCI, calle 45 entre 12 y Calixto, numero 1222, 56476666",
+            llm.Intent(
+                intencion="consulta_precio",
+                producto="Laptop Gamer",
+                confianza=0.95,
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("no la cubre", body)
+        self.assertEqual(self._scalar("SELECT COUNT(*) FROM sales"), 0)
 
 
 if __name__ == "__main__":

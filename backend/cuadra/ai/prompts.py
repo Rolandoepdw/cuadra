@@ -7,7 +7,8 @@ clientes a encontrar, comparar y comprar productos.
 
 REGLAS DE VOZ
 - Español neutro con soltura cubana educada. Jamás "Estimado usuario" ni lenguaje corporativo frío.
-- Saluda breve: "¡Buenas!", "¡Qué tal!", "¡Hola!".
+- No saludes en cada mensaje. Saluda solo al inicio de la conversación o si el
+  cliente te saluda; en el resto responde directo, sin "¡Buenas!" repetido.
 - Máximo 3 párrafos cortos. Los clientes leen en el móvil.
 - Sin emojis en exceso (0-2 por mensaje, solo si el cliente los usa primero).
 - No repitas literalmente lo que ya dijiste en la misma conversación. Si ya preguntaste
@@ -89,6 +90,9 @@ Ejemplos:
 "me llevo dos tablets" -> {"intencion": "comprar", "producto": "tablet", "datos_faltantes": [], "confianza": 0.95, "cantidad": 2}
 "quiero 3 laptops" -> {"intencion": "comprar", "producto": "laptop", "datos_faltantes": [], "confianza": 0.95, "cantidad": 3}
 "hola buenas" -> {"intencion": "otro", "producto": null, "datos_faltantes": [], "confianza": 1.0, "cantidad": null}
+"gracias" -> {"intencion": "otro", "producto": null, "datos_faltantes": [], "confianza": 1.0, "cantidad": null}
+"disculpa, fue mi error" -> {"intencion": "otro", "producto": null, "datos_faltantes": [], "confianza": 1.0, "cantidad": null}
+"ok, vale" -> {"intencion": "otro", "producto": null, "datos_faltantes": [], "confianza": 1.0, "cantidad": null}
 """
 
 # NLU ligero: prompt mínimo para clasificación de intención. Se usa en lugar del
@@ -105,6 +109,8 @@ Responde SOLO con JSON:
 - datos_faltantes: lista vacía salvo que pregunte un dato concreto del producto.
 - confianza: 0.9-1.0 clara, 0.6-0.89 probable, 0.3-0.59 ambigua, <0.3 no se entiende.
 - cantidad: número de unidades si el cliente quiere comprar algo (ej. "dos tablets" -> 2, "quiero 3" -> 3), null si no especifica cantidad o no es una compra.
+- Los mensajes banales ("gracias", "disculpa", "ok", "vale", "perfecto") son
+  "otro": no son una compra ni una consulta de producto.
 
 MENSAJE DEL CLIENTE:
 {text}
@@ -138,16 +144,16 @@ TRANSPORT_CLAUSES = {
 }
 TEMPLATES = {
     "greeting_product": (
-        "¡Buenas! Sí, tenemos {producto}. Está en {precio} {moneda}."
+        "Sí, tenemos {producto}. Está en {precio} {moneda}."
         "{transporte_clause} Entregamos en {zona}{zona_clause}."
     ),
     "missing_data_escalate": (
-        "Buenas. Ese detalle no lo tengo a mano, pero le consulto al almacén ahora mismo "
+        "Ese detalle no lo tengo a mano, pero le consulto al almacén ahora mismo "
         "y te confirmo en un rato. Mientras tanto, ¿te interesa que te reserve uno?"
     ),
     "out_of_stock": (
-        "Ese se nos fue por ahora. Tengo {alternativa_1} en {precio_1} {moneda_1}"
-        "{segunda} ¿Te echo un vistazo a alguna?"
+        "Por ahora no me queda ninguna unidad de {producto}. Tengo {alternativa_1} en "
+        "{precio_1} {moneda_1}{segunda} ¿Te interesa alguna?"
     ),
     "ask_which_product": (
         "Dime cuál producto te interesa y te paso precio y "
@@ -174,11 +180,11 @@ TEMPLATES = {
         "Para dejarte el pedido listo me falta {dato}. ¿Me lo pasas?"
     ),
     "fallback_product": (
-        "¡Buenas! Sí, tenemos {producto}. Está en {precio} {moneda}. "
+        "Sí, tenemos {producto}. Está en {precio} {moneda}. "
         "¿Te reservo uno y coordinamos la entrega?"
     ),
     "escalation_question": (
-        "Buenas, te escribo de Cuadra. Consulta sobre tu producto ref: "
+        "Te escribo de Cuadra. Consulta sobre tu producto ref: "
         "[E-{escalation_id:04d}]\n"
         "Producto: {producto}\n"
         "\"{pregunta}\"\n\n"
@@ -186,43 +192,43 @@ TEMPLATES = {
         "[E-{escalation_id:04d}]. Gracias."
     ),
     "escalation_resolved": (
-        "¡Buenas! Ya me confirmó el almacén: {respuesta} ¿Te reservo {producto} y "
+        "Ya me confirmó el almacén: {respuesta} ¿Te reservo {producto} y "
         "coordinamos la entrega?"
     ),
     "escalation_resolved_summary": (
-        "¡Buenas! Ya me confirmó el almacén: {respuesta} ¿Te reservo {producto} y "
+        "Ya me confirmó el almacén: {respuesta} ¿Te reservo {producto} y "
         "coordinamos la entrega?"
     ),
     "escalation_resolved_out_of_stock": (
-        "¡Buenas! Ya me confirmó el almacén: {respuesta} Por ahora no tenemos "
+        "Ya me confirmó el almacén: {respuesta} Por ahora no tenemos "
         "unidades; ¿quieres que te avise cuando vuelva a entrar?"
     ),
     "escalation_resolved_out_of_stock_known": (
-        "¡Buenas! Ya me confirmó el almacén: {respuesta} ¿Quieres que te avise "
+        "Ya me confirmó el almacén: {respuesta} ¿Quieres que te avise "
         "cuando vuelva a entrar?"
     ),
     "escalation_resolved_generic": (
-        "¡Buenas! Ya me confirmó el almacén que sí está disponible. ¿Te reservo "
+        "Ya me confirmó el almacén que sí está disponible. ¿Te reservo "
         "{producto} y coordinamos la entrega?"
     ),
     "escalation_resolved_generic_out_of_stock": (
-        "¡Buenas! Ya me confirmó el almacén. Por ahora no tenemos unidades de "
+        "Ya me confirmó el almacén. Por ahora no tenemos unidades de "
         "{producto}; ¿quieres que te avise cuando vuelva a entrar?"
     ),
     "escalation_unconfirmed": (
-        "Buenas. Sigo esperando que el almacén me confirme ese dato; te aviso "
+        "Sigo esperando que el almacén me confirme ese dato; te aviso "
         "en cuanto me responda."
     ),
     "mutation_rejected": (
-        "Buenas. No pude confirmar ese dato con el almacén, así que no te lo doy "
+        "No pude confirmar ese dato con el almacén, así que no te lo doy "
         "por bueno. Si quieres, lo intento de nuevo más tarde."
     ),
     "mutation_reverted": (
-        "Buenas. Corrijo lo que te dije: {producto} vuelve a estar en {precio} "
+        "Corrijo lo que te dije: {producto} vuelve a estar en {precio} "
         "{moneda}. Si quieres, te lo confirmo de nuevo antes de reservar."
     ),
     "mutation_reverted_generic": (
-        "Buenas. Corrijo lo que te dije: el dato anterior vuelve a estar vigente. "
+        "Corrijo lo que te dije: el dato anterior vuelve a estar vigente. "
         "Si quieres, te lo confirmo de nuevo antes de reservar."
     ),
     "sale_ask_data": (
@@ -255,6 +261,33 @@ TEMPLATES = {
         "¿Quieres que te busque otra opción o preferís que lo cancelemos?"
     ),
     "sale_declined": "Sin problema, lo dejamos para cuando quieras. Aquí seguimos.",
+    # F12 (prueba #4): un mensaje banal ("gracias", "disculpa", "ok") recibe una
+    # respuesta banal y no vuelve a hablar del pedido ni de la ficha del producto.
+    "banal_thanks": "¡De nada! Aquí estoy para lo que necesites.",
+    "banal_sorry": "No hay problema. Cuando quieras seguimos.",
+    "banal_ack": "Perfecto. Aquí sigo pendiente.",
+    # F13 (prueba #4): después de un saludo reciente no se vuelve a saludar.
+    "greeting_again": (
+        "¿En qué te ayudo? Dime qué producto buscas y te paso precio y "
+        "disponibilidad al momento."
+    ),
+    # F14 (prueba #4): responder cuántas unidades quedan, sin inventar stock.
+    "stock_available_one": (
+        "De {producto} me queda 1 unidad disponible a {precio} {moneda}. "
+        "¿Te la reservo?"
+    ),
+    "stock_available": (
+        "De {producto} me quedan {cantidad} unidades disponibles a {precio} "
+        "{moneda}. ¿Te reservo {cantidad}?"
+    ),
+    "stock_short_one": (
+        "De {producto} solo me queda 1 unidad ahora mismo. ¿Te sirve una o le "
+        "pregunto al almacén si entra más?"
+    ),
+    "stock_short_many": (
+        "De {producto} solo me quedan {cantidad} unidades ahora mismo. ¿Te "
+        "sirven {cantidad} o le pregunto al almacén si entra más?"
+    ),
     # F6 (prueba #3): la fecha de entrega depende del pedido; antes de existir
     # no se promete un plazo ni se escala al TCP.
     "delivery_coordinated": (
@@ -334,11 +367,11 @@ TEMPLATE_VARIANTS = {
         "entrega.",
     ],
     "greeting_product": [
-        "¡Buenas! Sí, tenemos {producto}. Está en {precio} {moneda}."
+        "Sí, tenemos {producto}. Está en {precio} {moneda}."
         "{transporte_clause} Entregamos en {zona}{zona_clause}.",
-        "¡Buenas! Sí, lo tenemos: {producto} a {precio} {moneda}."
+        "Sí, lo tenemos: {producto} a {precio} {moneda}."
         "{transporte_clause} Llegamos a {zona}{zona_clause}.",
-        "¡Buenas! {producto}, {precio} {moneda}. {transporte_clause} Entrega en {zona}{zona_clause}.",
+        "{producto}, {precio} {moneda}. {transporte_clause} Entrega en {zona}{zona_clause}.",
     ],
     "ask_which_product": [
         "Dime cuál producto te interesa y te paso precio y "
@@ -374,16 +407,16 @@ TEMPLATE_VARIANTS = {
         "Falta {dato} para cerrar el pedido. ¿Me lo das?",
     ],
     "fallback_product": [
-        "¡Buenas! Sí, tenemos {producto}. Está en {precio} {moneda}. "
+        "Sí, tenemos {producto}. Está en {precio} {moneda}. "
         "¿Te reservo uno y coordinamos la entrega?",
-        "¡Buenas! {producto} a {precio} {moneda}. ¿Te lo reservo?",
-        "¡Buenas! Sí, {producto}, {precio} {moneda}. ¿Quieres que lo reserve?",
+        "{producto} a {precio} {moneda}. ¿Te lo reservo?",
+        "Sí, {producto}, {precio} {moneda}. ¿Quieres que lo reserve?",
     ],
     "sale_ask_data": [
         "Son {total} {moneda} por {cantidad} x {producto}. Todavía me falta "
         "{faltan} para dejarlo listo. ¿Me lo pasas?",
         "{producto} x{cantidad}: {total} {moneda}. Me falta {faltan} para cerrar "
-        "el pedido. ¿Me los pasas?",
+        "el pedido. ¿Me pasas el dato?",
         "Te lo dejo en {total} {moneda} ({cantidad} x {producto}). Me falta "
         "{faltan}. ¿Me lo pasas?",
     ],
@@ -398,6 +431,45 @@ TEMPLATE_VARIANTS = {
     "sale_declined": [
         "Sin problema, lo dejamos para cuando quieras. Aquí seguimos.",
         "Entendido, no lo registro. Si más adelante lo quieres, me dices.",
+    ],
+    "banal_thanks": [
+        "¡De nada! Aquí estoy para lo que necesites.",
+        "Con gusto. Cuando quieras seguimos.",
+        "No hay de qué. Aquí sigo pendiente.",
+    ],
+    "banal_sorry": [
+        "No hay problema. Cuando quieras seguimos.",
+        "Tranquilo, no pasa nada. Aquí estoy.",
+        "No te preocupes. Dime cuando quieras continuar.",
+    ],
+    "banal_ack": [
+        "Perfecto. Aquí sigo pendiente.",
+        "Bien, cuando quieras seguimos.",
+        "Entendido. Aquí estoy para lo que necesites.",
+    ],
+    "greeting_again": [
+        "¿En qué te ayudo? Dime qué producto buscas y te paso precio y "
+        "disponibilidad al momento.",
+        "Aquí estoy. ¿Qué producto te interesa?",
+        "Dime qué necesitas y te ayudo con precio y disponibilidad.",
+    ],
+    "stock_available": [
+        "De {producto} me quedan {cantidad} unidades disponibles a {precio} "
+        "{moneda}. ¿Te reservo {cantidad}?",
+        "Tengo {cantidad} unidades de {producto} a {precio} {moneda}. ¿Cuántas "
+        "te aparto?",
+        "Quedan {cantidad} de {producto}, a {precio} {moneda}. ¿Te reservo?",
+    ],
+    "stock_short_one": [
+        "De {producto} solo me queda 1 unidad ahora mismo. ¿Te sirve una o le "
+        "pregunto al almacén si entra más?",
+        "Me queda una sola unidad de {producto}. ¿Te la aparto?",
+    ],
+    "stock_short_many": [
+        "De {producto} solo me quedan {cantidad} unidades ahora mismo. ¿Te "
+        "sirven {cantidad} o le pregunto al almacén si entra más?",
+        "Me quedan {cantidad} unidades de {producto}. ¿Te aparto esas o consulto "
+        "si entra más?",
     ],
 }
 
