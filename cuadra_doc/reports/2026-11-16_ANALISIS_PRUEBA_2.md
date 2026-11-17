@@ -210,9 +210,9 @@ La confirmación dice «para RolandoEPD» (username). Conviene pedir/confirmar e
 | 8 | Endurecer `_extract_address` y no sobrescribir dirección válida | F6 | Alto | Hecho (bloque A) |
 | 9 | `consulta_dato` con producto: alternativas o respuesta directa | F4 | Alto | Hecho (bloque B) |
 | 10 | Ruta de saludo determinista | F7 | Medio | Hecho (bloque B) |
-| 11 | Un trace por turno con `duration_ms` | F8 | Medio | Pendiente (bloque C) |
-| 12 | Silenciar APScheduler en `cuadra.log` | F9 | Medio | Pendiente (bloque C) |
-| 13 | Usar `compose` para preguntas abiertas | F10 | Medio | Pendiente (bloque C) |
+| 11 | Un trace por turno con `duration_ms` | F8 | Medio | Hecho (bloque C) |
+| 12 | Silenciar APScheduler en `cuadra.log` | F9 | Medio | Hecho (bloque C) |
+| 13 | Usar `compose` para preguntas abiertas | F10 | Medio | Hecho (bloque C) |
 
 **Criterio de aceptación para el re-test:** repetir este mismo guion y obtener **1 venta con cantidad 3**, sin ninguna respuesta repetida literal y sin pedir dos veces el mismo dato.
 
@@ -220,3 +220,18 @@ La confirmación dice «para RolandoEPD» (username). Conviene pedir/confirmar e
 reales del NLU sobre una BD temporal → 1 venta (`quantity=3`, `amount=1050`,
 zona Playa, dirección correcta), **10 respuestas distintas de 10**, ningún dato
 pedido dos veces y ninguna venta perdida. Suite: 306 tests OK.
+
+**Estado al cerrar el bloque C (2026-11-16):**
+
+- **F8:** `handle_turn` produce **un solo trace** `pipeline.handle_turn` por turno,
+  con `duration_ms` (y otro `ok=0` si el turno revienta). La «latencia media» del
+  dashboard ahora promedia el turno completo; el LLM se mide aparte (`avg_llm_ms`).
+- **F9:** `apscheduler`, `httpx` y `telethon.network` en `WARNING`. Tras reiniciar,
+  `cuadra.log` ya no repite el tick de 5 s; los mensajes de negocio se leen.
+- **F10:** el compositor se usa en preguntas abiertas (`consulta_dato` sin dato del
+  proveedor, queja, comparación, tema libre) con guardrails y **fallback
+  determinista** si el modelo falla. Sonda en vivo: «¿De qué color es y cuánta RAM
+  trae?» → `generator=llm`, `compose_ms=2816`, respuesta con `negro` y `8 GB` del
+  catálogo. Los pasos transaccionales siguen en plantillas (8 ms el mismo turno).
+- **Suite:** 310 tests OK. Replay del guion #2: 10/10 respuestas distintas, 1 venta
+  `quantity=3`, `amount=1050`, zona Playa, dirección correcta.

@@ -523,6 +523,7 @@ export interface MetricsSummary {
   total_traces_today: number;
   failed_traces_today: number;
   avg_duration_ms: number | null;
+  avg_llm_ms: number | null;
   stuck_sales_dispatched: number;
   open_escalations: number;
   ambiguous_acks_today: number;

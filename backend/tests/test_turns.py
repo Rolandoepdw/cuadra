@@ -448,7 +448,13 @@ class ReplyOutboxTests(Phase1TestCase):
         # returns the orphaned PROCESSING turn to OPEN.
         queue.requeue_in_progress()
         self.assertEqual(assembler.recover_open(), 1)
-        self._run_process()
+        # El turno se vuelve a clasificar: el NLU va mockeado para que la suite
+        # no dependa de un servidor de modelo vivo.
+        intent = llm.Intent(intencion="consulta_precio", confianza=0.95)
+        with patch(
+            "cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)
+        ):
+            self._run_process()
 
         # The model may run again, but the deterministic outbound key
         # (`turn:<id>`) keeps a single message in the conversation.
@@ -1748,6 +1754,75 @@ class CatalogConversationTests(Phase1TestCase):
         body = self._outbound()[-1]
         self.assertEqual(body, prompts.TEMPLATES["greeting"])
         self.assertIn("Buenas", body)
+
+    # ----------------------------------------------------------------- F10
+
+    def _ask_about_the_power_bank(self, reply: str):
+        """Turno 1 fija el producto; turno 2 es una pregunta abierta."""
+        self._turn(
+            "precio del Power Bank",
+            llm.Intent(
+                intencion="consulta_precio", producto="Power Bank", confianza=0.95
+            ),
+        )
+        with patch("cuadra.ai.llm.compose", new=AsyncMock(return_value=reply)) as compose:
+            self._turn(
+                "¿de qué color es?",
+                llm.Intent(intencion="consulta_dato", confianza=0.9),
+            )
+        return compose
+
+    def test_an_open_product_question_uses_the_composer(self):
+        compose = self._ask_about_the_power_bank("El Power Bank viene en negro.")
+        self.assertEqual(compose.await_count, 1)
+        self.assertEqual(self._outbound()[-1], "El Power Bank viene en negro.")
+
+    def test_the_composer_keeps_the_guardrails(self):
+        # Un término interno invalida la respuesta: un reintento correctivo y,
+        # si insiste, la plantilla determinista. Nunca llega al cliente.
+        compose = self._ask_about_the_power_bank(
+            "El Power Bank cuesta 12 y la comisión es 3."
+        )
+        self.assertEqual(compose.await_count, 2)
+        body = self._outbound()[-1]
+        self.assertNotIn("comisión", body)
+        self.assertIn("Power Bank", body)
+
+    def test_a_composer_outage_does_not_leave_the_customer_silent(self):
+        self._turn(
+            "precio del Power Bank",
+            llm.Intent(
+                intencion="consulta_precio", producto="Power Bank", confianza=0.95
+            ),
+        )
+        with patch(
+            "cuadra.ai.llm.compose",
+            new=AsyncMock(side_effect=llm.LLMUnavailable("down")),
+        ):
+            self._turn(
+                "¿de qué color es?",
+                llm.Intent(intencion="consulta_dato", confianza=0.9),
+            )
+        body = self._outbound()[-1]
+        self.assertIn("Power Bank", body)
+        self.assertIn("dato", body)
+
+    # ------------------------------------------------------------------ F8
+
+    def test_one_trace_per_turn_with_duration(self):
+        self._turn(
+            "precio del Power Bank",
+            llm.Intent(
+                intencion="consulta_precio", producto="Power Bank", confianza=0.95
+            ),
+        )
+        rows = self._rows(
+            "SELECT duration_ms, output_json FROM traces "
+            "WHERE method = 'pipeline.handle_turn'"
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertIsNotNone(rows[0]["duration_ms"])
+        self.assertIn('"generator"', rows[0]["output_json"])
 
 
 if __name__ == "__main__":

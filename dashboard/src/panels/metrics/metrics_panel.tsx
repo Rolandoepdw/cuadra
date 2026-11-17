@@ -73,7 +73,11 @@ export function MetricsPanel() {
               : "—"
           }
           icon={Clock}
-          subtitle="Tiempo medio por traza"
+          subtitle={
+            summary?.avg_llm_ms != null
+              ? `Turno completo · LLM ${summary.avg_llm_ms} ms`
+              : "Tiempo medio por turno"
+          }
         />
         <MetricCard
           title="Ventas atascadas"

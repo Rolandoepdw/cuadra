@@ -294,9 +294,22 @@ async def metrics_summary() -> dict:
             "SELECT COUNT(*) FROM traces WHERE created_at >= ? AND created_at < ? AND ok = 0",
             (day_start, day_end),
         )
+        # F8: el turno completo es la única medida que le importa al negocio.
+        # Promediar todas las trazas mezclaba `llm.chat` (segundos) con guardados
+        # de venta (milisegundos). El promedio de LLM queda aparte.
         avg_duration_ms = _scalar(
             conn,
-            "SELECT AVG(duration_ms) FROM traces WHERE created_at >= ? AND created_at < ? AND duration_ms IS NOT NULL",
+            """SELECT AVG(duration_ms) FROM traces
+                WHERE created_at >= ? AND created_at < ?
+                  AND method = 'pipeline.handle_turn'
+                  AND duration_ms IS NOT NULL""",
+            (day_start, day_end),
+        )
+        avg_llm_ms = _scalar(
+            conn,
+            """SELECT AVG(duration_ms) FROM traces
+                WHERE created_at >= ? AND created_at < ?
+                  AND method = 'llm.chat' AND duration_ms IS NOT NULL""",
             (day_start, day_end),
         )
 
@@ -335,6 +348,7 @@ async def metrics_summary() -> dict:
         "total_traces_today": total_traces or 0,
         "failed_traces_today": failed_traces or 0,
         "avg_duration_ms": round(avg_duration_ms, 1) if avg_duration_ms is not None else None,
+        "avg_llm_ms": round(avg_llm_ms, 1) if avg_llm_ms is not None else None,
         "stuck_sales_dispatched": stuck_sales or 0,
         "open_escalations": open_escalations or 0,
         "ambiguous_acks_today": ambiguous_acks or 0,
@@ -351,7 +365,8 @@ async def metrics_timeline(days: int = 7) -> dict:
             """SELECT date(created_at) AS dia,
                       COUNT(*) AS total_traces,
                       SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failed_traces,
-                      ROUND(AVG(duration_ms), 1) AS avg_duration_ms
+                      ROUND(AVG(CASE WHEN method = 'pipeline.handle_turn'
+                                     THEN duration_ms END), 1) AS avg_duration_ms
                  FROM traces
                 WHERE created_at >= datetime('now', ? || ' days')
                 GROUP BY date(created_at)

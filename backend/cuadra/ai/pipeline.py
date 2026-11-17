@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import time
+from typing import Callable
 
 from cuadra import config
 from cuadra.ai import guardrails, llm, memory, prompts, retrieval, tracing
@@ -793,6 +794,76 @@ def _safe_template(conn, conversation, reply: str, guard_context: dict, generato
     return guardrails.fallback_reply(guard_context), "fallback"
 
 
+async def _compose_open(
+    conn,
+    conversation,
+    history: list[dict],
+    context: dict,
+    product: dict | None,
+    text: str,
+    *,
+    extra: str = "",
+    candidates: list[dict] | None = None,
+    guard_context: dict | None = None,
+    fallback: Callable[[], tuple[str, str]] | None = None,
+) -> tuple[str, str]:
+    """Compose a free-form reply for an open question (F10, prueba #2).
+
+    Plantillas para los pasos transaccionales; el compositor solo para lo que
+    una plantilla no puede contestar (un detalle del producto, una queja, una
+    comparación, un tema abierto). Los guardrails corren en cada intento y, si
+    el modelo no está disponible o insiste en violarlos, responde el fallback
+    determinista en vez de dejar al cliente sin respuesta.
+    """
+    messages, prompt_text = _build_base_messages(
+        conn,
+        conversation,
+        history,
+        context,
+        product=product,
+        candidates=candidates,
+        turn_text=text,
+    )
+    guard_context = guard_context or _guard_context(product, candidates, context)
+
+    def _fallback() -> tuple[str, str]:
+        # Se construye solo si hace falta: una plantilla de reserva no debe
+        # consumir una variante ni dejar rastro en el contexto del turno.
+        if fallback is not None:
+            return fallback()
+        return guardrails.fallback_reply(guard_context), "fallback"
+
+    try:
+        reply = await llm.compose(
+            messages, prompt_text, extra=extra, conversation_id=conversation["id"]
+        )
+    except llm.LLMUnavailable:
+        log.warning("compose unavailable; using deterministic reply")
+        return _fallback()
+
+    ok, reason = guardrails.validate_reply(reply, guard_context)
+    if not ok:
+        _log_guardrail(conn, conversation, reason, "retry")
+        correction = "\n".join(
+            part for part in (extra, prompts.GUARDRAIL_CORRECTION) if part
+        )
+        try:
+            reply = await llm.compose(
+                messages,
+                prompt_text,
+                extra=correction,
+                conversation_id=conversation["id"],
+            )
+        except llm.LLMUnavailable:
+            log.warning("compose unavailable on retry; using deterministic reply")
+            return _fallback()
+        ok, reason = guardrails.validate_reply(reply, guard_context)
+        if not ok:
+            _log_guardrail(conn, conversation, reason, "fallback")
+            return _fallback()
+    return reply, "llm"
+
+
 async def _decide(
     conn,
     conversation,
@@ -933,20 +1004,36 @@ async def _decide(
                     "template",
                 )
                 return reply, False, generator, None
-            # No hay datos del proveedor que pedir: preguntar por ese producto,
-            # no por "cuál producto" cuando ya sabemos cuál es.
+            # F10 (prueba #2): el cliente ya preguntó un detalle concreto; la
+            # plantilla "¿qué dato necesitas?" repite la pregunta y suena a
+            # robot. Componer con los datos reales del producto y caer en la
+            # plantilla solo si el modelo falla o viola los guardrails.
             guard_context = _guard_context(
                 product, None, context, product_source=product_source
             )
-            reply = prompts.template_variant(
-                "ask_product_data", context, producto=product["name"]
-            )
-            reply, generator = _safe_template(
+            reply, generator = await _compose_open(
                 conn,
                 conversation,
-                reply,
-                guard_context,
-                "template",
+                history,
+                context,
+                product,
+                text,
+                extra=(
+                    "El cliente pregunta un detalle del producto. Respóndele con "
+                    "la descripción y las especificaciones del PRODUCTO EN JUEGO. "
+                    "Si el dato no está ahí, dilo y ofrece verificarlo con el "
+                    "almacén; nunca lo inventes. No repitas el precio si no lo pidió."
+                ),
+                guard_context=guard_context,
+                fallback=lambda: _safe_template(
+                    conn,
+                    conversation,
+                    prompts.template_variant(
+                        "ask_product_data", context, producto=product["name"]
+                    ),
+                    guard_context,
+                    "template",
+                ),
             )
             return reply, False, generator, None
 
@@ -990,18 +1077,16 @@ async def _decide(
             "El cliente está molesto o insultando. Disculpa brevemente, no te pongas a la defensiva, "
             "y vuelve al asunto comercial con empatía. Máximo 2 párrafos cortos."
         )
-        messages, prompt_text = _build_base_messages(
-            conn, conversation, history, context, product=product, turn_text=text
+        reply, generator = await _compose_open(
+            conn,
+            conversation,
+            history,
+            context,
+            product,
+            text,
+            extra=extra_queja,
+            guard_context=guard_context,
         )
-        reply = await llm.compose(
-            messages, prompt_text, extra=extra_queja, conversation_id=conversation["id"]
-        )
-        ok, reason = guardrails.validate_reply(reply, guard_context)
-        if not ok:
-            reply = guardrails.fallback_reply(guard_context)
-            generator = "fallback"
-        else:
-            generator = "llm"
         return reply, False, generator, None
 
     # Contador de 'otro' consecutivos: rescate del bucle.
@@ -1026,47 +1111,27 @@ async def _decide(
             context["otro_count"] = 0
             conversations.set_context(conn, conversation["id"], context)
 
-    # comparar / queja / otro / low confidence -> careful free generation
+    # comparar / otro / low confidence -> careful free generation (F10)
     candidates = None
     if intent.intencion == "comparar":
         candidates = _comparison_products(conn, text, intent, product)
-    messages, prompt_text = _build_base_messages(
-        conn,
-        conversation,
-        history,
-        context,
-        product=product,
-        candidates=candidates,
-        turn_text=text,
-    )
     extra = ""
     if candidates:
         extra = "El cliente compara productos: usa solo los PRODUCTOS CANDIDATOS que tienes."
     guard_context = _guard_context(
         product, candidates, context, product_source=product_source
     )
-
-    generator = "llm"
-    reply = await llm.compose(
-        messages, prompt_text, extra=extra, conversation_id=conversation["id"]
+    reply, generator = await _compose_open(
+        conn,
+        conversation,
+        history,
+        context,
+        product,
+        text,
+        extra=extra,
+        candidates=candidates,
+        guard_context=guard_context,
     )
-    ok, reason = guardrails.validate_reply(reply, guard_context)
-    if not ok:
-        _log_guardrail(conn, conversation, reason, "retry")
-        correction = "\n".join(
-            part for part in (extra, prompts.GUARDRAIL_CORRECTION) if part
-        )
-        reply = await llm.compose(
-            messages,
-            prompt_text,
-            extra=correction,
-            conversation_id=conversation["id"],
-        )
-        ok, reason = guardrails.validate_reply(reply, guard_context)
-        if not ok:
-            _log_guardrail(conn, conversation, reason, "fallback")
-            reply = guardrails.fallback_reply(guard_context)
-            generator = "fallback"
     return reply, False, generator, None
 
 
@@ -1175,7 +1240,62 @@ async def _classify_light(
 
 
 async def handle_turn(conn, conversation, turn: dict) -> dict:
-    """Run the full pipeline once for a consolidated customer turn."""
+    """Run the full pipeline once for a consolidated customer turn (F8).
+
+    One trace per turn, with `duration_ms`: an extra entry trace with
+    `output: null` used to double the dashboard counter and leave the average
+    latency empty. A failure is traced too, so a crashed turn is never silent.
+    """
+    started = time.perf_counter()
+    turn_messages = _turn_messages(conn, turn)
+    trace_input = {
+        "turn_id": turn.get("id"),
+        "conversation_id": conversation["id"],
+        "text": _turn_text(turn_messages) or "[mensaje sin texto]",
+        "message_count": len(turn_messages),
+    }
+    try:
+        result = await _run_turn(conn, conversation, turn)
+    except Exception as exc:  # noqa: BLE001 - the trace must survive the failure
+        tracing.trace_call(
+            "pipeline.handle_turn",
+            trace_input,
+            None,
+            ok=False,
+            error=str(exc),
+            error_type=type(exc).__name__,
+            duration_ms=(time.perf_counter() - started) * 1000,
+            conversation_id=conversation["id"],
+            turn_id=turn.get("id"),
+        )
+        raise
+
+    intent = result.get("intent") or {}
+    tracing.trace_call(
+        "pipeline.handle_turn",
+        trace_input,
+        {
+            "reply": result["reply"][:500] if result.get("reply") else None,
+            "intent": intent.get("intencion"),
+            "confianza": intent.get("confianza"),
+            "generator": result.get("generator"),
+            "stage": result.get("stage"),
+            "sale_id": result.get("sale_id"),
+            "sale_status": result.get("sale_status"),
+            "escalate": result.get("escalate"),
+            "intent_ms": result.get("intent_ms"),
+            "compose_ms": result.get("compose_ms"),
+        },
+        ok=True,
+        duration_ms=(time.perf_counter() - started) * 1000,
+        conversation_id=conversation["id"],
+        turn_id=turn.get("id"),
+    )
+    return result
+
+
+async def _run_turn(conn, conversation, turn: dict) -> dict:
+    """Build the reply for one consolidated turn (traced by `handle_turn`)."""
     started = time.perf_counter()
     intent_ms = 0
     compose_ms = 0
@@ -1185,21 +1305,6 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
         turn_messages[-1]["id"] if turn_messages else turn.get("last_message_id")
     )
     text = _turn_text(turn_messages) or "[mensaje sin texto]"
-
-    # Trace: entrada del turno
-    tracing.trace_call(
-        "pipeline.handle_turn",
-        {
-            "turn_id": turn.get("id"),
-            "conversation_id": conversation["id"],
-            "text": text,
-            "message_count": len(turn_messages),
-        },
-        None,  # output se llena al final
-        ok=True,
-        conversation_id=conversation["id"],
-        turn_id=turn.get("id"),
-    )
 
     context = conversations.get_context(conn, conversation["id"])
     history = [
@@ -1337,32 +1442,6 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
         sale=sale,
         sale_qty=sale_qty,
         context=context,
-    )
-    # Trace: salida completa del turno
-    tracing.trace_call(
-        "pipeline.handle_turn",
-        {
-            "turn_id": turn.get("id"),
-            "conversation_id": conversation["id"],
-            "text": text,
-            "message_count": len(turn_messages),
-        },
-        {
-            "reply": reply[:500] if reply else None,
-            "intent": intent.intencion,
-            "confianza": intent.confianza,
-            "generator": generator,
-            "stage": stage,
-            "sale_id": sale["id"] if sale else None,
-            "sale_status": sale["status"] if sale else None,
-            "escalate": escalate,
-            "latency_ms": int((time.perf_counter() - started) * 1000),
-            "intent_ms": intent_ms,
-            "compose_ms": compose_ms,
-        },
-        ok=True,
-        conversation_id=conversation["id"],
-        turn_id=turn.get("id"),
     )
     return {
         "turn_id": turn.get("id"),

@@ -109,3 +109,13 @@ Los **adaptadores de canal** se diseñan desde Fase 1 con la interfaz pensada pa
 - Dashboard (React/Vite) solo en `dashboard/`; el backend nunca depende de él en runtime (solo sirve su build estático).
 - Preferir soluciones nativas de Windows sobre Docker/WSL2 en todo lo posible.
 - **Ventana de contexto del LLM gestionada por el backend** (no "todo el historial"): últimos ~12 mensajes + resumen rodante + contexto estructurado del producto en JSON. Presupuesto objetivo ~2-2.5K tokens. Ver `01_arquitectura.md` §6.1.
+
+## 9. Agente conversacional: decisiones de la prueba #2
+
+- **Plantillas para pasos transaccionales; compositor LLM solo para preguntas abiertas.** Precio, stock, listados, cotización, captura de datos y confirmación salen de plantillas deterministas (rápidas y sin alucinación). Una pregunta abierta (`consulta_dato` sin dato del proveedor, queja, comparación, tema libre) la redacta el modelo con los datos reales del producto.
+- **Guardrails en cada intento y fallback determinista.** Toda respuesta compuesta pasa por `guardrails.validate_reply`; si viola reglas se reintenta una vez con corrección y, si insiste o el modelo no está disponible, responde una plantilla. El cliente nunca queda en silencio.
+- **Una venta abierta por producto y por conversación.** La etapa (`CAPTURE_DATA`, `CONFIRM`) describe el pedido, no el último mensaje: una pregunta no la resetea ni la cancela. La cantidad acordada se persiste con la venta (`sale_qty` + producto).
+- **Un único trace por turno con `duration_ms`.** `pipeline.handle_turn` registra entrada y salida en una sola fila; la «latencia media» del dashboard es la del turno completo y la del LLM queda aparte (`avg_llm_ms`).
+- **Trazas en archivo rotado y en SQLite.** `data/logs/traces.log` + tabla `traces`. Nivel `ALL` en desarrollo y `ERROR` en producción; PII enmascarada por defecto.
+- **`cuadra.log` con señal, no ruido.** `apscheduler`, `httpx` y `telethon.network` quedan en `WARNING`: los ticks de 5 s ya no entierran los mensajes de negocio.
+- **Retrieval híbrido operativo.** FTS5 + embeddings (`fastembed`, `paraphrase-multilingual-MiniLM-L12-v2`, 384 dims, modelo cacheado en `backend/models/fastembed`) fusionados con RRF y piso de similitud; si falta el modelo, degrada a FTS5 + fuzzy sin bloquear el arranque.

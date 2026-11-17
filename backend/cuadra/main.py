@@ -47,6 +47,11 @@ def _setup_logging() -> None:
     file_handler.setFormatter(fmt)
     root.addHandler(file_handler)
 
+    # F9 (prueba #2): el 90 % de cuadra.log era "Running job tick" cada 5 s.
+    # Los mensajes de negocio quedaban enterrados. Los errores siguen saliendo.
+    for noisy in ("apscheduler", "httpx", "telethon.network"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
 
 def _warn_suppliers_without_peer() -> None:
     """Surface TCPs that still depend on a mutable `@usuario` (see 10.22)."""
