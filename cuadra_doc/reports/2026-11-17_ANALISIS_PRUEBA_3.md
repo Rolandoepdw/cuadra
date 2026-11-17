@@ -117,9 +117,9 @@
 
 **Causa:** el dedupe no cubre la ventana entre el encolado de `send_escalation` y su envío; dos turnos seguidos crearon dos filas.
 
-**Arreglo propuesto:** clave de dedupe `(conversation_id, product_id, normalised_question)` sobre escalaciones abiertas, aplicada en el momento de crear la escalación (no al enviarla).
+**Arreglo aplicado (decisión §12):** `escalations.create` normaliza la pregunta y reutiliza la escalación `PENDING` idéntica; devuelve `(escalation, created)` y solo una fila nueva encola `send_escalation`. La reutilización queda como evento `escalation_reused`.
 
-**Estado:** pendiente.
+**Estado:** hecho, con 1 test nuevo (dos turnos iguales → 1 escalación, 1 job).
 
 ---
 
@@ -129,9 +129,9 @@
 
 **Causa:** la etapa se guarda en el contexto, pero no la **oferta pendiente** (producto + pregunta). Un «Si» aislado no tiene antecedente contra el que resolverse.
 
-**Arreglo propuesto:** persistir `pending_offer` (tipo de oferta, producto, venta) en el contexto y resolver los afirmativos/negativos contra ella antes de pasar por el NLU.
+**Arreglo aplicado (decisión §12):** `cuadra.ai.offers` persiste `pending_offer` (tipo, producto) en el contexto y la consume el turno siguiente. Un «Si»/«No» desnudo se resuelve contra la oferta antes de `_maybe_handle_sale`; una pregunta no la ejecuta. `tcp_triage.resume_escalations` deja la oferta de reserva al responder al cliente.
 
-**Estado:** pendiente.
+**Estado:** hecho, con 6 tests nuevos (sí inicia venta, no declina, la oferta no sobrevive a una pregunta, clasificación de respuestas y detección de la pregunta).
 
 ---
 
@@ -225,7 +225,7 @@ Especificaciones y mensajes del TCP (decisión §11):
 - `_customer_answers` no reenvía quejas; el último recurso es `escalation_unconfirmed`.
 - `scripts/clean_specs.py` reparó el `specifications_json` del producto 13.
 
-Suite: **331 tests OK**.
+Suite: **338 tests OK**.
 
 ---
 

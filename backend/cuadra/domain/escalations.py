@@ -9,6 +9,7 @@ client. Status flow:
     PENDING -> TIMEOUT (after 1 retry) -> stays for the operator
 """
 
+import unicodedata
 from datetime import datetime, timezone
 
 from cuadra.domain.errors import Invalid, NotFound
@@ -31,6 +32,14 @@ def get(conn, escalation_id: int) -> dict:
     return dict(row)
 
 
+def _normalise_question(question: str) -> str:
+    """Case/punctuation/accents-insensitive key for duplicate detection."""
+    folded = unicodedata.normalize("NFKD", (question or "").lower())
+    folded = "".join(c for c in folded if not unicodedata.combining(c))
+    cleaned = "".join(c if c.isalnum() else " " for c in folded)
+    return " ".join(cleaned.split())
+
+
 def create(
     conn,
     *,
@@ -38,17 +47,33 @@ def create(
     supplier_id: int,
     question: str,
     product_id: int | None = None,
-) -> dict:
+) -> tuple[dict, bool]:
+    """Open an escalation, or reuse the identical PENDING one.
+
+    Returns `(escalation, created)`. Two turns in a row can ask the same thing
+    before the first message reaches the TCP (prueba #3: E-0001/E-0002); the
+    second one must not create a new row nor ask the supplier twice.
+    """
     question = (question or "").strip()
     if not question:
         raise Invalid("escalation question is required")
+    key = _normalise_question(question)
+    existing = conn.execute(
+        """SELECT * FROM escalations
+           WHERE conversation_id = ? AND product_id IS ? AND status = 'PENDING'
+           ORDER BY id DESC""",
+        (conversation_id, product_id),
+    ).fetchall()
+    for row in existing:
+        if _normalise_question(row["question"]) == key:
+            return dict(row), False
     cur = conn.execute(
         """INSERT INTO escalations (conversation_id, product_id, supplier_id, question)
            VALUES (?, ?, ?, ?)""",
         (conversation_id, product_id, supplier_id, question),
     )
     conn.commit()
-    return get(conn, cur.lastrowid)
+    return get(conn, cur.lastrowid), True
 
 
 def set_tcp_message_sent(conn, escalation_id: int, text: str) -> dict:

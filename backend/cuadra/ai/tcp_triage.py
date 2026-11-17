@@ -16,7 +16,7 @@ text.
 import re
 from dataclasses import dataclass, field
 
-from cuadra.ai import guardrails, prompts, retrieval
+from cuadra.ai import guardrails, offers, prompts, retrieval
 from cuadra.domain import catalog, conversations, escalations, events
 
 CASE_ID_PATTERN = re.compile(
@@ -544,6 +544,11 @@ def resume_escalations(
                 conn, conversation_id, "OUTBOUND", "bot", body=reply
             )
             conversations.set_status(conn, conversation_id, "ACTIVE")
+            # F5: la respuesta del almacén termina en "¿Te reservo ...?"; el
+            # siguiente "Si" del cliente debe ejecutar esa oferta.
+            context = conversations.get_context(conn, conversation_id)
+            offers.save(context, offers.detect(reply, product_id))
+            conversations.set_context(conn, conversation_id, context)
         for escalation in group:
             escalations.resolve(conn, int(escalation["id"]))
             events.log(

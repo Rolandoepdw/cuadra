@@ -24,6 +24,7 @@ from cuadra.ai import (
     ingest,
     llm,
     memory,
+    offers,
     pipeline,
     prompts,
     queue,
@@ -578,6 +579,106 @@ class EscalationTests(Phase1TestCase):
             ),
             1,
         )
+
+    def test_the_same_question_twice_creates_one_escalation(self):
+        # F4 (prueba #3): dos turnos seguidos con la misma pregunta abrieron
+        # E-0001 y E-0002. El TCP recibió la misma consulta dos veces.
+        intent = llm.Intent(
+            intencion="consulta_dato",
+            producto="Power Bank",
+            datos_faltantes=["garantía"],
+            confianza=0.9,
+        )
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)):
+            self._ingest("ID 1, ¿qué garantía trae?")
+            self._make_due()
+            self._run_process()
+            self._ingest("ID 1, ¿qué garantía trae?")
+            self._make_due()
+            self._run_process()
+
+        self.assertEqual(self._scalar("SELECT COUNT(*) FROM escalations"), 1)
+        self.assertEqual(
+            self._scalar(
+                "SELECT COUNT(*) FROM jobs WHERE type = 'send_escalation'"
+            ),
+            1,
+        )
+        self.assertEqual(
+            self._scalar(
+                "SELECT COUNT(*) FROM events WHERE type = 'escalation_reused'"
+            ),
+            1,
+        )
+
+
+class PendingOfferTests(Phase1TestCase):
+    """F5 (prueba #3): un "Si" suelto se resuelve contra la oferta anterior."""
+
+    def _escalate_with_offer(self) -> None:
+        intent = llm.Intent(
+            intencion="consulta_dato",
+            producto="Power Bank",
+            datos_faltantes=["garantía"],
+            confianza=0.9,
+        )
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)):
+            self._ingest("ID 1, ¿qué garantía trae?")
+            self._make_due()
+            self._run_process()
+        self.assertIn(
+            "reserve",
+            self._rows("SELECT context_json FROM conversations")[0]["context_json"],
+        )
+
+    def _reply_to(self, text: str, intent=None) -> str:
+        intent = intent or llm.Intent(intencion="otro", confianza=0.1)
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)):
+            self._ingest(text)
+            self._make_due()
+            self._run_process()
+        return self._rows(
+            "SELECT body FROM messages WHERE direction = 'OUTBOUND' ORDER BY id DESC LIMIT 1"
+        )[0]["body"]
+
+    def test_a_bare_yes_after_an_offer_starts_the_sale(self):
+        self._escalate_with_offer()
+        reply = self._reply_to("Si")
+        self.assertIn("me falta", reply)
+        self.assertEqual(self._scalar("SELECT COUNT(*) FROM escalations"), 1)
+
+    def test_a_bare_no_after_an_offer_declines_it(self):
+        self._escalate_with_offer()
+        reply = self._reply_to("No, gracias")
+        self.assertIn("Sin problema", reply)
+        self.assertEqual(self._scalar("SELECT COUNT(*) FROM sales"), 0)
+
+    def test_an_offer_does_not_survive_a_turn_with_a_question(self):
+        self._escalate_with_offer()
+        reply = self._reply_to(
+            "¿cuánto cuesta?",
+            llm.Intent(
+                intencion="consulta_precio", producto="Power Bank", confianza=0.9
+            ),
+        )
+        self.assertNotIn("me falta", reply)
+        self.assertEqual(self._scalar("SELECT COUNT(*) FROM sales"), 0)
+        context = self._rows("SELECT context_json FROM conversations")[0]["context_json"]
+        self.assertNotIn("pending_offer", context)
+
+    def test_offer_answers_require_a_bare_message(self):
+        self.assertEqual(offers.answer("Si"), "yes")
+        self.assertEqual(offers.answer("si, por favor"), "yes")
+        self.assertEqual(offers.answer("No, gracias"), "no")
+        self.assertIsNone(offers.answer("Si, ¿qué procesador tiene?"))
+        self.assertIsNone(offers.answer("Vale, cuando me la traes"))
+
+    def test_detect_only_matches_the_bot_question(self):
+        reserve = prompts.TEMPLATES["escalation_resolved_summary"].format(
+            producto="Power Bank", respuesta="Quedan 2."
+        )
+        self.assertEqual(offers.detect(reserve)["kind"], offers.RESERVE)
+        self.assertIsNone(offers.detect("Ya te lo reservé."))
 
 
 class SpecTopicTests(unittest.TestCase):

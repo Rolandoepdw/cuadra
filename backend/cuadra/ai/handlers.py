@@ -371,26 +371,29 @@ async def process_turn(payload: dict) -> None:
             },
         )
         if result["escalate"] and result["product_id"] and result["supplier_id"]:
-            escalation = escalations.create(
+            escalation, created = escalations.create(
                 conn,
                 conversation_id=turn["conversation_id"],
                 product_id=result["product_id"],
                 supplier_id=result["supplier_id"],
                 question=result["escalation_question"] or result["reply"],
             )
-            escalation_id = escalation["id"]
             conversations.set_status(conn, turn["conversation_id"], "WAITING_TCP")
             events.log(
                 conn,
                 "bot",
-                "escalation_created",
+                "escalation_created" if created else "escalation_reused",
                 entity="escalations",
-                entity_id=escalation_id,
+                entity_id=escalation["id"],
                 details={
                     "product_id": result["product_id"],
                     "supplier_id": result["supplier_id"],
                 },
             )
+            # F4 (prueba #3): una fila reutilizada ya tiene su `send_escalation`
+            # encolado; reencolarlo pediría la misma consulta dos veces.
+            if created:
+                escalation_id = escalation["id"]
         turns.mark_done(conn, turn_id)
         try:
             # After mark_done: the current turn is no longer PROCESSING, so the
@@ -468,23 +471,24 @@ async def generate_reply(payload: dict) -> None:
             },
         )
         if result["escalate"] and result["product_id"] and result["supplier_id"]:
-            escalation = escalations.create(
+            escalation, created = escalations.create(
                 conn,
                 conversation_id=conversation_id,
                 product_id=result["product_id"],
                 supplier_id=result["supplier_id"],
                 question=result["escalation_question"] or result["reply"],
             )
-            escalation_id = escalation["id"]
             conversations.set_status(conn, conversation_id, "WAITING_TCP")
             events.log(
                 conn,
                 "bot",
-                "escalation_created",
+                "escalation_created" if created else "escalation_reused",
                 entity="escalations",
-                entity_id=escalation_id,
+                entity_id=escalation["id"],
                 details={"product_id": result["product_id"], "supplier_id": result["supplier_id"]},
             )
+            if created:
+                escalation_id = escalation["id"]
         try:
             await memory.maybe_summarize(conn, conversation)
         except Exception:  # noqa: BLE001 - summarising must never block delivery

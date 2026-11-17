@@ -13,7 +13,7 @@ import time
 from typing import Callable
 
 from cuadra import config
-from cuadra.ai import guardrails, llm, memory, prompts, retrieval, tracing
+from cuadra.ai import guardrails, llm, memory, offers, prompts, retrieval, tracing
 from cuadra.ai.context import ContextBuilder, build_nlu_messages
 from cuadra.domain import (
     catalog,
@@ -595,6 +595,44 @@ def _sale_product(conn, conversation, context: dict) -> dict | None:
         return catalog.get_product(conn, product_id)
     except catalog.NotFound:
         return None
+
+
+def _offer_product(conn, offer: dict | None) -> dict | None:
+    """Product of the previous turn's offer, when it still exists."""
+    if not offer or not offer.get("product_id"):
+        return None
+    try:
+        return catalog.get_product(conn, int(offer["product_id"]))
+    except (catalog.NotFound, TypeError, ValueError):
+        return None
+
+
+def _offered_alternatives_outcome(
+    conn, conversation, product: dict, kind: str, context: dict
+) -> dict:
+    """F5: a "Si" to "¿te enseño alguno?" actually shows the alternatives."""
+    if kind == offers.SIBLINGS:
+        alternatives = catalog.siblings(conn, product)
+        reply = _render_siblings(conn, conversation, product, alternatives, context)
+    else:
+        alternatives = catalog.alternatives(conn, product)
+        if alternatives:
+            reply = f"Tengo {_format_product_list(alternatives)}. ¿Cuál te interesa?"
+        else:
+            reply = (
+                f"De {product['name']} no tengo otro modelo parecido por ahora."
+            )
+    guard = _guard_context(
+        product, None, context, extra_products=alternatives, product_source="offer"
+    )
+    reply, generator = _safe_template(conn, conversation, reply, guard, "template")
+    return {
+        "reply": reply,
+        "escalate": False,
+        "generator": generator,
+        "escalation_question": None,
+        "stage": "QUOTE",
+    }
 
 
 def _maybe_handle_sale(
@@ -1430,7 +1468,52 @@ async def _run_turn(conn, conversation, turn: dict) -> dict:
     sale = None
     sale_qty = None
     compose_started = time.perf_counter()
-    sale_outcome = _maybe_handle_sale(conn, conversation, text, intent, product, context)
+    # F5 (prueba #3): un "Si" suelto se resuelve contra la pregunta del turno
+    # anterior, no contra el NLU. La oferta se consume aquí y no sobrevive a
+    # este turno, así que nunca se puede responder dos veces.
+    offer = offers.consume(context)
+    offer_answer = offers.answer(text) if offer is not None else None
+    offer_product = _offer_product(conn, offer)
+    sale_outcome = None
+    if (
+        offer_answer == "no"
+        and offer is not None
+        and offer["kind"] == offers.RESERVE
+        and offer_product is not None
+    ):
+        product = offer_product
+        guard = _sale_guard(product, float(product["price"]))
+        reply, generator = _fast_template(
+            conn, conversation, "sale_declined", guard, context=context
+        )
+        sale_outcome = {
+            "reply": reply,
+            "escalate": False,
+            "generator": generator,
+            "escalation_question": None,
+            "stage": "CLOSE",
+        }
+    elif offer_answer == "yes" and offer is not None:
+        if offer["kind"] == offers.RESERVE and offer_product is not None:
+            # "Si" a "¿te reservo?" es una intención de compra del producto
+            # ofrecido, aunque el NLU solo haya visto un "Si".
+            product = offer_product
+            product_source = "offer"
+            intent.intencion = "comprar"
+            intent.confianza = max(float(intent.confianza or 0), 0.9)
+        elif (
+            offer["kind"] in (offers.ALTERNATIVES, offers.SIBLINGS)
+            and offer_product is not None
+        ):
+            product = offer_product
+            product_source = "offer"
+            sale_outcome = _offered_alternatives_outcome(
+                conn, conversation, product, offer["kind"], context
+            )
+    if sale_outcome is None:
+        sale_outcome = _maybe_handle_sale(
+            conn, conversation, text, intent, product, context
+        )
     if sale_outcome is not None:
         reply = sale_outcome["reply"]
         escalate = sale_outcome["escalate"]
@@ -1455,6 +1538,9 @@ async def _run_turn(conn, conversation, turn: dict) -> dict:
     compose_ms = int((time.perf_counter() - compose_started) * 1000)
 
     supplier_id = product["supplier_id"] if (escalate and product) else None
+
+    # La oferta de este turno queda disponible solo para el siguiente.
+    offers.save(context, offers.detect(reply, product["id"] if product else None))
 
     _update_context(
         conn,

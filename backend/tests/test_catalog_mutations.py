@@ -14,8 +14,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from cuadra import config, db
-from cuadra.ai import handlers, ingest, tcp_extractor, tcp_triage
-from cuadra.domain import catalog, catalog_mutations
+from cuadra.ai import handlers, ingest, offers, tcp_extractor, tcp_triage
+from cuadra.domain import catalog, catalog_mutations, conversations
 from cuadra.domain import escalations
 from cuadra.domain.errors import Conflict, Invalid
 
@@ -384,6 +384,16 @@ class TestResumption(Phase4Fixture):
             "SELECT status FROM conversations WHERE id = 2"
         ).fetchone()
         self.assertEqual(row["status"], "CLOSED")
+
+    def test_resume_leaves_a_reservation_offer_for_the_next_yes(self):
+        # F5 (prueba #3): la respuesta termina en "¿Te reservo ...?"; el "Si"
+        # del cliente en el turno siguiente debe encontrar esa oferta.
+        tcp_triage.resume_escalations(
+            self.conn, product_id=1, supplier_id=1, answer="sí hay"
+        )
+        context = conversations.get_context(self.conn, 1)
+        self.assertEqual(context["pending_offer"]["kind"], offers.RESERVE)
+        self.assertEqual(context["pending_offer"]["product_id"], 1)
 
 
 class TestCustomerAnswer(Phase4Fixture):
