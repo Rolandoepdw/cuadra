@@ -10,6 +10,7 @@ All writes here run in a single SQLite transaction (`with conn:`) so a failed
 ledger insert rolls the reservation back with the sale.
 """
 
+import difflib
 import json
 import re
 from datetime import datetime, timezone
@@ -747,44 +748,121 @@ def _fold(text: str) -> str:
     return (text or "").translate(replacements).upper()
 
 
-def _ack_sale(conn, supplier_id: int, text: str) -> dict | None:
+# Cada ack solo puede mover una venta desde ciertos estados. Un "ENTREGADO"
+# después de "RECIBIDO" tiene que encontrar la venta en CONFIRMED: buscar solo
+# DISPATCHED fue el fallo de la prueba #3 (los tres ENTREGADO quedaron sin
+# efecto y el primero acabó correlacionado con un producto cualquiera).
+_ACK_FROM_STATUSES = {
+    "CONFIRMED": ("DISPATCHED",),
+    "DELIVERED": ("DISPATCHED", "CONFIRMED"),
+    "OUT_OF_STOCK": ("DISPATCHED", "CONFIRMED"),
+}
+# Formas canónicas por tipo, para tolerar una errata en un mensaje de una sola
+# palabra ("ENTREGSDO"). Solo se comparan palabras de 8+ letras: "ENTREGA" es
+# un sustantivo y nunca debe leerse como entregado.
+_ACK_CANONICAL = {
+    "CONFIRMED": (
+        "RECIBIDO", "RECIBIDA", "RECIVIDO", "RECIVIDA", "CONFIRMADO",
+        "CONFIRMADA", "PREPARADO", "PREPARADA",
+    ),
+    "DELIVERED": ("ENTREGADO", "ENTREGADA", "ENTREGUE", "COBRADO", "COBRADA"),
+    "OUT_OF_STOCK": ("AGOTADO", "AGOTADA"),
+}
+_ACK_WORD = re.compile(r"[^A-Z ]+")
+
+
+_ACK_DELIVERED_PHRASE = re.compile(
+    r"\bYA\s+(?:LA|LO|SE\s+LA)\s+ENTREGUE\b|\bYA\s+SE\s+ENTREGO\b"
+)
+
+
+def detect_ack(text: str) -> str | None:
+    """Return the acknowledgement kind of a TCP message, or None.
+
+    Los TCP escriben desde el móvil: una errata no puede dejar la venta colgada.
+    La tolerancia se aplica solo a mensajes de una sola palabra, para que
+    "la entrega es mañana" jamás se lea como ENTREGADO.
+    """
+    body = _fold(text)
+    if _ACK_OUT_OF_STOCK.search(body):
+        return "OUT_OF_STOCK"
+    if _ACK_DELIVERED.search(body) or _ACK_DELIVERED_PHRASE.search(body):
+        return "DELIVERED"
+    if _ACK_CONFIRM.search(body):
+        return "CONFIRMED"
+    tokens = [token for token in _ACK_WORD.sub(" ", body).split() if token]
+    if len(tokens) != 1 or len(tokens[0]) < 8:
+        return None
+    word = tokens[0]
+    for kind, canonical_words in _ACK_CANONICAL.items():
+        for canonical in canonical_words:
+            if len(canonical) < 8:
+                continue
+            if difflib.SequenceMatcher(None, word, canonical).ratio() >= 0.85:
+                return kind
+    return None
+
+
+def _ack_candidates(conn, supplier_id: int, kind: str) -> list[dict]:
+    statuses = _ACK_FROM_STATUSES[kind]
+    placeholders = ", ".join("?" for _ in statuses)
+    rows = conn.execute(
+        f"""SELECT * FROM sales
+            WHERE supplier_id = ? AND status IN ({placeholders})
+            ORDER BY id""",
+        (supplier_id, *statuses),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _ack_sale(conn, supplier_id: int, text: str, kind: str) -> dict | None:
+    """The single sale this ack refers to, or None when it cannot be decided.
+
+    ID primero (V-000001); sin código, solo se resuelve si hay un único
+    candidato en los estados que el ack puede mover. Nunca se adivina.
+    """
     code = _ORDER_CODE.search(text or "")
     if code:
         sale = get_sale_by_code(conn, code.group(0))
-        if sale is not None and int(sale["supplier_id"]) == int(supplier_id):
-            return sale
-        return None
-    rows = conn.execute(
-        """SELECT * FROM sales
-           WHERE supplier_id = ? AND status = 'DISPATCHED'
-           ORDER BY id""",
-        (supplier_id,),
-    ).fetchall()
-    if not rows:
-        return None
+        if sale is None or int(sale["supplier_id"]) != int(supplier_id):
+            return None
+        # Un ack repetido no puede mover una venta ya cerrada: entregar dos
+        # veces marcaría NEEDS_OPERATOR una venta que ya estaba DELIVERED.
+        if sale["status"] not in _ACK_FROM_STATUSES[kind]:
+            return None
+        return sale
+    rows = _ack_candidates(conn, supplier_id, kind)
     if len(rows) == 1:
-        return dict(rows[0])
-    # Multiple DISPATCHED sales for this supplier: ambiguous, do not guess.
+        return rows[0]
     return None
+
+
+def _ack_already_applied(sale: dict, kind: str) -> bool:
+    """True when the sale is already in the state this ack would set."""
+    status = sale.get("status")
+    if kind == "DELIVERED":
+        return status in ("DELIVERED", "SETTLED")
+    if kind == "CONFIRMED":
+        return status == "CONFIRMED"
+    return False
 
 
 def apply_tcp_ack(conn, supplier_id: int, text: str) -> tuple[dict | None, str | None]:
     """Interpret RECIBIDO / ENTREGADO / AGOTADO from a supplier message.
 
     Returns (sale, action) where action is CONFIRMED, DELIVERED, NEEDS_OPERATOR,
-    AMBIGUOUS, or None when the message is not an acknowledgement for this supplier.
+    AMBIGUOUS, DUPLICATE, or None when the message is not an acknowledgement
+    for this supplier.
 
     AMBIGUOUS: an ack keyword was found but no single sale could be identified
-    (no order code in the text, and multiple DISPATCHED sales exist for this
-    supplier). The caller must flag it for operator review instead of guessing.
+    (no order code in the text, and more than one sale in a state the ack can
+    move). The caller must ask the TCP for the reference instead of guessing.
+
+    DUPLICATE: the ack repeats one already applied (the sale is already in the
+    target state). It is ignored on purpose: no client message, no event storm.
     """
-    body = _fold(text)
-    is_ack = bool(
-        _ACK_CONFIRM.search(body)
-        or _ACK_DELIVERED.search(body)
-        or _ACK_OUT_OF_STOCK.search(body)
-    )
-    if not is_ack:
+    kind = detect_ack(text)
+    if kind is None:
         tracing.trace_call(
             "sales.apply_tcp_ack",
             {"supplier_id": supplier_id, "text": text[:200]},
@@ -792,44 +870,67 @@ def apply_tcp_ack(conn, supplier_id: int, text: str) -> tuple[dict | None, str |
             ok=True,
         )
         return None, None
-    sale = _ack_sale(conn, supplier_id, text)
+    sale = _ack_sale(conn, supplier_id, text, kind)
     if sale is None:
-        # No matching sale: wrong supplier (code exists but not for this supplier)
-        # or no DISPATCHED sales at all. Not ambiguous -- just ignore.
-        if _ORDER_CODE.search(text or ""):
+        # No matching sale: wrong supplier (code exists but not for this
+        # supplier), an already applied ack, or no candidate at all.
+        code = _ORDER_CODE.search(text or "")
+        if code:
+            existing = get_sale_by_code(conn, code.group(0))
+            if (
+                existing is not None
+                and int(existing["supplier_id"]) == int(supplier_id)
+                and _ack_already_applied(existing, kind)
+            ):
+                tracing.trace_call(
+                    "sales.apply_tcp_ack",
+                    {"supplier_id": supplier_id, "text": text[:200]},
+                    {"action": "DUPLICATE", "kind": kind},
+                    ok=True,
+                )
+                return None, "DUPLICATE"
             tracing.trace_call(
                 "sales.apply_tcp_ack",
                 {"supplier_id": supplier_id, "text": text[:200]},
-                {"action": None, "reason": "wrong_supplier_or_no_dispatched"},
+                {"action": None, "reason": "wrong_supplier_or_no_candidate"},
                 ok=True,
             )
             return None, None
-        # No code: ambiguous only if multiple DISPATCHED sales exist for this supplier.
-        rows = conn.execute(
-            """SELECT id FROM sales
-               WHERE supplier_id = ? AND status = 'DISPATCHED'""",
-            (supplier_id,),
-        ).fetchall()
+        rows = _ack_candidates(conn, supplier_id, kind)
         if len(rows) > 1:
             tracing.trace_call(
                 "sales.apply_tcp_ack",
                 {"supplier_id": supplier_id, "text": text[:200]},
-                {"action": "AMBIGUOUS", "candidate_count": len(rows)},
+                {"action": "AMBIGUOUS", "candidate_count": len(rows), "kind": kind},
                 ok=True,
             )
             return None, "AMBIGUOUS"
+        if rows:
+            return None, None
+        # Cero candidatos: si la última venta del TCP ya está en el estado que
+        # pide el ack, es una repetición y se ignora sin avisar a nadie.
+        latest = conn.execute(
+            "SELECT * FROM sales WHERE supplier_id = ? ORDER BY id DESC LIMIT 1",
+            (supplier_id,),
+        ).fetchone()
+        if latest is not None and _ack_already_applied(dict(latest), kind):
+            tracing.trace_call(
+                "sales.apply_tcp_ack",
+                {"supplier_id": supplier_id, "text": text[:200]},
+                {"action": "DUPLICATE", "kind": kind},
+                ok=True,
+            )
+            return None, "DUPLICATE"
         return None, None
 
-    if _ACK_OUT_OF_STOCK.search(body):
+    if kind == "OUT_OF_STOCK":
         return mark_needs_operator(conn, sale["id"], "TCP reported out of stock"), "NEEDS_OPERATOR"
-    if _ACK_DELIVERED.search(body):
+    if kind == "DELIVERED":
         updated, ok = deliver_or_flag(conn, sale["id"])
         return updated, "DELIVERED" if ok else "NEEDS_OPERATOR"
-    if _ACK_CONFIRM.search(body):
-        if sale["status"] == "DISPATCHED":
-            return confirm(conn, sale["id"]), "CONFIRMED"
-        return sale, None
-    return None, None
+    if sale["status"] == "DISPATCHED":
+        return confirm(conn, sale["id"]), "CONFIRMED"
+    return sale, None
 
 def list_sales(
     conn,

@@ -119,3 +119,15 @@ Los **adaptadores de canal** se diseñan desde Fase 1 con la interfaz pensada pa
 - **Trazas en archivo rotado y en SQLite.** `data/logs/traces.log` + tabla `traces`. Nivel `ALL` en desarrollo y `ERROR` en producción; PII enmascarada por defecto.
 - **`cuadra.log` con señal, no ruido.** `apscheduler`, `httpx` y `telethon.network` quedan en `WARNING`: los ticks de 5 s ya no entierran los mensajes de negocio.
 - **Retrieval híbrido operativo.** FTS5 + embeddings (`fastembed`, `paraphrase-multilingual-MiniLM-L12-v2`, 384 dims, modelo cacheado en `backend/models/fastembed`) fusionados con RRF y piso de similitud; si falta el modelo, degrada a FTS5 + fuzzy sin bloquear el arranque.
+
+## 10. Protocolo de referencias y acks (prueba #3)
+
+La prueba #3 cerró el ciclo completo (catálogo → escalación → venta → entrega → liquidación) pero dejó dos agujeros de trazabilidad: un `Entregado` se correlacionó con una escalación cualquiera y los acks se aplicaron «por parecido». Estas decisiones hacen que cada mensaje del TCP apunte a **una** entidad concreta.
+
+- **ID primero, nunca ID único.** Todo mensaje que el bot manda al TCP (orden y consulta) incluye su referencia — `V-000001` para la venta, `[E-0003]` para la escalación — y pide responder citándola. Si el TCP la cita, la resolución es determinista. Si no la cita y hay **un único** candidato posible, se resuelve igual (no se le obliga a repetir por burocracia). Si hay **varios**, no se adivina: se le pide la referencia.
+- **Un ack nunca es respuesta de producto.** `RECIBIDO` / `ENTREGADO` / `AGOTADO` sin venta que corresponda generan el evento `tcp_ack_unmatched` y se descartan; jamás caen en la correlación de escalaciones (fallo de la prueba #3, 04:57-04:59).
+- **Cada ack mueve estados concretos.** `RECIBIDO` solo desde `DISPATCHED`; `ENTREGADO` desde `DISPATCHED` o `CONFIRMED`; `AGOTADO` desde ambos. Un ack que no encaja no reabre ni degrada la venta.
+- **Ack repetido = `DUPLICATE`.** Se registra el evento y se ignora: ni mensaje al cliente ni `NEEDS_OPERATOR`. Un `ENTREGADO` repetido no puede volver a «entregar» una venta ya cerrada.
+- **Erratas toleradas solo en mensajes de una palabra.** `ENTREGSDO`, `RECIVIDO` cuentan (≥ 85 % de similitud sobre palabras de 8+ letras); «la entrega es mañana» o «ENTREGA» no. La tolerancia existe porque el TCP escribe desde el móvil, no para adivinar frases.
+- **Consulta ambigua no se resuelve por parecido.** Con varias escalaciones abiertas y sin `[E-####]`, no se resuelve ninguna: se encola `ask_tcp_reference` y se le pide la referencia al TCP, una sola vez por mensaje (evento `tcp_reference_asked`).
+- **Al TCP siempre se le responde.** Sea ack ambiguo, repetido o sin venta, el bot contesta algo al TCP (pedir la referencia o ignorar en silencio el duplicado), nunca lo deja sin reacción ni lo usa como fuente de datos del producto.

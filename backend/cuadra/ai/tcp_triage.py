@@ -34,7 +34,9 @@ _STOPWORDS = {
     "producto", "productos", "tengo", "tienes", "hay", "del", "los",
 }
 
-_DELIVERED = re.compile(r"\b(ENTREGAD[OA]|ENTREGO|COBRAD[OA]|COBRE|VENDID[OA])\b")
+_DELIVERED = re.compile(
+    r"\b(ENTREGAD[OA]|ENTREGO|ENTREGUE|COBRAD[OA]|COBRE|VENDID[OA])\b"
+)
 _REJECTED = re.compile(
     r"\b(AGOTAD[OA]|SIN\s+STOCK|NO\s+HAY|NO\s+ME\s+QUEDA|NO\s+PUEDO)\b"
 )

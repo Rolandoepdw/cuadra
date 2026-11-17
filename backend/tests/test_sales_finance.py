@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from cuadra import config, db
-from cuadra.ai import memory
+from cuadra.ai import memory, prompts
 from cuadra.domain import catalog, clock, conversations, sales, settings
 
 
@@ -453,6 +453,83 @@ class TcpAckTests(Phase3TestCase):
         self.assertEqual(action, "CONFIRMED")
         self.assertEqual(confirmed["status"], "CONFIRMED")
 
+    # ------------------------------------------------- protocolo de IDs (prueba #3)
+
+    def test_delivered_after_received_without_a_code_closes_the_same_sale(self):
+        # El fallo de la prueba #3: la venta ya estaba CONFIRMED y `ENTREGADO`
+        # solo buscaba DISPATCHED, así que no cerraba nunca.
+        sale = self.create_sale()
+        self.dispatch(sale["id"])
+        sales.apply_tcp_ack(self.conn, 1, "RECIBIDO")
+
+        delivered, action = sales.apply_tcp_ack(self.conn, 1, "Entregado")
+
+        self.assertEqual(action, "DELIVERED")
+        self.assertEqual(delivered["id"], sale["id"])
+        self.assertEqual(delivered["status"], "DELIVERED")
+
+    def test_a_one_word_typo_is_still_an_ack(self):
+        sale = self.create_sale()
+        self.dispatch(sale["id"])
+        delivered, action = sales.apply_tcp_ack(self.conn, 1, "ENTREGSDO")
+        self.assertEqual(action, "DELIVERED")
+        self.assertEqual(delivered["status"], "DELIVERED")
+
+    def test_a_noun_is_never_read_as_an_ack(self):
+        self.create_sale()
+        self.assertIsNone(sales.detect_ack("la entrega es mañana"))
+        self.assertIsNone(sales.detect_ack("ENTREGA"))
+
+    def test_a_repeated_ack_is_ignored_instead_of_reopening_the_sale(self):
+        sale = self.create_sale()
+        self.dispatch(sale["id"])
+        sales.apply_tcp_ack(self.conn, 1, f"ENTREGADO {sale['order_code']}")
+
+        again, action = sales.apply_tcp_ack(
+            self.conn, 1, f"ENTREGADO {sale['order_code']}"
+        )
+
+        self.assertIsNone(again)
+        self.assertEqual(action, "DUPLICATE")
+        self.assertEqual(sales.get_sale(self.conn, sale["id"])["status"], "DELIVERED")
+
+    def test_two_open_sales_without_a_code_are_ambiguous(self):
+        first = self.create_sale()
+        self.dispatch(first["id"])
+        second = self.create_sale(product_id=2)
+        self.dispatch(second["id"])
+
+        found, action = sales.apply_tcp_ack(self.conn, 1, "ENTREGADO")
+
+        self.assertIsNone(found)
+        self.assertEqual(action, "AMBIGUOUS")
+        self.assertEqual(sales.get_sale(self.conn, first["id"])["status"], "DISPATCHED")
+        self.assertEqual(sales.get_sale(self.conn, second["id"])["status"], "DISPATCHED")
+
+    def test_the_order_message_asks_for_the_code_in_the_reply(self):
+        text = prompts.TEMPLATES["tcp_order"].format(
+            order_code="V-000007",
+            producto="Producto 1",
+            product_id=1,
+            cantidad=1,
+            total="100",
+            moneda="USD",
+            cliente="Carlos",
+            zona="San Miguel",
+            direccion="Calle 23",
+            telefono="71234567",
+        )
+        self.assertIn("RECIBIDO V-000007", text)
+        self.assertIn("AGOTADO V-000007", text)
+        self.assertIn("ENTREGADO V-000007", text)
+
+    def test_the_escalation_message_asks_to_cite_the_reference(self):
+        text = prompts.TEMPLATES["escalation_question"].format(
+            escalation_id=3, producto="Producto 1", pregunta="¿Stock?"
+        )
+        self.assertIn("[E-0003]", text)
+        self.assertIn("Responde citando [E-0003]", text)
+
 
 class SummaryTests(Phase3TestCase):
     def test_totals_never_mix_currencies(self):
@@ -623,6 +700,51 @@ class SupplierPeerTests(Phase3TestCase):
 
     def test_unknown_identifier_is_not_a_supplier(self):
         self.assertIsNone(catalog.find_supplier_by_telegram_id(self.conn, "000000000"))
+
+    def test_an_ambiguous_ack_asks_the_tcp_for_the_code(self):
+        import asyncio
+        from unittest.mock import patch
+
+        from cuadra.ai import handlers
+
+        first = self.create_sale()
+        self.dispatch(first["id"])
+        second = self.create_sale(product_id=2)
+        self.dispatch(second["id"])
+
+        class FakeAdapter:
+            def __init__(self):
+                self.sent = []
+
+            async def typing(self, target):
+                return None
+
+            async def send_text(self, target, text):
+                self.sent.append((target, text))
+                return "9002"
+
+        adapter = FakeAdapter()
+        with (
+            patch.object(handlers.channels, "get_adapter", return_value=adapter),
+            patch.object(handlers, "_human_delay", return_value=0),
+        ):
+            asyncio.run(
+                handlers.ask_tcp_reference(
+                    {
+                        "supplier_id": 1,
+                        "conversation_id": 2,
+                        "message_id": 77,
+                        "kind": "ack",
+                    }
+                )
+            )
+
+        self.assertEqual(len(adapter.sent), 1)
+        self.assertIn(first["order_code"], adapter.sent[0][1])
+        asked = self.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE type = 'tcp_reference_asked'"
+        ).fetchone()[0]
+        self.assertEqual(asked, 1)
 
     def test_dispatch_uses_the_userbot_and_persists_the_peer(self):
         import asyncio

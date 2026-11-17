@@ -43,6 +43,7 @@ def register() -> None:
     queue.register_handler("transcribe_audio", transcribe_audio)
     queue.register_handler("send_message", send_message)
     queue.register_handler("send_escalation", send_escalation)
+    queue.register_handler("ask_tcp_reference", ask_tcp_reference)
     queue.register_handler("tcp_process", tcp_process)
     # Jobs queued by older versions/restarts keep working after the refactor.
     queue.register_handler("tcp_reply", tcp_process)
@@ -806,6 +807,106 @@ async def send_escalation(payload: dict) -> None:
         conn.close()
 
 
+def _tcp_reference_asked(conn, message_id: int) -> bool:
+    row = conn.execute(
+        """SELECT 1 FROM events
+           WHERE type = 'tcp_reference_asked' AND entity = 'messages'
+             AND entity_id = ?
+           LIMIT 1""",
+        (message_id,),
+    ).fetchone()
+    return row is not None
+
+
+def _ask_tcp_reference(
+    *, supplier_id: int, conversation_id: int, message_id: int, kind: str
+) -> None:
+    """Queue one clarification to the TCP when a message cannot be matched.
+
+    ID primero: si el TCP repite el mensaje citando `V-000001` o `[E-0003]`,
+    la correlación es determinista. Se pide una sola vez por mensaje.
+    """
+    queue.enqueue(
+        "ask_tcp_reference",
+        {
+            "supplier_id": supplier_id,
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+            "kind": kind,
+        },
+        priority=config.PRIORITY_TCP,
+    )
+
+
+async def ask_tcp_reference(payload: dict) -> None:
+    """Ask the TCP to repeat an ack or an answer citing its reference."""
+    supplier_id = payload["supplier_id"]
+    conversation_id = payload["conversation_id"]
+    message_id = payload["message_id"]
+    kind = payload.get("kind") or "ack"
+
+    conn = db.connect()
+    try:
+        if _tcp_reference_asked(conn, message_id):
+            log.debug("reference already requested for message %s", message_id)
+            return
+        supplier = catalog.get_supplier(conn, supplier_id)
+        conversation = conversations.get_conversation(conn, conversation_id)
+        identity = _tcp_identity((conversation or {}).get("identity"))
+        if kind == "escalation":
+            placeholders = ", ".join("?" for _ in escalations.OPEN_STATUSES)
+            row = conn.execute(
+                f"""SELECT id FROM escalations
+                    WHERE supplier_id = ? AND status IN ({placeholders})
+                    ORDER BY id LIMIT 1""",
+                (supplier_id, *escalations.OPEN_STATUSES),
+            ).fetchone()
+            ejemplo = int(row["id"]) if row is not None else 1
+            template = "tcp_escalation_ambiguous"
+        else:
+            row = conn.execute(
+                """SELECT order_code FROM sales
+                   WHERE supplier_id = ? AND status IN ('DISPATCHED', 'CONFIRMED')
+                   ORDER BY id LIMIT 1""",
+                (supplier_id,),
+            ).fetchone()
+            ejemplo = row["order_code"] if row is not None else "V-000001"
+            template = "tcp_ack_ambiguous"
+        target = supplier.get("telegram_peer_id") or supplier.get("telegram_id")
+    finally:
+        conn.close()
+
+    if not target:
+        log.warning("supplier %s has no telegram target; cannot ask for a reference", supplier_id)
+        return
+    adapter = channels.get_adapter("telegram", identity)
+    if adapter is None:
+        return
+
+    text = prompts.TEMPLATES[template].format(ejemplo=ejemplo)
+    try:
+        await _pace_send(adapter, target)
+        await adapter.send_text(target, text)
+    except queue.RateLimited:
+        raise
+    except Exception:  # noqa: BLE001 - a clarification must not break the queue
+        log.warning("could not ask supplier %s for a reference", supplier_id, exc_info=True)
+        return
+
+    conn = db.connect()
+    try:
+        events.log(
+            conn,
+            "bot",
+            "tcp_reference_asked",
+            entity="messages",
+            entity_id=message_id,
+            details={"supplier_id": supplier_id, "kind": kind},
+        )
+    finally:
+        conn.close()
+
+
 def _tcp_identity(conversation_identity: str | None) -> str:
     """Pick the Telegram account used to talk to suppliers.
 
@@ -1288,8 +1389,8 @@ async def tcp_process(payload: dict) -> None:
                     )
                 return
             if action == "AMBIGUOUS":
-                # Ack keyword present but multiple DISPATCHED sales and no
-                # order code: flag for operator review, never guess.
+                # Ack keyword present but more than one open sale and no order
+                # code: flag it and ask the TCP for the reference. Never guess.
                 events.log(
                     conn,
                     "bot",
@@ -1306,6 +1407,54 @@ async def tcp_process(payload: dict) -> None:
                     message_id=message_id,
                     supplier_id=supplier_id,
                     kind="SALE_ACK_AMBIGUOUS",
+                    details={"text": answer[:200]},
+                )
+                _ask_tcp_reference(
+                    supplier_id=supplier_id,
+                    conversation_id=conversation_id,
+                    message_id=message_id,
+                    kind="ack",
+                )
+                return
+            if action == "DUPLICATE":
+                # The ack repeats one already applied: no client message, no
+                # second notification.
+                events.log(
+                    conn,
+                    "bot",
+                    "tcp_sale_ack_duplicate",
+                    entity="suppliers",
+                    entity_id=supplier_id,
+                    details={"message_id": message_id, "text": answer[:200]},
+                )
+                _mark_tcp_processed(
+                    conn,
+                    message_id=message_id,
+                    supplier_id=supplier_id,
+                    kind="SALE_ACK_DUPLICATE",
+                )
+                return
+            if sales_domain.detect_ack(answer) is not None:
+                # An ack that matched no sale must never fall through to the
+                # escalation correlation: "Entregado" is not an answer about a
+                # product (prueba #3, 04:57-04:59).
+                events.log(
+                    conn,
+                    "bot",
+                    "tcp_ack_unmatched",
+                    entity="suppliers",
+                    entity_id=supplier_id,
+                    details={
+                        "message_id": message_id,
+                        "text": answer[:200],
+                        "kind": sales_domain.detect_ack(answer),
+                    },
+                )
+                _mark_tcp_processed(
+                    conn,
+                    message_id=message_id,
+                    supplier_id=supplier_id,
+                    kind="ACK_UNMATCHED",
                     details={"text": answer[:200]},
                 )
                 return
@@ -1357,6 +1506,43 @@ async def tcp_process(payload: dict) -> None:
 
         escalation = correlation.escalation
         product_id = correlation.product_id
+        if (
+            escalation is not None
+            and correlation.ambiguous
+            and len(correlation.candidates) > 1
+        ):
+            # Varias consultas abiertas y ninguna referencia: no se resuelve
+            # ninguna ni se le escribe a un cliente por una suposición. Se pide
+            # la referencia al TCP (ID primero, igual que en los acks).
+            events.log(
+                conn,
+                "bot",
+                "tcp_reply_ambiguous",
+                entity="suppliers",
+                entity_id=supplier_id,
+                details={
+                    "message_id": message_id,
+                    "text": answer[:200],
+                    "reason": correlation.reason,
+                    "candidates": [
+                        int(item["id"]) for item in correlation.candidates
+                    ],
+                },
+            )
+            _mark_tcp_processed(
+                conn,
+                message_id=message_id,
+                supplier_id=supplier_id,
+                kind="REPLY_AMBIGUOUS",
+                details={"reason": correlation.reason},
+            )
+            _ask_tcp_reference(
+                supplier_id=supplier_id,
+                conversation_id=conversation_id,
+                message_id=message_id,
+                kind="escalation",
+            )
+            return
         if product_id is None:
             events.log(
                 conn,

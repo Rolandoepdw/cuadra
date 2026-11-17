@@ -558,6 +558,38 @@ class TestTcpHandler(Phase4Fixture):
         product = self.product()
         self.assertEqual(product["specifications"]["dato_proveedor"], "garantía de 6 meses")
 
+    def test_a_delivery_ack_is_never_an_escalation_answer(self):
+        # Prueba #3: "Entregado" cayó en la correlación de escalaciones y se
+        # atribuyó a un producto cualquiera. Un ack sin venta no toca nada.
+        message_id = self._message("Entregado")
+
+        self._tcp_process(message_id)
+
+        for escalation_id in (1, 2, 4):
+            self.assertEqual(
+                escalations.get(self.conn, escalation_id)["status"], "PENDING"
+            )
+        outbound = self.conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE direction = 'OUTBOUND'"
+        ).fetchone()[0]
+        self.assertEqual(outbound, 0)
+
+    def test_an_ambiguous_answer_does_not_resolve_any_escalation(self):
+        # Varias consultas abiertas y ninguna referencia: se pide la
+        # referencia al TCP en vez de elegir por parecido.
+        message_id = self._message("me quedan 2 unidades")
+
+        self._tcp_process(message_id)
+
+        for escalation_id in (1, 2, 4):
+            self.assertEqual(
+                escalations.get(self.conn, escalation_id)["status"], "PENDING"
+            )
+        job = self.conn.execute(
+            "SELECT type FROM jobs WHERE type = 'ask_tcp_reference'"
+        ).fetchone()
+        self.assertIsNotNone(job)
+
     def test_audio_supplier_message_queues_transcription(self):
         result = ingest.ingest_incoming(
             channel="telegram",

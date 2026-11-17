@@ -182,7 +182,8 @@ TEMPLATES = {
         "[E-{escalation_id:04d}]\n"
         "Producto: {producto}\n"
         "\"{pregunta}\"\n\n"
-        "¿Me confirmas ese dato para pasárselo? Gracias."
+        "¿Me confirmas ese dato para pasárselo? Responde citando "
+        "[E-{escalation_id:04d}]. Gracias."
     ),
     "escalation_resolved": (
         "¡Buenas! Ya me confirmó el almacén: {respuesta} ¿Te reservo {producto} y "
@@ -260,10 +261,20 @@ TEMPLATES = {
         "• Municipio: {zona}\n"
         "• Dirección: {direccion}\n"
         "• Teléfono: {telefono}\n\n"
-        "Responde a este mensaje con:\n"
-        "• RECIBIDO  → confirmas que la preparas\n"
-        "• AGOTADO   → no tienes disponibilidad\n"
-        "• ENTREGADO → ya la entregaste y cobraste"
+        "Responde a este mensaje empezando por la referencia {order_code}:\n"
+        "• RECIBIDO {order_code}  → confirmas que la preparas\n"
+        "• AGOTADO {order_code}   → no tienes disponibilidad\n"
+        "• ENTREGADO {order_code} → ya la entregaste y cobraste"
+    ),
+    "tcp_ack_ambiguous": (
+        "Tengo más de un pedido abierto contigo y no quiero confundirlos. "
+        "¿A cuál te refieres? Repite el mensaje con el código al inicio, "
+        "por ejemplo:\nENTREGADO {ejemplo}"
+    ),
+    "tcp_escalation_ambiguous": (
+        "Tengo varias consultas abiertas contigo y no quiero cruzar las "
+        "respuestas. ¿A cuál corresponde? Repite tu respuesta citando la "
+        "referencia, por ejemplo: [E-{ejemplo:04d}]"
     ),
     "tcp_cancel": (
         "❌ ORDEN CANCELADA — Ref: {order_code}\n\n"
