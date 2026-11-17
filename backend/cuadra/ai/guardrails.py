@@ -77,6 +77,27 @@ _PROMPT_DISCLOSURE = re.compile(
 )
 
 
+# Especificaciones técnicas: el modelo no puede afirmar un dato de hardware que
+# no esté en `specifications` (prueba #3, F1: "la GPU RTX 4060 es un
+# microprocesador"). La comprobación solo corre cuando el contexto trae el
+# producto con sus especificaciones; los textos del TCP se validan aparte.
+SPEC_TOPICS = {
+    "procesador": re.compile(r"microprocesador|procesador|\bcpu\b", re.IGNORECASE),
+    "tarjeta gráfica": re.compile(
+        r"\bgpu\b|tarjeta\s+gr[aá]fica|gr[aá]ficos", re.IGNORECASE
+    ),
+    "memoria RAM": re.compile(r"\bram\b|memoria", re.IGNORECASE),
+    "almacenamiento": re.compile(
+        r"almacenamiento|\bssd\b|\bhdd\b|disco\s+(?:duro|s[oó]lido)",
+        re.IGNORECASE,
+    ),
+    "pantalla": re.compile(r"pantalla|\bdisplay\b|pulgadas", re.IGNORECASE),
+    "batería": re.compile(r"bater[ií]a|autonom[ií]a|\bmah\b", re.IGNORECASE),
+    "cámara": re.compile(r"c[aá]mara", re.IGNORECASE),
+    "garantía": re.compile(r"garant[ií]a", re.IGNORECASE),
+}
+
+
 def _decimal(value) -> Decimal | None:
     try:
         return Decimal(str(value))
@@ -237,6 +258,56 @@ def check_prompt_disclosure(reply: str) -> bool:
     return not _asserts(reply, _PROMPT_DISCLOSURE)
 
 
+def _specs_corpus(context: dict) -> str | None:
+    """Specs the reply may use, or None when the spec check does not apply.
+
+    Only customer-facing product payloads carry `specifications`; replies built
+    from a raw TCP answer are validated with a context without a product, so
+    the supplier's own words are never blocked by this check.
+    """
+    products = []
+    seen = set()
+    for value in (
+        context.get("product"),
+        *(context.get("products") or []),
+        *(context.get("candidates") or []),
+        *(context.get("alternatives") or []),
+    ):
+        if not isinstance(value, dict) or not isinstance(
+            value.get("specifications"), dict
+        ):
+            continue
+        key = id(value)
+        if key in seen:
+            continue
+        seen.add(key)
+        products.append(value)
+    if not products:
+        return None
+    parts = []
+    for product in products:
+        for key, value in product["specifications"].items():
+            parts.append(str(key))
+            parts.append(str(value))
+    return " ".join(parts)
+
+
+def check_specs(reply: str, context: dict) -> bool:
+    """False when the reply asserts a technical spec the catalog does not have."""
+    corpus = _specs_corpus(context)
+    if corpus is None:
+        return True
+    for pattern in SPEC_TOPICS.values():
+        if not pattern.search(reply or ""):
+            continue
+        if pattern.search(corpus):
+            continue
+        # "No tengo ese dato del procesador" no afirma nada: no gasta reintento.
+        if _asserts(reply, pattern):
+            return False
+    return True
+
+
 def check_format(reply: str) -> bool:
     text = (reply or "").strip()
     if not text:
@@ -275,6 +346,8 @@ def validate_reply(reply: str, context: dict) -> tuple[bool, str]:
         return False, "prompt_disclosure"
     if not check_prices(reply, allowed_prices(context)):
         return False, "price"
+    if not check_specs(reply, context):
+        return False, "spec"
     return True, ""
 
 

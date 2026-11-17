@@ -51,6 +51,25 @@ def _dato_pertenece_a(dato: str) -> str:
     return "proveedor"
 
 
+def _missing_spec_topics(product: dict, text: str) -> list[str]:
+    """Temas técnicos que el cliente pregunta y el catálogo no puede responder.
+
+    Prueba #3 (F1): con las especificaciones vacías el compositor inventó que la
+    GPU era un microprocesador. Si el dato no está en `specifications`, se
+    escala al proveedor; el modelo no compone una respuesta técnica a ciegas.
+    """
+    specs = product.get("specifications") or {}
+    corpus = " ".join(f"{key} {value}" for key, value in specs.items())
+    missing = []
+    for topic, pattern in guardrails.SPEC_TOPICS.items():
+        if not pattern.search(text or ""):
+            continue
+        if pattern.search(corpus):
+            continue
+        missing.append(topic)
+    return missing
+
+
 def _build_base_messages(
     conn,
     conversation,
@@ -964,6 +983,12 @@ async def _decide(
         # solo los del proveedor se escalan al TCP.
         datos_cliente = [d for d in datos if _dato_pertenece_a(d) == "cliente"]
         datos_proveedor = [d for d in datos if _dato_pertenece_a(d) == "proveedor"]
+        # F1 (prueba #3): un tema técnico que el catálogo no tiene se escala,
+        # no se compone. El NLU puede no listarlo, así que se detecta también
+        # por léxico antes de llamar al modelo.
+        for topic in _missing_spec_topics(product, text):
+            if topic not in datos_proveedor:
+                datos_proveedor.append(topic)
 
         if datos_cliente and not datos_proveedor:
             # Solo faltan datos que el cliente conoce: no escalar, preguntarle.

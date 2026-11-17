@@ -131,3 +131,10 @@ La prueba #3 cerró el ciclo completo (catálogo → escalación → venta → e
 - **Erratas toleradas solo en mensajes de una palabra.** `ENTREGSDO`, `RECIVIDO` cuentan (≥ 85 % de similitud sobre palabras de 8+ letras); «la entrega es mañana» o «ENTREGA» no. La tolerancia existe porque el TCP escribe desde el móvil, no para adivinar frases.
 - **Consulta ambigua no se resuelve por parecido.** Con varias escalaciones abiertas y sin `[E-####]`, no se resuelve ninguna: se encola `ask_tcp_reference` y se le pide la referencia al TCP, una sola vez por mensaje (evento `tcp_reference_asked`).
 - **Al TCP siempre se le responde.** Sea ack ambiguo, repetido o sin venta, el bot contesta algo al TCP (pedir la referencia o ignorar en silencio el duplicado), nunca lo deja sin reacción ni lo usa como fuente de datos del producto.
+
+## 11. Especificaciones y mensajes del TCP (prueba #3)
+
+Dos reglas para que el bot no afirme lo que no sabe ni confunda al proveedor con el catálogo:
+
+- **Un dato técnico solo se afirma si está en `specifications`.** Si el cliente pregunta por un tema del catálogo (procesador, tarjeta gráfica, memoria, almacenamiento, pantalla, batería, cámara, garantía) y el campo no existe, el bot **escala** en vez de componer: `pipeline._missing_spec_topics` lo detecta por léxico, sin depender del NLU. Si el dato existe, el compositor puede usarlo, pero `guardrails.check_specs` rechaza cualquier especificación que no esté en el catálogo (razón `spec`). Una negación honesta («no tengo ese dato del procesador») no se bloquea.
+- **El texto del TCP que no es una respuesta no es un dato ni un mensaje para el cliente.** Una queja o negativa de proceso («no me has dado los datos de la venta», «no te puedo confirmar») se registra como `tcp_not_an_answer`: no se guarda en `specifications`, no se reenvía al cliente y la consulta sigue abierta. «No tengo unidades» sí es una respuesta válida. Si ninguna respuesta del TCP es utilizable, el cliente recibe `escalation_unconfirmed` (el dato sigue pendiente), nunca una disponibilidad inventada.

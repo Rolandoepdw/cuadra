@@ -320,6 +320,24 @@ _NO_STOCK = re.compile(
     r"no\s+(?:hay|queda|quedan|tenemos|me\s+queda))\b",
     re.IGNORECASE,
 )
+# Un mensaje del TCP que reclama datos o niega el proceso no es una respuesta
+# de producto. Prueba #3: "No me has dado los datos de la venta..." se guardó
+# como especificación y se reenvió literal al cliente (F2/F3). "No tengo
+# unidades" sí es una respuesta y no entra aquí.
+_NOT_AN_ANSWER = re.compile(
+    r"\bno\s+me\s+(?:has|ha|han|diste|dio|dieron)\b|"
+    r"\bno\s+te\s+puedo\s+confirmar\b|"
+    r"\bno\s+puedo\s+confirmar\b|"
+    r"\bno\s+tengo\s+(?:ni\s+)?(?:los\s+datos|la\s+direcci[oó]n|"
+    r"el\s+tel[eé]fono|los\s+detalles)\b|"
+    r"\bno\s+(?:s[eé]|tengo\s+ese\s+dato|dispongo\s+de)\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_answer(text: str | None) -> bool:
+    """False when a TCP message complains or refuses instead of answering."""
+    return not _NOT_AN_ANSWER.search(text or "")
 
 
 def _sanitize_customer_text(text: str | None) -> str:
@@ -359,6 +377,8 @@ def _customer_answers(
     """
     candidates: list[str] = []
     for value in (answer, summary):
+        if not looks_like_answer(value):
+            continue
         clean = _sanitize_customer_text(value)
         if clean and clean not in candidates and _answer_currencies_ok(clean, product):
             candidates.append(clean)
@@ -398,12 +418,9 @@ def _customer_reply(
         ok, _reason = guardrails.validate_reply(candidate, context)
         if ok:
             return candidate
-    template = (
-        "escalation_resolved_generic"
-        if product is None or available
-        else "escalation_resolved_generic_out_of_stock"
-    )
-    return prompts.TEMPLATES[template].format(producto=product_name)
+    # Ningún candidato utilizable: ni una queja del TCP ni un dato con moneda
+    # ajena se reenvían. Se dice la verdad: el dato sigue pendiente.
+    return prompts.TEMPLATES["escalation_unconfirmed"].format(producto=product_name)
 
 
 def _operator_decision_reply(product: dict | None, kind: str) -> str:

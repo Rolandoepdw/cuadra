@@ -66,19 +66,22 @@
 
 ## 3. Fallas identificadas
 
-### F1 — CRÍTICO: el compositor inventa especificaciones
+### F1 — CORREGIDO: el compositor inventa especificaciones
 
 **Evidencia:** mensaje 10, «La laptop gamer RTX 4060 incluye la GPU RTX 4060, que es un microprocesador especializado para gaming».
 
-**Causa:** `_compose_open` recibe el producto en JSON y redacta con el modelo; `guardrails.validate_reply` no comprueba que los datos técnicos existan en `specifications_json`. El modelo rellenó el hueco «microprocesador» con la GPU porque el campo estaba vacío.
+**Causa:** `_compose_open` recibe el producto en JSON y redacta con el modelo; `guardrails.validate_reply` no comprobaba que los datos técnicos existieran en `specifications_json`. El modelo rellenó el hueco «microprocesador» con la GPU porque el campo estaba vacío.
 
-**Arreglo propuesto:** guardrail de specs — toda afirmación técnica debe salir de `specifications_json`; si el campo no existe, el compositor no puede responder (fallback: escalar). Es el fallo de mayor riesgo reputacional: un dato inventado sobre hardware es una devolución garantizada.
+**Arreglo aplicado (decisión §11):**
 
-**Estado:** pendiente.
+- `pipeline._missing_spec_topics` detecta por léxico el tema técnico preguntado (procesador, GPU, RAM, almacenamiento, pantalla, batería, cámara, garantía). Si no está en `specifications`, la respuesta escala al TCP **sin llamar al compositor**.
+- `guardrails.check_specs` rechaza (razón `spec`) cualquier respuesta compuesta que afirme un dato técnico ausente del catálogo. Las negaciones honestas no se bloquean.
+
+**Estado:** hecho, con 6 tests nuevos.
 
 ---
 
-### F2 — El mensaje del TCP contamina el catálogo
+### F2 — CORREGIDO: el mensaje del TCP contamina el catálogo
 
 **Evidencia:** `products.specifications_json` del producto 13:
 
@@ -88,21 +91,23 @@
 
 **Causa:** `tcp_extractor` interpretó cualquier respuesta del TCP como dato de producto. El TCP no estaba respondiendo una consulta: estaba reclamando los datos de la venta.
 
-**Arreglo propuesto:** el extractor solo corre si el mensaje está correlacionado con una escalación **abierta** y la respuesta no es una queja/negativa sobre el proceso. Validar que el texto extraído no sea una frase de rechazo.
+**Arreglo aplicado (decisión §11):** `tcp_triage.looks_like_answer` reconoce quejas/negativas de proceso; `tcp_process` las registra como `tcp_not_an_answer` y **no** llama al extractor, no guarda la especificación y deja la consulta abierta. «No tengo unidades» sigue siendo una respuesta válida.
 
-**Estado:** pendiente. Limpiar además el `specifications_json` contaminado del producto 13.
+**Datos reparados:** `scripts/clean_specs.py` eliminó el `dato_proveedor` contaminado del producto 13 (queda `{}`).
+
+**Estado:** hecho, con 3 tests nuevos.
 
 ---
 
-### F3 — El bot reenvía literal la respuesta del TCP
+### F3 — CORREGIDO: el bot reenvía literal la respuesta del TCP
 
 **Evidencia:** mensaje 22, «¡Buenas! Ya me confirmó el almacén: No me has dado los datos de la venta, no te puedo confirmar…».
 
 **Causa:** `tcp_triage._customer_answers` prioriza la respuesta completa del TCP; el filtro de moneda no cubre una queja.
 
-**Arreglo propuesto:** nunca reenviar literal un mensaje del TCP al cliente. La respuesta al cliente se compone desde el resumen validado (`escalation_resolved`) y, si no hay resumen útil, se usa la plantilla genérica. El texto crudo del TCP es material interno, no copy de cliente.
+**Arreglo aplicado (decisión §11):** `_customer_answers` descarta las quejas (`looks_like_answer`) tanto en la respuesta cruda como en el resumen. Si no queda ninguna utilizable, el cliente recibe `escalation_unconfirmed` («sigo esperando que el almacén me confirme ese dato»), nunca una disponibilidad inventada. La respuesta completa del TCP se sigue usando cuando **sí** es una respuesta (H-22 intacto).
 
-**Estado:** pendiente.
+**Estado:** hecho, con 2 tests nuevos.
 
 ---
 
@@ -211,7 +216,16 @@ Protocolo de referencias y acks (decisión §10 de `00_decisiones.md`):
 - Varias ventas abiertas sin código → `AMBIGUOUS` + `ask_tcp_reference`.
 - Varias escalaciones abiertas sin `[E-####]` → `tcp_reply_ambiguous` + `ask_tcp_reference`.
 - `tcp_order` y `escalation_question` piden la referencia en la respuesta.
-- Suite: **320 tests OK**.
+
+Especificaciones y mensajes del TCP (decisión §11):
+
+- `pipeline._missing_spec_topics` escala los temas técnicos que el catálogo no tiene, sin llamar al compositor.
+- `guardrails.check_specs` bloquea especificaciones inventadas (razón `spec`).
+- `tcp_triage.looks_like_answer` distingue una queja de una respuesta; `tcp_process` registra `tcp_not_an_answer` y no contamina el catálogo.
+- `_customer_answers` no reenvía quejas; el último recurso es `escalation_unconfirmed`.
+- `scripts/clean_specs.py` reparó el `specifications_json` del producto 13.
+
+Suite: **331 tests OK**.
 
 ---
 

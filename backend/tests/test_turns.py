@@ -525,6 +525,29 @@ class ClaimRaceTests(Phase1TestCase):
 
 
 class EscalationTests(Phase1TestCase):
+    def test_a_missing_spec_escalates_instead_of_composing(self):
+        # F1 (prueba #3): con las especificaciones vacías, el compositor
+        # inventó que la GPU era un microprocesador. Debe escalar sin llamar
+        # al modelo de redacción.
+        intent = llm.Intent(
+            intencion="consulta_dato", producto="Power Bank", confianza=0.9
+        )
+        compose = AsyncMock(return_value="La GPU es un microprocesador.")
+        with patch(
+            "cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)
+        ), patch("cuadra.ai.llm.compose", new=compose):
+            self._ingest("ID 1, ¿qué microprocesador trae?")
+            self._make_due()
+            self._run_process()
+
+        self.assertEqual(compose.await_count, 0)
+        outbound = self._rows("SELECT * FROM messages WHERE direction = 'OUTBOUND'")
+        self.assertEqual(len(outbound), 1)
+        self.assertIn("consulto al almacén", outbound[0]["body"])
+        escalations_rows = self._rows("SELECT * FROM escalations")
+        self.assertEqual(len(escalations_rows), 1)
+        self.assertIn("procesador", escalations_rows[0]["question"])
+
     def test_consulta_dato_creates_escalation_and_asks_supplier(self):
         intent = llm.Intent(
             intencion="consulta_dato",
@@ -554,6 +577,26 @@ class EscalationTests(Phase1TestCase):
                 "AND status = 'PENDING'"
             ),
             1,
+        )
+
+
+class SpecTopicTests(unittest.TestCase):
+    def test_a_topic_covered_by_the_catalog_is_not_missing(self):
+        product = {"specifications": {"procesador": "i5 1250H"}}
+        self.assertEqual(
+            pipeline._missing_spec_topics(product, "¿qué procesador tiene?"), []
+        )
+
+    def test_an_empty_catalog_reports_the_asked_topic(self):
+        self.assertEqual(
+            pipeline._missing_spec_topics({"specifications": {}}, "¿qué GPU trae?"),
+            ["tarjeta gráfica"],
+        )
+
+    def test_a_question_without_spec_terms_reports_nothing(self):
+        self.assertEqual(
+            pipeline._missing_spec_topics({"specifications": {}}, "¿cuánto cuesta?"),
+            [],
         )
 
 
@@ -1189,6 +1232,60 @@ class GuardrailTests(unittest.TestCase):
         ok, reason = guardrails.validate_reply("Cuesta 99 USD.", self.context)
         self.assertFalse(ok)
         self.assertEqual(reason, "price")
+
+    def test_an_invented_spec_is_rejected(self):
+        # F1 (prueba #3): el catálogo no dice nada del procesador y el modelo
+        # afirmó que la GPU era un microprocesador.
+        context = {
+            "product": {
+                "id": 1,
+                "price": 1100,
+                "currency": "USD",
+                "specifications": {},
+            }
+        }
+        ok, reason = guardrails.validate_reply(
+            "La GPU RTX 4060 es un microprocesador especializado.", context
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "spec")
+
+    def test_a_spec_that_is_in_the_catalog_passes(self):
+        context = {
+            "product": {
+                "id": 1,
+                "price": 1100,
+                "currency": "USD",
+                "specifications": {"procesador": "i5 1250H"},
+            }
+        }
+        ok, reason = guardrails.validate_reply(
+            "Trae un procesador i5 1250H.", context
+        )
+        self.assertTrue(ok, reason)
+
+    def test_an_honest_refusal_about_a_missing_spec_passes(self):
+        context = {
+            "product": {
+                "id": 1,
+                "price": 1100,
+                "currency": "USD",
+                "specifications": {},
+            }
+        }
+        ok, reason = guardrails.validate_reply(
+            "No tengo ese dato del procesador; lo consulto con el almacén.",
+            context,
+        )
+        self.assertTrue(ok, reason)
+
+    def test_a_reply_without_a_product_skips_the_spec_check(self):
+        # El texto que viene del TCP se valida con un contexto sin producto:
+        # sus palabras no se bloquean por el catálogo.
+        ok, reason = guardrails.validate_reply(
+            "Es un i5 y tiene una GPU RTX 4060.", {"quoted_prices": []}
+        )
+        self.assertTrue(ok, reason)
 
     def test_stale_prices_are_redacted_from_bot_history(self):
         allowed = guardrails.allowed_prices(self.context)

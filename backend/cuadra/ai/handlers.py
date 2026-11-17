@@ -1558,6 +1558,26 @@ async def tcp_process(payload: dict) -> None:
             return
 
         product = catalog.get_product(conn, product_id)
+        if not tcp_triage.looks_like_answer(answer):
+            # Prueba #3 (F2): una queja del TCP no es un dato del producto ni
+            # una respuesta para el cliente. No se guarda, no se reenvía y la
+            # consulta sigue abierta esperando el dato real.
+            events.log(
+                conn,
+                "bot",
+                "tcp_not_an_answer",
+                entity="suppliers",
+                entity_id=supplier_id,
+                details={"message_id": message_id, "text": answer[:200]},
+            )
+            _mark_tcp_processed(
+                conn,
+                message_id=message_id,
+                supplier_id=supplier_id,
+                kind="NOT_AN_ANSWER",
+                details={"text": answer[:200]},
+            )
+            return
         if escalation is not None and escalation["status"] in escalations.OPEN_STATUSES:
             escalations.set_answer(conn, escalation["id"], answer)
 

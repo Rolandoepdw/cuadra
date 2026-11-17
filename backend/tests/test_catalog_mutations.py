@@ -446,6 +446,24 @@ class TestCustomerAnswer(Phase4Fixture):
         )
         self.assertIn("no tenemos unidades", body)
 
+    def test_a_tcp_complaint_is_never_forwarded_to_the_client(self):
+        # F3 (prueba #3): "No me has dado los datos de la venta..." se reenvió
+        # literal al cliente como si fuera la respuesta del almacén.
+        complaint = (
+            "No me has dado los datos de la venta, no te puedo confirmar, "
+            "si no tengo ni la direccion del cliente"
+        )
+        body = tcp_triage._customer_reply(
+            self.product(1), complaint, answer=complaint
+        )
+        self.assertNotIn("No me has dado", body)
+        self.assertNotIn("direccion", body)
+        self.assertIn("Sigo esperando", body)
+
+    def test_a_stock_refusal_is_still_a_valid_answer(self):
+        self.assertTrue(tcp_triage.looks_like_answer("No tengo unidades"))
+        self.assertFalse(tcp_triage.looks_like_answer("no me has dado la direccion"))
+
 
 class TestTcpHandler(Phase4Fixture):
     def _message(self, body: str, message_id: int = 20) -> int:
@@ -557,6 +575,31 @@ class TestTcpHandler(Phase4Fixture):
         self.assertEqual(escalation["status"], "RESOLVED")
         product = self.product()
         self.assertEqual(product["specifications"]["dato_proveedor"], "garantía de 6 meses")
+
+    def test_a_tcp_complaint_does_not_become_a_product_spec(self):
+        # F2 (prueba #3): "No me has dado los datos de la venta..." se guardó
+        # como `dato_proveedor` del producto. Ni es un dato ni es una respuesta.
+        message_id = self._message(
+            "[E-0001] No me has dado los datos de la venta, no te puedo confirmar"
+        )
+        with patch(
+            "cuadra.ai.handlers.tcp_extractor.extract",
+            new=AsyncMock(side_effect=AssertionError("el extractor no debe correr")),
+        ):
+            self._tcp_process(message_id)
+
+        self.assertNotIn("dato_proveedor", self.product()["specifications"])
+        self.assertEqual(escalations.get(self.conn, 1)["status"], "PENDING")
+        outbound = self.conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE direction = 'OUTBOUND'"
+        ).fetchone()[0]
+        self.assertEqual(outbound, 0)
+        processed = self.conn.execute(
+            """SELECT details_json FROM events
+               WHERE type = 'tcp_processed' AND entity_id = ?""",
+            (message_id,),
+        ).fetchone()
+        self.assertIn("NOT_AN_ANSWER", processed["details_json"])
 
     def test_a_delivery_ack_is_never_an_escalation_answer(self):
         # Prueba #3: "Entregado" cayó en la correlación de escalaciones y se

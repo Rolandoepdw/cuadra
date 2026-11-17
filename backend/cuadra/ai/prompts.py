@@ -209,6 +209,10 @@ TEMPLATES = {
         "¡Buenas! Ya me confirmó el almacén. Por ahora no tenemos unidades de "
         "{producto}; ¿quieres que te avise cuando vuelva a entrar?"
     ),
+    "escalation_unconfirmed": (
+        "Buenas. Sigo esperando que el almacén me confirme ese dato; te aviso "
+        "en cuanto me responda."
+    ),
     "mutation_rejected": (
         "Buenas. No pude confirmar ese dato con el almacén, así que no te lo doy "
         "por bueno. Si quieres, lo intento de nuevo más tarde."
