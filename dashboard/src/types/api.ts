@@ -764,3 +764,209 @@ export interface ConversationDetail {
   turns: ConversationTurn[];
   traces: ConversationTrace[];
 }
+
+// ---------------------------------------------------------------- customers
+export type CustomerStatus = "ACTIVE" | "BLOCKED" | "SPAM" | "MERGED";
+export type CustomerSegment =
+  | "bloqueado"
+  | "riesgo"
+  | "vip"
+  | "comprador"
+  | "potencial"
+  | "poco_rentable"
+  | "frio"
+  | "nuevo";
+export type CustomerRisk = "low" | "medium" | "high";
+
+export interface CustomerChannelRef {
+  channel: string;
+  handle: string | null;
+}
+
+export interface CustomerListItem {
+  id: number;
+  name: string | null;
+  display_name: string | null;
+  kind: CustomerKind;
+  status: CustomerStatus;
+  phone_masked: string | null;
+  zone: string | null;
+  channels: CustomerChannelRef[];
+  conversations_total: number;
+  conversations_open: number;
+  questions_total: number;
+  turns_total: number;
+  sales_created: number;
+  sales_settled: number;
+  revenue_usd: number;
+  revenue_cup: number;
+  commission_usd: number;
+  commission_cup: number;
+  conversion: number;
+  effort_score: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  last_purchase_at: string | null;
+  segment: CustomerSegment;
+  risk: CustomerRisk;
+  risk_score: number;
+  tags: string[];
+}
+
+export interface CustomersPage {
+  items: CustomerListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  segments: CustomerSegment[];
+}
+
+export interface CustomersSummary {
+  total: number;
+  new_7d: number;
+  active_7d: number;
+  buyers: number;
+  conversion: number;
+  risk: number;
+  blocked: number;
+  low_value: number;
+  revenue_usd: number;
+  revenue_cup: number;
+  commission_usd: number;
+  commission_cup: number;
+}
+
+export interface CustomerContact {
+  id: number;
+  kind: "phone" | "email" | "whatsapp";
+  value_masked: string | null;
+  normalized_masked: string | null;
+  label: string | null;
+  source: string;
+  confidence: number;
+  verified: boolean;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+}
+
+export interface CustomerNote {
+  id: number;
+  body: string;
+  author: string | null;
+  created_at: string;
+}
+
+export interface CustomerSignal {
+  id: number;
+  customer_id: number;
+  kind: string;
+  severity: "info" | "warning" | "critical";
+  status: "OPEN" | "CONFIRMED" | "DISMISSED";
+  count: number;
+  evidence: Record<string, unknown>;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  resolved_at: string | null;
+  resolved_by: string | null;
+}
+
+export interface CustomerMetrics {
+  conversations_total: number;
+  conversations_open: number;
+  messages_in: number;
+  messages_out: number;
+  turns_total: number;
+  questions_total: number;
+  products_inquired: number;
+  escalations_total: number;
+  escalations_open: number;
+  sales_created: number;
+  sales_settled: number;
+  sales_cancelled: number;
+  sales_needs_operator: number;
+  revenue_usd: number;
+  revenue_cup: number;
+  commission_usd: number;
+  commission_cup: number;
+  conversion: number;
+  avg_turns_per_conversation: number;
+  compute_s: number;
+  effort_score: number;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  last_purchase_at: string | null;
+  risk_score: number;
+}
+
+export interface CustomerConversationRef {
+  id: number;
+  channel: string;
+  identity: string;
+  handle: string | null;
+  status: ConversationStatus;
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+  messages_count: number;
+  last_message_at: string | null;
+}
+
+export interface CustomerDetail {
+  customer: CustomerListItem & {
+    address_masked: string | null;
+    created_at: string;
+  };
+  metrics: CustomerMetrics;
+  contacts: CustomerContact[];
+  zones: { id: number; name: string }[];
+  tags: string[];
+  notes: CustomerNote[];
+  signals: CustomerSignal[];
+  conversations: CustomerConversationRef[];
+  sales: ConversationSale[];
+  merge: { merged_into_id: number | null };
+}
+
+export interface CustomerMergePreview {
+  from: { id: number; name: string | null; display_name: string | null };
+  into: { id: number; name: string | null; display_name: string | null };
+  move: {
+    conversations: number;
+    messages: number;
+    sales: number;
+    contacts: number;
+    tags: number;
+    notes: number;
+    signals: number;
+  };
+  conflicts: {
+    contacts: { kind: string; normalized: string }[];
+    tags: string[];
+    open_signals: string[];
+  };
+  irreversible: boolean;
+}
+
+export interface CustomerReveal {
+  customer_id: number;
+  phone: string | null;
+  address: string | null;
+  contacts: {
+    id: number;
+    kind: string;
+    value: string;
+    normalized: string;
+    source: string;
+    verified: boolean;
+  }[];
+}
+
+export interface CustomerPatch {
+  name?: string;
+  display_name?: string;
+  status?: CustomerStatus;
+  usual_zone_id?: number;
+  usual_address?: string;
+  phone?: string;
+  notes?: string;
+}

@@ -89,6 +89,32 @@ def ingest_incoming(
                 "job_id": open_turn["job_id"] if open_turn else None,
             }
 
+        # A blocked customer is stored for audit but never answered: no turn,
+        # no job, no model call, and no "you are blocked" message (plan §5.5).
+        if (customer.get("status") or "ACTIVE") in ("BLOCKED", "SPAM"):
+            events.log(
+                conn,
+                "bot",
+                "blocked_inbound",
+                entity="customers",
+                entity_id=customer["id"],
+                details={
+                    "conversation_id": conversation["id"],
+                    "message_id": inbound["id"],
+                },
+            )
+            conn.commit()
+            return {
+                "source": "customer",
+                "blocked": True,
+                "duplicate": False,
+                "customer_id": customer["id"],
+                "conversation_id": conversation["id"],
+                "message_id": inbound["id"],
+                "turn_id": None,
+                "job_id": None,
+            }
+
         turn = assembler.on_inbound(conn, conversation["id"], inbound["id"])
         return {
             "source": "customer",

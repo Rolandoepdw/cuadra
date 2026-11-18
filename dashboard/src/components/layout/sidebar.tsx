@@ -1,6 +1,7 @@
 ﻿import { NavLink } from "react-router-dom";
 import {
   Activity,
+  Contact,
   History,
   LayoutDashboard,
   LogOut,
@@ -21,6 +22,7 @@ import { useAuth } from "@/lib/auth";
 const items = [
   { to: "/", label: "General", icon: LayoutDashboard, end: true },
   { to: "/conversations", label: "Conversaciones", icon: MessagesSquare, end: false },
+  { to: "/customers", label: "Clientes", icon: Contact, end: false },
   { to: "/catalog", label: "Catálogo", icon: Package, end: false },
   { to: "/groups", label: "Grupos", icon: Users, end: false },
   { to: "/broadcasts", label: "Difusiones", icon: Megaphone, end: false },

@@ -75,6 +75,14 @@ def _mask_value(kind: str, normalized: str) -> str:
     return mask_phone(normalized) or "***"
 
 
+def mask_contact(kind: str, value: str | None) -> str | None:
+    """Mask any contact value for the panel, using its canonical form."""
+    normalized = normalize_contact(kind, value)
+    if normalized is None:
+        return None
+    return _mask_value(kind, normalized)
+
+
 def get_contact(conn, contact_id: int) -> dict | None:
     row = conn.execute(
         "SELECT * FROM customer_contacts WHERE id = ?", (contact_id,)

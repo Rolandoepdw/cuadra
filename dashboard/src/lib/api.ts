@@ -23,6 +23,13 @@ import type {
   ConversationsSummary,
   ConversationStatus,
   CustomerKind,
+  CustomerDetail,
+  CustomerMergePreview,
+  CustomerNote,
+  CustomerPatch,
+  CustomerReveal,
+  CustomersPage,
+  CustomersSummary,
   DeliverySettings,
   FinanceSummary,
   FollowupPage,
@@ -481,4 +488,96 @@ export const listConversationMessages = (
 export const closeConversation = (id: number) =>
   request<ConversationListItem>(`/api/conversations/${id}/close`, {
     method: "POST",
+  });
+
+// ---------------------------------------------------------------- customers
+export const getCustomersSummary = () =>
+  request<CustomersSummary>("/api/customers/summary");
+
+export const listCustomers = (
+  params: {
+    kind?: CustomerKind | "all";
+    status?: string;
+    segment?: string;
+    risk?: string;
+    zone_id?: number;
+    tag?: string;
+    has_sales?: boolean;
+    q?: string;
+    date_from?: string;
+    date_to?: string;
+    sort?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+) => {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== "" && v !== null) qs.set(k, String(v));
+  }
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return request<CustomersPage>(`/api/customers${suffix}`);
+};
+
+export const getCustomer = (id: number) =>
+  request<CustomerDetail>(`/api/customers/${id}`);
+
+export const updateCustomer = (id: number, patch: CustomerPatch) =>
+  request<CustomerDetail>(`/api/customers/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+
+export const revealCustomerContact = (id: number) =>
+  request<CustomerReveal>(`/api/customers/${id}/contact?reveal=true`);
+
+export const addCustomerTag = (id: number, tag: string) =>
+  request<{ tags: string[] }>(`/api/customers/${id}/tags`, {
+    method: "POST",
+    body: JSON.stringify({ tag }),
+  });
+
+export const removeCustomerTag = (id: number, tag: string) =>
+  request<{ tags: string[] }>(
+    `/api/customers/${id}/tags/${encodeURIComponent(tag)}`,
+    { method: "DELETE" },
+  );
+
+export const addCustomerNote = (id: number, body: string) =>
+  request<{ notes: CustomerNote[] }>(`/api/customers/${id}/notes`, {
+    method: "POST",
+    body: JSON.stringify({ body }),
+  });
+
+export const confirmCustomerSignal = (id: number, signalId: number) =>
+  request<CustomerDetail>(
+    `/api/customers/${id}/signals/${signalId}/confirm`,
+    { method: "POST" },
+  );
+
+export const dismissCustomerSignal = (id: number, signalId: number) =>
+  request<CustomerDetail>(
+    `/api/customers/${id}/signals/${signalId}/dismiss`,
+    { method: "POST" },
+  );
+
+export const blockCustomer = (id: number) =>
+  request<CustomerDetail>(`/api/customers/${id}/block`, { method: "POST" });
+
+export const unblockCustomer = (id: number) =>
+  request<CustomerDetail>(`/api/customers/${id}/unblock`, { method: "POST" });
+
+export const previewCustomerMerge = (fromId: number, intoId: number) =>
+  request<CustomerMergePreview>(
+    `/api/customers/merge/preview?from_id=${fromId}&into_id=${intoId}`,
+  );
+
+export const mergeCustomers = (payload: {
+  from_id: number;
+  into_id: number;
+  reason?: string;
+}) =>
+  request<CustomerDetail>("/api/customers/merge", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });

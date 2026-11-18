@@ -19,6 +19,7 @@ from cuadra.api import (
     routes_broadcasts,
     routes_catalog,
     routes_conversations,
+    routes_customers,
     routes_dashboard,
     routes_debug,
     routes_finance,
@@ -170,6 +171,7 @@ async def _api_no_store(request, call_next):
 
 app.include_router(routes_dashboard.router)
 app.include_router(routes_conversations.router)
+app.include_router(routes_customers.router)
 app.include_router(routes_catalog.router)
 app.include_router(routes_broadcasts.router)
 app.include_router(routes_finance.router)

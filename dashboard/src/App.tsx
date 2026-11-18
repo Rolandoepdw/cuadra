@@ -6,6 +6,7 @@ import { LoginGate } from "@/components/layout/login_gate";
 import { AppShell } from "@/components/layout/app_shell";
 import { GeneralPanel } from "@/panels/general/general_panel";
 import { ConversationsPanel } from "@/panels/conversations/conversations_panel";
+import { CustomersPanel } from "@/panels/customers/customers_panel";
 import { CatalogPanel } from "@/panels/catalog/catalog_panel";
 import { HealthPanel } from "@/panels/health/health_panel";
 import { GroupsPanel } from "@/panels/groups/groups_panel";
@@ -26,6 +27,8 @@ function Gated() {
         <Route index element={<GeneralPanel />} />
         <Route path="conversations" element={<ConversationsPanel />} />
         <Route path="conversations/:conversationId" element={<ConversationsPanel />} />
+        <Route path="customers" element={<CustomersPanel />} />
+        <Route path="customers/:customerId" element={<CustomersPanel />} />
         <Route path="catalog" element={<CatalogPanel />} />
         <Route path="groups" element={<GroupsPanel />} />
         <Route path="broadcasts" element={<BroadcastsPanel />} />

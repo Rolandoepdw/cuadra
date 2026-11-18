@@ -1,8 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
   ArrowLeft,
+  Contact,
   MessageSquare,
   RefreshCw,
   ShieldAlert,
@@ -186,6 +188,7 @@ export function ConversationDetail({
   onBack: () => void;
 }) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [older, setOlder] = useState<ConversationMessage[]>([]);
   const [olderHasMore, setOlderHasMore] = useState<boolean | null>(null);
@@ -290,6 +293,14 @@ export function ConversationDetail({
               Cerrar conversación
             </Button>
           )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => navigate(`/customers/${customer.id}`)}
+          >
+            <Contact />
+            Ver cliente
+          </Button>
         </div>
       </div>
 

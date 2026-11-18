@@ -168,3 +168,31 @@ class BroadcastPatch(BaseModel):
 
 class BroadcastPublishingIn(BaseModel):
     publishing: bool
+
+
+# ------------------------------------------------------------------- customers
+
+
+class CustomerPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    display_name: str | None = Field(default=None, max_length=120)
+    status: Literal["ACTIVE", "BLOCKED", "SPAM"] | None = None
+    usual_zone_id: int | None = None
+    usual_address: str | None = Field(default=None, max_length=300)
+    phone: str | None = Field(default=None, max_length=40)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class CustomerTagIn(BaseModel):
+    tag: str = Field(min_length=1, max_length=40)
+    reason: str | None = Field(default=None, max_length=200)
+
+
+class CustomerNoteIn(BaseModel):
+    body: str = Field(min_length=1, max_length=2000)
+
+
+class CustomerMergeIn(BaseModel):
+    from_id: int = Field(ge=1)
+    into_id: int = Field(ge=1)
+    reason: str | None = Field(default=None, max_length=500)
