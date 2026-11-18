@@ -20,7 +20,12 @@ def _now() -> str:
 
 
 def get_or_create_customer(
-    conn, channel: str, identifier: str, name: str | None = None
+    conn,
+    channel: str,
+    identifier: str,
+    name: str | None = None,
+    *,
+    kind: str = "customer",
 ) -> dict:
     row = conn.execute(
         """SELECT c.* FROM customers c
@@ -29,8 +34,19 @@ def get_or_create_customer(
         (channel, identifier),
     ).fetchone()
     if row is not None:
-        return dict(row)
-    cur = conn.execute("INSERT INTO customers (name) VALUES (?)", (name,))
+        customer = dict(row)
+        # A TCP that was first seen as a customer is promoted, never demoted.
+        if kind == "supplier" and customer.get("kind") != "supplier":
+            conn.execute(
+                "UPDATE customers SET kind = 'supplier' WHERE id = ?",
+                (customer["id"],),
+            )
+            conn.commit()
+            customer["kind"] = "supplier"
+        return customer
+    cur = conn.execute(
+        "INSERT INTO customers (name, kind) VALUES (?, ?)", (name, kind)
+    )
     customer_id = cur.lastrowid
     conn.execute(
         "INSERT INTO customer_channels (customer_id, channel, identifier) VALUES (?, ?, ?)",

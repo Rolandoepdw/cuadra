@@ -2276,6 +2276,15 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
             conversation_id=conversation["id"],
             turn_id=turn.get("id"),
         )
+        try:
+            turns.record_outcome(
+                conn,
+                turn.get("id"),
+                outcome="error",
+                error=str(exc)[:500],
+            )
+        except Exception:  # noqa: BLE001 - never mask the original failure
+            log.exception("could not record outcome for turn %s", turn.get("id"))
         raise
 
     intent = result.get("intent") or {}
@@ -2299,6 +2308,24 @@ async def handle_turn(conn, conversation, turn: dict) -> dict:
         conversation_id=conversation["id"],
         turn_id=turn.get("id"),
     )
+    try:
+        turns.record_outcome(
+            conn,
+            turn.get("id"),
+            intent=intent.get("intencion"),
+            product_id=result.get("product_id"),
+            stage=result.get("stage"),
+            generator=result.get("generator"),
+            escalated=1 if result.get("escalate") else 0,
+            sale_id=result.get("sale_id"),
+            latency_ms=result.get("latency_ms"),
+            intent_ms=result.get("intent_ms"),
+            compose_ms=result.get("compose_ms"),
+            context_tokens=result.get("context_tokens"),
+            outcome="ok",
+        )
+    except Exception:  # noqa: BLE001 - the reply must not fail for telemetry
+        log.exception("could not record outcome for turn %s", turn.get("id"))
     return result
 
 

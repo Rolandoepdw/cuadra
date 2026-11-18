@@ -193,7 +193,7 @@ def _ingest_supplier(
     # Supplier replies live in the same conversation bound to that TCP's channel,
     # so the audit trail stays in one place per contact.
     customer = conversations.get_or_create_customer(
-        conn, channel, identifier, supplier["name"]
+        conn, channel, identifier, supplier["name"], kind="supplier"
     )
     conversation = conversations.get_or_create_open_conversation(
         conn, customer["id"], channel, identity=identity

@@ -157,6 +157,58 @@ def set_job(conn, turn_id: int, job_id: int | None) -> None:
     conn.commit()
 
 
+# Columns written by `record_outcome` (migration 020). Keeping the whitelist
+# here means callers can pass a pipeline result without leaking new keys into
+# SQL.
+_OUTCOME_FIELDS = (
+    "intent",
+    "product_id",
+    "stage",
+    "generator",
+    "escalated",
+    "sale_id",
+    "reply_message_id",
+    "latency_ms",
+    "intent_ms",
+    "compose_ms",
+    "context_tokens",
+    "outcome",
+    "error",
+    "finished_at",
+)
+
+
+def record_outcome(conn, turn_id: int | None, **fields) -> None:
+    """Persist what a turn understood and produced (migration 020).
+
+    A missing turn id (the legacy single-message entry point) is a no-op.
+    Unknown keys are ignored on purpose.
+    """
+    if turn_id is None:
+        return
+    data = {key: value for key, value in fields.items() if key in _OUTCOME_FIELDS}
+    if not data:
+        return
+    data.setdefault("finished_at", iso())
+    assignments = ", ".join(f"{key} = ?" for key in data)
+    conn.execute(
+        f"UPDATE turns SET {assignments}, updated_at = ? WHERE id = ?",
+        (*data.values(), iso(), turn_id),
+    )
+    conn.commit()
+
+
+def set_reply_message(conn, turn_id: int | None, message_id: int | None) -> None:
+    """Link the stored outbound message to its turn (written after the reply)."""
+    if turn_id is None or message_id is None:
+        return
+    conn.execute(
+        "UPDATE turns SET reply_message_id = ?, updated_at = ? WHERE id = ?",
+        (message_id, iso(), turn_id),
+    )
+    conn.commit()
+
+
 def claim(conn, turn_id: int) -> bool:
     """Atomically move ``OPEN -> PROCESSING``. False means someone else owns it."""
     cur = conn.execute(

@@ -333,6 +333,7 @@ async def process_turn(payload: dict) -> None:
             # One outbound message per turn, even after a crash/retry.
             external_id=f"turn:{turn_id}",
         )
+        turns.set_reply_message(conn, turn_id, outbound["id"])
         events.log(
             conn,
             "bot",
