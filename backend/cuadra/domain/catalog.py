@@ -335,74 +335,84 @@ _ZONE_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Palabras que no distinguen una zona: se descartan para comparar "La UCI" con
+# la zona "UCI" y "La Lisa" con "Lisa" (prueba #5).
+_ZONE_NOISE = {
+    "la", "el", "los", "las", "de", "del", "en", "mi", "tu", "su", "para",
+    "por", "a", "al", "con", "y", "o", "zona", "municipio", "entrega",
+    "entregar", "envio", "envío", "soy", "es", "son", "estoy", "vivo", "vive",
+    "resido", "reside", "radico", "radica", "ubicado", "ubicada",
+}
+
+
+def _zone_key(text: str) -> str:
+    words = [
+        word
+        for word in re.findall(r"[a-z0-9]+", _fold(text or ""))
+        if word not in _ZONE_NOISE
+    ]
+    return " ".join(words)
+
+
+def resolve_zones(conn, raw: str, *, active_only: bool = True) -> list[dict]:
+    """Every zone named in the text, in catalog order (prueba #5).
+
+    `resolve_zone` stays strict (one zone or None) because a sale needs a single
+    delivery zone. A coverage question can legitimately name several
+    ("Marianao o La Lisa"), so the caller uses this list to answer which of them
+    the supplier covers instead of escalating or guessing.
+    """
+    folded = _fold(raw).strip()
+    if not folded:
+        return []
+    zones = list_zones(conn, active=True if active_only else None)
+    by_id = {int(zone["id"]): zone for zone in zones}
+    raw_key = _zone_key(raw)
+
+    # 1. The whole message is the zone ("La UCI", "lisa"): exact key match.
+    if raw_key:
+        for zone in zones:
+            if _zone_key(zone["name"]) == raw_key:
+                return [zone]
+        for alias in list_zone_aliases(conn):
+            zone = by_id.get(int(alias["zone_id"]))
+            if zone is not None and _zone_key(alias["alias"]) == raw_key:
+                return [zone]
+
+    # 2. Whole-word match inside a sentence. Short names (< 6 chars) need a
+    #    delivery hint or an article before them to avoid matching common words.
+    has_hint = bool(_ZONE_HINT_RE.search(raw or ""))
+    candidates: dict[int, dict] = {}
+
+    def add(zone: dict, name: str) -> None:
+        if len(name) < 3:
+            return
+        if len(name) < 6 and not has_hint:
+            if not re.search(rf"\b(?:la|el|los|las)\s+{re.escape(name)}\b", folded):
+                return
+        if re.search(rf"(?<!\w){re.escape(name)}(?!\w)", folded):
+            candidates.setdefault(int(zone["id"]), zone)
+
+    for zone in zones:
+        add(zone, _fold(zone["name"]))
+    for alias in list_zone_aliases(conn):
+        zone = by_id.get(int(alias["zone_id"]))
+        if zone is not None:
+            add(zone, _fold(alias["alias"]))
+    return list(candidates.values())
+
 
 def resolve_zone(conn, raw: str, *, active_only: bool = True) -> dict | None:
-    """Map free text to a zone using canonical names or aliases.
+    """Map free text to a single zone using canonical names or aliases.
 
     There is no hardcoded municipality list: the `zones` catalog is the source
     of truth. `active_only=False` also matches inactive zones, so the caller can
     answer "no cubrimos esa zona" instead of silently ignoring the mention.
     Returns the zone row or None when the text is ambiguous or unknown (the
     caller must ask instead of guessing).
-
-    Zone names/aliases are searched as whole words inside the sentence. A hint
-    word (vivo, zona, entrega...) is no longer required: "Esto es Marianao"
-    resolves to the Marianao zone just like "vivo en Marianao".
     """
-    folded = _fold(raw).strip()
-    if not folded:
-        return None
-    zones = list_zones(conn, active=True if active_only else None)
-    by_id = {int(zone["id"]): zone for zone in zones}
-
-    # 1. Exact match on canonical name
-    for zone in zones:
-        if _fold(zone["name"]) == folded:
-            return zone
-    # 2. Exact match on alias
-    for alias in list_zone_aliases(conn):
-        zone = by_id.get(int(alias["zone_id"]))
-        if zone is not None and _fold(alias["alias"]) == folded:
-            return zone
-
-    # 3. Whole-word substring match on canonical names and aliases.
-    # Zones with short names (< 6 chars) need a delivery/hint word to avoid
-    # false positives on common words ("regla" = measuring tool, not the zone).
-    has_hint = bool(_ZONE_HINT_RE.search(raw or ""))
-    candidates = []
-    for zone in zones:
-        folded_name = _fold(zone["name"])
-        if len(folded_name) < 3:
-            continue
-        if len(folded_name) < 6 and not has_hint:
-            continue
-        if re.search(
-            rf"(?<!\w){re.escape(folded_name)}(?!\w)", folded
-        ):
-            candidates.append(zone)
-    for alias in list_zone_aliases(conn):
-        zone = by_id.get(int(alias["zone_id"]))
-        if zone is not None:
-            folded_alias = _fold(alias["alias"])
-            if len(folded_alias) < 3:
-                continue
-            if len(folded_alias) < 6 and not has_hint:
-                continue
-            if re.search(
-                rf"(?<!\w){re.escape(folded_alias)}(?!\w)", folded
-            ):
-                candidates.append(zone)
-
-    # Deduplicate by zone id; ambiguous (multiple zones) -> None, caller asks.
-    seen = {}
-    for zone in candidates:
-        zone_id = int(zone["id"])
-        if zone_id not in seen:
-            seen[zone_id] = zone
-
-    if len(seen) == 1:
-        return next(iter(seen.values()))
-    return None
+    zones = resolve_zones(conn, raw, active_only=active_only)
+    return zones[0] if len(zones) == 1 else None
 
 
 # ----------------------------------------------------------------- suppliers
@@ -1181,6 +1191,42 @@ def delivery_zone_names(conn, supplier_id: int) -> list[str]:
     return names
 
 
+_NON_SPEC_VALUE = re.compile(
+    r"\bno\s+recuerdo\b|"
+    r"\bconsulta(?:lo)?\s+(?:en\s+)?(?:la\s+)?base\s+de\s+datos\b|"
+    r"\bno\s+me\s+(?:has|ha|dieron)\b|"
+    r"\bno\s+puedo\s+confirmar\b|"
+    r"\bno\s+s[eé]\b",
+    re.IGNORECASE,
+)
+
+
+def customer_specifications(product: dict) -> dict:
+    """Parsed specs safe to show a customer.
+
+    Prueba #4: un TCP respondió "no recuerdo, consulta en la base de datos" y
+    quedó guardado como `dato_proveedor`. Ese texto no es una especificación:
+    se filtra para que no llegue a la ficha, al prompt ni a la tabla.
+    """
+    specs = product.get("specifications")
+    if not isinstance(specs, dict):
+        try:
+            specs = json.loads(product.get("specifications_json") or "{}")
+        except (TypeError, ValueError):
+            specs = {}
+    if not isinstance(specs, dict):
+        return {}
+    clean = {}
+    for key, value in specs.items():
+        text = str(value or "").strip()
+        if not text or str(key).startswith("_"):
+            continue
+        if _NON_SPEC_VALUE.search(text):
+            continue
+        clean[str(key)] = value
+    return clean
+
+
 def llm_product_json(conn, product: dict) -> dict:
     """Customer-safe product payload injected into the LLM context (02 §4, 01 §6.1).
 
@@ -1211,7 +1257,7 @@ def llm_product_json(conn, product: dict) -> dict:
         # Kept as text for the existing templates; the list is what the LLM uses.
         "zona_entrega": ", ".join(zonas) or supplier_zone,
         "zonas_entrega": zonas,
-        "especificaciones": json.loads(product.get("specifications_json") or "{}"),
+        "especificaciones": customer_specifications(product),
     }
 
 

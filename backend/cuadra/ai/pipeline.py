@@ -52,20 +52,34 @@ def _dato_pertenece_a(dato: str) -> str:
     return "proveedor"
 
 
+def _product_spec_corpus(product: dict) -> str:
+    """Customer-facing text that can back a technical answer (prueba #5).
+
+    La ficha real suele estar en `description` ("ASUS ZenBook / Ryzen 7 /
+    16GB RAM / 1TB SSD"), no en `specifications_json`. Sin la descripción el
+    bot escalaba datos que ya tenía a mano.
+    """
+    parts = [str(product.get("name") or ""), str(product.get("description") or "")]
+    for key, value in catalog.customer_specifications(product).items():
+        parts.append(str(key))
+        parts.append(str(value))
+    return " ".join(part for part in parts if part)
+
+
 def _missing_spec_topics(product: dict, text: str) -> list[str]:
     """Temas técnicos que el cliente pregunta y el catálogo no puede responder.
 
     Prueba #3 (F1): con las especificaciones vacías el compositor inventó que la
-    GPU era un microprocesador. Si el dato no está en `specifications`, se
-    escala al proveedor; el modelo no compone una respuesta técnica a ciegas.
+    GPU era un microprocesador. Si el dato no está en la ficha (descripción o
+    especificaciones), se escala al proveedor; el modelo no compone una
+    respuesta técnica a ciegas.
     """
-    specs = product.get("specifications") or {}
-    corpus = " ".join(f"{key} {value}" for key, value in specs.items())
+    corpus = _product_spec_corpus(product)
     missing = []
     for topic, pattern in guardrails.SPEC_TOPICS.items():
         if not pattern.search(text or ""):
             continue
-        if pattern.search(corpus):
+        if guardrails.spec_topic_present(topic, corpus):
             continue
         missing.append(topic)
     return missing
@@ -365,6 +379,189 @@ def _format_product_list(products: list[dict]) -> str:
     )
 
 
+_TOPIC_PRIORITY = {
+    topic: index for index, topic in enumerate(guardrails.SPEC_TOPICS)
+}
+
+
+def _line_topics(line: str) -> set[str]:
+    return {
+        topic
+        for topic in guardrails.SPEC_TOPICS
+        if guardrails.spec_topic_present(topic, line or "")
+    }
+
+
+def _detail_entries(product: dict) -> list[tuple[str, set[str]]]:
+    """Customer-facing detail lines from the description and specifications.
+
+    Each entry carries the spec topics it covers, so an open request can show
+    everything and a concrete request can select only what was asked.
+    """
+    entries: list[tuple[str, set[str]]] = []
+    seen: set[str] = set()
+
+    for raw in re.split(r"[\n;]+", product.get("description") or ""):
+        line = " ".join(raw.split()).strip(" -•\t")
+        if not line:
+            continue
+        key = catalog._fold(line)
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append((line, _line_topics(line)))
+
+    for key, value in catalog.customer_specifications(product).items():
+        text = str(value or "").strip()
+        if not text:
+            continue
+        label = str(key).strip()
+        line = text if label and catalog._fold(label) in catalog._fold(text) else f"{label}: {text}"
+        folded = catalog._fold(line)
+        if folded in seen:
+            continue
+        seen.add(folded)
+        covered = {_canonical_topic(label)} if label else set()
+        covered |= _line_topics(line)
+        entries.append((line, covered))
+    return entries
+
+
+def _entry_priority(entry: tuple[str, set[str]]) -> int:
+    topics = entry[1]
+    if not topics:
+        return len(_TOPIC_PRIORITY) + 1
+    return min(
+        _TOPIC_PRIORITY.get(topic, len(_TOPIC_PRIORITY)) for topic in topics
+    )
+
+
+def _render_details(
+    product: dict,
+    entries: list[tuple[str, set[str]]],
+    missing: list[str],
+    *,
+    open_request: bool,
+) -> str:
+    """Deterministic ficha answer (prueba #5).
+
+    Nunca inventa: solo enumera lo que está en la descripción o en las
+    especificaciones. Un tema concreto que falte se anuncia como pendiente y se
+    escala al almacén. La frase de lo que falta empieza por "No tengo el dato
+    de…" para que el guardrail de specs no la lea como una afirmación.
+    """
+    lines = [line[:140] for line, _topics in entries][:6]
+    if lines:
+        summary = " · ".join(lines)
+        if len(summary) > 700:
+            summary = summary[:697].rstrip() + "…"
+        reply = f"Esto es lo que tengo de {product['name']}: {summary}."
+    else:
+        reply = f"Todavía no tengo la ficha completa de {product['name']}."
+    if missing:
+        reply += (
+            f" No tengo el dato de {', '.join(missing)}; consulto al almacén y "
+            "te confirmo. ¿Te interesa que te reserve uno?"
+        )
+    elif open_request:
+        reply += " Si quieres, te confirmo algún dato puntual con el almacén."
+    return reply
+
+
+def _table_cell(text: str) -> str:
+    """Plain text safe inside a Telegram/WhatsApp monospace block."""
+    return re.sub(r"[`*_\[\]\\]", "", str(text or "")).strip()
+
+
+def _ellipsis(text: str, width: int) -> str:
+    text = _table_cell(text)
+    if len(text) <= width:
+        return text
+    return text[: max(0, width - 1)].rstrip() + "…"
+
+
+def _product_highlights(product: dict) -> str:
+    """Most useful specs for a listing row, in a mobile-friendly order."""
+    entries = sorted(_detail_entries(product), key=_entry_priority)
+    # La disponibilidad va primero: la columna se recorta a ~30 caracteres y
+    # "agotado"/"última unidad" no puede perderse en el recorte.
+    parts = []
+    available = _available_stock(product)
+    if available <= 0:
+        parts.append("agotado")
+    elif available == 1:
+        parts.append("última unidad")
+    parts.extend(line for line, _topics in entries)
+    return ", ".join(parts)
+
+
+def _format_product_table(products: list[dict]) -> str:
+    """Aligned monospace table (works in WhatsApp and Telegram).
+
+    Triple backticks are the common denominator: WhatsApp renders them as a
+    monospace block natively and Telegram does too when the channel sends with
+    `parse_mode=Markdown`.
+    """
+    rows = []
+    for product in products:
+        rows.append(
+            (
+                str(product["id"]),
+                _table_cell(product["name"]),
+                f"{float(product['price']):g} {product['currency']}",
+                _table_cell(_product_highlights(product)),
+            )
+        )
+    if not rows:
+        return ""
+    id_w = max(2, max(len(row[0]) for row in rows))
+    name_w = min(20, max(8, max(len(row[1]) for row in rows)))
+    price_w = max(6, max(len(row[2]) for row in rows))
+    char_w = 30
+    header = (
+        f"{'ID':<{id_w}}  {'Producto':<{name_w}}  {'Precio':<{price_w}}  "
+        f"{'Características':<{char_w}}"
+    )
+    separator = (
+        f"{'-' * id_w}  {'-' * name_w}  {'-' * price_w}  {'-' * char_w}"
+    )
+    lines = [header, separator]
+    for product_id, name, price, chars in rows:
+        lines.append(
+            f"{product_id:<{id_w}}  {_ellipsis(name, name_w):<{name_w}}  "
+            f"{price:<{price_w}}  {_ellipsis(chars, char_w):<{char_w}}"
+        )
+    return "```\n" + "\n".join(lines).rstrip() + "\n```"
+
+
+def _render_catalog_table(
+    conn,
+    conversation,
+    context: dict,
+    category: str,
+    products: list[dict],
+    *,
+    quantity: int | None = None,
+) -> tuple[str, bool, str, None]:
+    if quantity:
+        # "quiero 3 laptops": la cantidad se conserva para cuando elija una.
+        context["sale_qty"] = int(quantity)
+        context["sale_qty_product_id"] = None
+    guard_context = _guard_context(
+        None, None, context, extra_products=products
+    )
+    reply = prompts.template_variant(
+        "catalog_table",
+        context,
+        categoria=category,
+        tabla=_format_product_table(products),
+    )
+    reply, generator = _safe_template(
+        conn, conversation, reply, guard_context, "template", table=True
+    )
+    return reply, False, generator, None
+
+
 def _render_siblings(
     conn, conversation, product: dict, alternatives: list[dict], context: dict
 ) -> str:
@@ -392,36 +589,72 @@ def _render_siblings(
 def _category_listing(
     conn, conversation, intent, context: dict, text: str
 ) -> tuple[str, bool, str, None] | None:
-    """F3: "¿qué laptops tienes?" -> short list with prices, then ask which one.
+    """F3: "¿qué laptops tienes?" -> short table, then ask which one.
+
+    Prueba #5: el listado va en tabla monoespaciada (ID, producto, precio,
+    características) para que el cliente pueda responder con el ID. Se limita a
+    `_TABLE_LIMIT` filas para no saturar el móvil.
 
     Returns None when the customer did not name a category or product family, so
     the caller falls back to "dime cuál producto".
     """
+    # El texto del cliente manda: el NLU puede repetir un producto concreto
+    # ("Monitor LED 24") en una pregunta que en realidad pide la categoría
+    # ("¿qué laptops tienes?"). Sus términos se prueban primero y los del NLU
+    # solo cubren sinónimos que no aparezcan en el mensaje.
     query = (intent.producto or "").strip()
-    words = catalog.category_terms(query) if query else []
-    if not words:
-        words = catalog.category_terms(text)
-    for word in words:
+    terms = list(catalog.category_terms(text))
+    for word in catalog.category_terms(query) if query else []:
+        if word not in terms:
+            terms.append(word)
+    for word in terms:
         if len(word) < 4:
             continue
-        products = catalog.category_products(conn, word, limit=4)
+        products = catalog.category_products(conn, word, limit=_TABLE_LIMIT)
         if not products:
             continue
-        if intent.cantidad:
-            # "quiero 3 laptops": la cantidad se conserva para cuando elija una.
-            context["sale_qty"] = int(intent.cantidad)
-            context["sale_qty_product_id"] = None
-        guard_context = _guard_context(None, None, context, extra_products=products)
-        reply = prompts.template_variant(
-            "catalog_list",
+        return _render_catalog_table(
+            conn,
+            conversation,
             context,
-            categoria=word,
-            lista=_format_product_list(products),
+            word,
+            products,
+            quantity=intent.cantidad,
         )
-        reply, generator = _safe_template(
-            conn, conversation, reply, guard_context, "template"
-        )
-        return reply, False, generator, None
+    return None
+
+
+_CATEGORY_FILLER = {
+    "de", "del", "la", "el", "los", "las", "un", "una", "unos", "unas", "que",
+    "tienes", "tiene", "hay", "tengo", "venden", "vendes", "me", "quiero",
+    "busco", "necesito", "algo", "por", "para", "en", "y", "o", "favor",
+    "porfa", "ver", "mostrar", "dame", "lista", "listado", "catalogo",
+    "precio", "precios", "cuanto", "cuesta", "cuestan", "vale", "valen",
+    "disponible", "disponibles", "opciones", "opcion", "muestrame", "ensename",
+}
+
+
+def _bare_category(conn, text: str) -> str | None:
+    """Return the category when the message names only a category (prueba #5).
+
+    "laptop", "tengo laptops" o "qué laptops hay" son una consulta de catálogo:
+    se lista la tabla, nunca se inicia la venta de un producto al azar. Un
+    calificador ("laptop gaming") no es una categoría desnuda.
+    """
+    folded = catalog._fold(text or "")
+    words = [w for w in re.split(r"[^a-z0-9]+", folded) if len(w) > 1]
+    content = [w for w in words if w not in _CATEGORY_FILLER]
+    if not content:
+        return None
+    for term in catalog.category_terms(text):
+        if len(term) < 4:
+            continue
+        singular = term[:-1] if term.endswith("s") else term
+        remaining = [w for w in content if w not in (term, singular)]
+        if remaining:
+            continue
+        if catalog.category_products(conn, term, limit=1):
+            return term
     return None
 
 
@@ -573,14 +806,59 @@ _GREETING = re.compile(
 LOW_CONFIDENCE = 0.35
 
 # F4 (prueba #2): "¿y no tiene otro tipo de laptop?" pide alternativas, no un
-# dato del proveedor.
+# dato del proveedor. Prueba #5: "qué otras propiedades tiene" NO es una
+# alternativa; por eso "otro/otra" ya no dispara solo.
 _ALTERNATIVES = re.compile(
-    r"\b(?:otro|otra|otros|otras|otro\s+modelo|modelo|modelos|similar|"
-    r"similares|opci[oó]n|opciones|variante|variantes|diferente|diferentes|"
-    r"algo\s+m[aá]s|ning[uú]n\s+(?:tipo|modelo|otro)|no\s+sea|"
-    r"m[aá]s\s+(?:tipo|modelo|opci[oó]n))\b",
+    r"\b(?:"
+    r"otro\s+(?:modelo|tipo|producto|equipo|estilo)|"
+    r"otra\s+(?:opci[oó]n|variante|versi[oó]n|marca|capacidad|medida|talla|"
+    r"laptop|computadora|pc|tablet|moto|nevera|tel[eé]fono|celular)|"
+    r"otros?\s+(?:modelos?|tipos?|productos?|equipos?)|"
+    r"otras?\s+(?:opciones?|variantes?|marcas?)|"
+    r"modelos?|similares?|opci[oó]n|opciones|variantes?|"
+    r"diferentes?|algo\s+m[aá]s|"
+    r"ning[uú]n\s+(?:tipo|modelo|otro)|"
+    r"no\s+sea|"
+    r"m[aá]s\s+(?:tipos?|modelos?|opciones?)"
+    r")\b",
     re.IGNORECASE,
 )
+
+# Prueba #5: petición abierta de ficha ("qué propiedades tiene", "dime todo").
+# Se responde con la descripción y las especificaciones reales, sin preguntar
+# "¿qué dato necesitas?".
+_OPEN_DETAILS = re.compile(
+    r"\b(?:"
+    r"propiedad(?:es)?|caracter[ií]stica(?:s)?|especificaci[oó]n(?:es)?|"
+    r"specs?|detalles?|ficha(?:\s+t[eé]cnica)?|informaci[oó]n|"
+    r"todo\s+lo\s+que\s+tengas|todos?\s+(?:los\s+)?(?:datos|detalles|que\s+tengas)|"
+    r"todos?\s+los\s+que\s+tengas|"
+    r"lo\s+que\s+tengas|dime\s+m[aá]s|cu[eé]ntame\s+m[aá]s|qu[eé]\s+m[aá]s|"
+    r"qu[eé]\s+tiene|qu[eé]\s+trae|"
+    r"^\s*todo\s*[.!?]*\s*$"
+    r")",
+    re.IGNORECASE,
+)
+
+# Etiquetas genéricas del NLU que no son un dato concreto del proveedor.
+_GENERIC_DETAIL_LABELS = {
+    "propiedad", "propiedades", "caracteristica", "caracteristicas",
+    "especificacion", "especificaciones", "spec", "specs", "detalle",
+    "detalles", "informacion", "ficha", "todo", "todos",
+}
+
+# Prueba #5: preguntar por la cobertura de entrega no es pedir un dato del
+# producto ni una escalación. Se responde con las zonas reales del almacén.
+_DELIVERY_COVERAGE = re.compile(
+    r"\b(?:puedes?\s+entregar|me\s+puedes\s+entregar|entregan|hacen\s+entrega|"
+    r"tienen\s+entrega|hay\s+entrega|cobertura|llegan\s+a|entrega\s+en|"
+    r"zona\s+de\s+entrega|entregas\s+en)\b",
+    re.IGNORECASE,
+)
+
+# Prueba #5: un listado de búsqueda no debe saturar el chat. 8 filas caben en
+# una pantalla de móvil y respetan el límite de 5–10 pedido.
+_TABLE_LIMIT = 8
 
 # F3 (prueba #2): el cliente pide explícitamente el catálogo de una categoría
 # ("dame un listado de laptops"), aunque el contexto tenga un producto abierto.
@@ -671,6 +949,33 @@ def _banal_kind(text: str) -> str | None:
 
 def _asks_for_alternatives(text: str) -> bool:
     return bool(_ALTERNATIVES.search(text or ""))
+
+
+def _asks_for_open_details(text: str) -> bool:
+    return bool(_OPEN_DETAILS.search(text or ""))
+
+
+def _is_generic_detail_label(value: str) -> bool:
+    folded = catalog._fold(value or "").strip()
+    return folded in _GENERIC_DETAIL_LABELS
+
+
+def _asked_detail_topics(text: str, labels: list[str]) -> set[str]:
+    """Temas técnicos concretos que pidió el cliente (prueba #5).
+
+    Combina las etiquetas del NLU ("procesador", "microprocesador") con el
+    léxico del propio mensaje, para responder desde la ficha sin llamar al
+    compositor cuando el dato ya está en el catálogo.
+    """
+    topics: set[str] = set()
+    for label in labels:
+        topic = _canonical_topic(label)
+        if topic in guardrails.SPEC_TOPICS:
+            topics.add(topic)
+    for topic, pattern in guardrails.SPEC_TOPICS.items():
+        if pattern.search(text or ""):
+            topics.add(topic)
+    return topics
 
 
 def _confirms(text: str, intent=None) -> bool:
@@ -862,6 +1167,39 @@ def _sale_product(conn, conversation, context: dict) -> dict | None:
         return None
 
 
+def _delivery_zones_outcome(
+    conn, conversation, product: dict, context: dict
+) -> dict:
+    """Answer a delivery-coverage question that named no zone (prueba #5).
+
+    "¿Puedes entregar en mi zona?" was escalated to the TCP. The real answer is
+    in the catalog: the supplier's active delivery zones.
+    """
+    previous = str(context.get("stage") or "").upper()
+    info = catalog.llm_product_json(conn, product)
+    zonas = info.get("zonas_entrega") or []
+    guard = _guard_context(product, None, context, product_source="text")
+    if zonas:
+        reply = prompts.template_variant(
+            "delivery_zones",
+            context,
+            producto=product["name"],
+            zonas=", ".join(zonas),
+        )
+    else:
+        reply = prompts.template_variant(
+            "delivery_zones_unknown", context, producto=product["name"]
+        )
+    reply, generator = _safe_template(conn, conversation, reply, guard, "template")
+    return {
+        "reply": reply,
+        "escalate": False,
+        "generator": generator,
+        "escalation_question": None,
+        "stage": previous if previous in (*_SALE_STAGES, "DONE") else "QUOTE",
+    }
+
+
 def _zone_coverage_outcome(
     conn, conversation, text: str, product: dict | None, context: dict
 ) -> dict | None:
@@ -870,21 +1208,64 @@ def _zone_coverage_outcome(
     Before this, "Soy de la UCI" was ignored (the zone was inactive) and the bot
     kept quoting the product until the sale failed asking for the address. The
     check uses inactive zones too: mentioning one is enough to answer honestly.
+
+    Prueba #5: una consulta puede nombrar varias zonas ("Marianao o La Lisa") o
+    ninguna ("¿puedes entregar en mi zona?"). Se responde por cobertura real en
+    vez de escalar o quedarse callado.
     """
     if product is None:
         return None
-    zone = catalog.resolve_zone(conn, text or "", active_only=False)
-    if zone is None:
+    zones = catalog.resolve_zones(conn, text or "", active_only=False)
+    if not zones:
+        if _DELIVERY_COVERAGE.search(text or ""):
+            return _delivery_zones_outcome(conn, conversation, product, context)
         return None
-    covered = bool(zone.get("active")) and sales_domain.supplier_covers_zone(
-        conn, product["supplier_id"], int(zone["id"])
-    )
-    if covered:
-        return None
+
+    covered: list[str] = []
+    uncovered: list[str] = []
+    for zone in zones:
+        covers = bool(zone.get("active")) and sales_domain.supplier_covers_zone(
+            conn, product["supplier_id"], int(zone["id"])
+        )
+        (covered if covers else uncovered).append(zone["name"])
+    if not uncovered:
+        if not _DELIVERY_COVERAGE.search(text or ""):
+            # Solo mencionó su zona: no hay nada que rechazar ni que responder
+            # aquí; el turno sigue su curso (cotización, venta...).
+            return None
+        # Preguntó explícitamente por la entrega y la zona está cubierta.
+        previous = str(context.get("stage") or "").upper()
+        guard = _guard_context(product, None, context, product_source="text")
+        reply = prompts.template_variant(
+            "delivery_zone_covered",
+            context,
+            producto=product["name"],
+            zonas=" y ".join(covered),
+        )
+        reply, generator = _safe_template(
+            conn, conversation, reply, guard, "template"
+        )
+        return {
+            "reply": reply,
+            "escalate": False,
+            "generator": generator,
+            "escalation_question": None,
+            "stage": previous if previous in (*_SALE_STAGES, "DONE") else "QUOTE",
+        }
+
     guard = _guard_context(product, None, context, product_source="text")
-    reply = prompts.template_variant(
-        "zone_not_covered", context, producto=product["name"]
-    )
+    if covered:
+        reply = prompts.template_variant(
+            "zone_partial_coverage",
+            context,
+            producto=product["name"],
+            cubiertas=" y ".join(covered),
+            no_cubiertas=", ".join(uncovered),
+        )
+    else:
+        reply = prompts.template_variant(
+            "zone_not_covered", context, producto=product["name"]
+        )
     reply, generator = _safe_template(conn, conversation, reply, guard, "template")
     return {
         "reply": reply,
@@ -1101,6 +1482,10 @@ def _maybe_handle_sale(
         and not _is_decline(text)
     ):
         return None
+    # Prueba #5: "laptop" / "tengo laptops" es una consulta de catálogo, no una
+    # orden de compra de un producto al azar. `_decide` la responde con la tabla.
+    if _bare_category(conn, text) is not None:
+        return None
     if product is None:
         if intent.producto:
             # H-10: el cliente nombró un producto que no está en el catálogo; no
@@ -1302,8 +1687,21 @@ def _log_guardrail(conn, conversation, reason: str, stage: str) -> None:
     )
 
 
-def _safe_template(conn, conversation, reply: str, guard_context: dict, generator: str):
-    ok, reason = guardrails.validate_reply(reply, guard_context)
+def _safe_template(
+    conn,
+    conversation,
+    reply: str,
+    guard_context: dict,
+    generator: str,
+    *,
+    table: bool = False,
+):
+    """Validate a deterministic reply; fall back instead of sending garbage.
+
+    `table=True` only for the catalog listing: it is the one reply that carries
+    a ``` block (aligned table), and the format guard must allow it.
+    """
+    ok, reason = guardrails.validate_reply(reply, guard_context, table=table)
     if ok:
         return reply, generator
     _log_guardrail(conn, conversation, reason, "template")
@@ -1417,6 +1815,12 @@ async def _decide(
         return reply, False, generator, None
 
     if intent.intencion in ("consulta_precio", "consulta_stock", "comprar"):
+        # Prueba #5: una categoría desnuda ("laptop", "tengo laptops") se lista
+        # en tabla; nunca se cotiza ni se vende un producto al azar.
+        if _bare_category(conn, text) is not None:
+            listing = _category_listing(conn, conversation, intent, context, text)
+            if listing is not None:
+                return listing
         # F13 (prueba #4): "laptops gaming" no es un nombre exacto; la categoría
         # más el calificador resuelven el producto antes de responder stock.
         if product is None and _STOCK_QUESTION.search(text or ""):
@@ -1513,15 +1917,61 @@ async def _decide(
         # Clasificar qué datos faltan: los del cliente se le piden a él;
         # solo los del proveedor se escalan al TCP.
         datos_cliente = [d for d in datos if _dato_pertenece_a(d) == "cliente"]
-        datos_proveedor = [d for d in datos if _dato_pertenece_a(d) == "proveedor"]
+        # "propiedades"/"detalles"/"todo" son etiquetas genéricas del NLU, no un
+        # dato concreto: no se escalan como si el cliente hubiera preguntado uno.
+        datos_proveedor = [
+            d
+            for d in datos
+            if _dato_pertenece_a(d) == "proveedor"
+            and not _is_generic_detail_label(d)
+        ]
         # F15 (prueba #4): "microprocesador" y "procesador" son el mismo dato.
         datos_proveedor = _dedupe([_canonical_topic(d) for d in datos_proveedor])
         # F1 (prueba #3): un tema técnico que el catálogo no tiene se escala,
         # no se compone. El NLU puede no listarlo, así que se detecta también
         # por léxico antes de llamar al modelo.
-        for topic in _missing_spec_topics(product, text):
+        missing = _missing_spec_topics(product, text)
+        for topic in missing:
             if topic not in datos_proveedor:
                 datos_proveedor.append(topic)
+
+        # Prueba #5: una petición abierta ("qué propiedades tiene", "todo") o un
+        # dato concreto que la ficha sí trae se responden determinísticamente
+        # desde descripción + especificaciones. Sin compositor: el doble
+        # `compose` + fallback metía 6-8 s en cada turno de detalles.
+        open_request = _asks_for_open_details(text)
+        asked = _asked_detail_topics(text, datos_proveedor)
+        if open_request or asked:
+            entries = _detail_entries(product)
+            if open_request:
+                # "todos los que tengas" gana sobre el dato puntual que también
+                # mencione ("...además el micro"): se muestra la ficha completa.
+                selected = entries
+            elif asked:
+                selected = [entry for entry in entries if entry[1] & asked] or entries
+            else:
+                selected = entries
+            guard_context = _guard_context(
+                product, None, context, product_source=product_source
+            )
+            reply = _render_details(
+                product,
+                selected,
+                missing,
+                open_request=open_request and not missing,
+            )
+            reply, generator = _safe_template(
+                conn, conversation, reply, guard_context, "template"
+            )
+            if missing:
+                # Se responde lo que sí hay y se escala solo lo que falta.
+                pregunta = (
+                    f"El cliente pregunta sobre {product['name']} y necesita "
+                    f"saber: {', '.join(missing)}. ¿Me confirma ese dato para "
+                    "pasárselo?"
+                )
+                return reply, True, generator, pregunta
+            return reply, False, generator, None
 
         if datos_cliente and not datos_proveedor:
             # Solo faltan datos que el cliente conoce: no escalar, preguntarle.
@@ -1912,6 +2362,8 @@ async def _run_turn(conn, conversation, turn: dict) -> dict:
         {
             "text": text,
             "message_count": len(nlu_messages),
+            "history_messages": len(history),
+            "history_window": config.HISTORY_WINDOW,
             "fast_path": fast_intent is not None,
         },
         {

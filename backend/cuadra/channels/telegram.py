@@ -154,7 +154,23 @@ async def send_text(target: str, text: str) -> str | None:
     if _bot is None:
         log.info("[dummy] send_text to %s: %s", target, text)
         return None
-    message = await _send(lambda: _bot.send_message(target, text))
+    # Prueba #5: la tabla del catálogo viaja en un bloque ```. Telegram solo lo
+    # renderiza como monoespaciado con parse_mode; el resto de mensajes sigue
+    # saliendo en texto plano (menos superficie de error).
+    if "```" in (text or ""):
+        try:
+            message = await _send(
+                lambda: _bot.send_message(target, text, parse_mode="Markdown")
+            )
+        except Exception as exc:  # noqa: BLE001 - entities rejected: resend plain
+            from cuadra.ai.queue import PermanentJobError
+
+            if not isinstance(exc, PermanentJobError):
+                raise
+            log.warning("Markdown send rejected; retrying as plain text")
+            message = await _send(lambda: _bot.send_message(target, text))
+    else:
+        message = await _send(lambda: _bot.send_message(target, text))
     message_id = getattr(message, "message_id", None)
     return str(message_id) if message_id is not None else None
 

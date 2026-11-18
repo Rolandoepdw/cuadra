@@ -1574,6 +1574,18 @@ async def tcp_process(payload: dict) -> None:
                 entity_id=supplier_id,
                 details={"message_id": message_id, "text": answer[:200]},
             )
+            if escalation is not None:
+                events.log(
+                    conn,
+                    "bot",
+                    "escalation_unconfirmed",
+                    entity="escalations",
+                    entity_id=int(escalation["id"]),
+                    details={
+                        "message_id": message_id,
+                        "reason": "not_an_answer",
+                    },
+                )
             _mark_tcp_processed(
                 conn,
                 message_id=message_id,
@@ -1619,11 +1631,14 @@ async def tcp_process(payload: dict) -> None:
             # approves or rejects it; the audit panel already flagged it.
         elif escalation is not None:
             # Model unavailable/invalid (or no catalog data): keep the legacy
-            # answer flow so the client is never left waiting.
+            # answer flow so the client is never left waiting. Prueba #5: se
+            # guarda bajo el tema que preguntó la escalación (procesador,
+            # memoria RAM...), no bajo un cajón `dato_proveedor`.
             clean_answer = tcp_triage.strip_case_ids(answer)
-            catalog.enrich_specifications(
-                conn, product_id, "dato_proveedor", clean_answer
+            topic = tcp_triage.spec_topic(
+                escalation.get("question"), clean_answer
             )
+            catalog.enrich_specifications(conn, product_id, topic, clean_answer)
             retrieval.queue_reindex(product_id)
             sends = tcp_triage.resume_escalations(
                 conn,

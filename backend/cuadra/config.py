@@ -128,12 +128,15 @@ LLM_LOG_FILE = LOGS_DIR / "llm.log"
 
 # Prompt budget (doc 01 §5): derived from the context window and validated
 # against the explicit cap. Generation and safety margins are configurable.
-LLM_MAX_PROMPT_TOKENS = int(os.environ.get("CUADRA_LLM_MAX_PROMPT_TOKENS", "2500"))
+LLM_MAX_PROMPT_TOKENS = int(os.environ.get("CUADRA_LLM_MAX_PROMPT_TOKENS", "3200"))
 LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("CUADRA_LLM_MAX_OUTPUT_TOKENS", "600"))
 LLM_CONTEXT_SAFETY_TOKENS = int(
     os.environ.get("CUADRA_LLM_CONTEXT_SAFETY_TOKENS", "400")
 )
-HISTORY_WINDOW = int(os.environ.get("CUADRA_HISTORY_WINDOW", "12"))
+# Prueba #4: 12 mensajes (~6 turnos) dejaban fuera el producto y los detalles
+# que el cliente ya había mencionado. 20 mensajes (~10 turnos) caben en el
+# presupuesto de 3200 tokens y conservan el hilo de la conversación.
+HISTORY_WINDOW = int(os.environ.get("CUADRA_HISTORY_WINDOW", "20"))
 SUMMARY_EVERY = int(os.environ.get("CUADRA_SUMMARY_EVERY", "10"))
 
 # Memory/retrieval (doc 01 §3-4). Embeddings are optional: when `fastembed` or

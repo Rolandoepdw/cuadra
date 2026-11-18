@@ -580,8 +580,19 @@ async def send_text(target: str, text: str) -> str | None:
     # and the listener must not store this send a second time (F11).
     key = _programmatic_key(getattr(entity, "id", None), text)
     _mark_programmatic(getattr(entity, "id", None), text)
+    # Prueba #5: la tabla del catálogo necesita Markdown para el bloque ```.
+    parse_mode = "markdown" if "```" in (text or "") else None
     try:
-        sent = await client.send_message(entity, text, link_preview=False)
+        try:
+            sent = await client.send_message(
+                entity, text, link_preview=False, parse_mode=parse_mode
+            )
+        except Exception as exc:  # noqa: BLE001 - entities rejected: resend plain
+            from telethon.errors import RPCError
+
+            if parse_mode is None or not isinstance(exc, RPCError):
+                raise
+            sent = await client.send_message(entity, text, link_preview=False)
     except Exception as exc:  # noqa: BLE001 - mapped below
         try:
             _programmatic_sends.remove(key)

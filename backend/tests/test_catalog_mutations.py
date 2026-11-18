@@ -474,6 +474,24 @@ class TestCustomerAnswer(Phase4Fixture):
         self.assertTrue(tcp_triage.looks_like_answer("No tengo unidades"))
         self.assertFalse(tcp_triage.looks_like_answer("no me has dado la direccion"))
 
+    def test_a_base_de_datos_referral_is_not_an_answer(self):
+        # Prueba #5: el TCP derivó al cliente a la base de datos y ese texto se
+        # guardó como ficha del producto.
+        for text in (
+            "no recuerdo, consulta en la base de datos",
+            "No me acuerdo, revísalo en la base de datos",
+            "no tengo esa información",
+            "no manejo ese dato",
+        ):
+            self.assertFalse(tcp_triage.looks_like_answer(text), text)
+        self.assertEqual(
+            tcp_triage.spec_topic("necesita saber: procesador"), "procesador"
+        )
+        self.assertEqual(
+            tcp_triage.spec_topic("¿Tienes stock?", "garantía de 6 meses"),
+            "garantía",
+        )
+
 
 class TestTcpHandler(Phase4Fixture):
     def _message(self, body: str, message_id: int = 20) -> int:
@@ -584,7 +602,35 @@ class TestTcpHandler(Phase4Fixture):
         escalation = escalations.get(self.conn, 1)
         self.assertEqual(escalation["status"], "RESOLVED")
         product = self.product()
-        self.assertEqual(product["specifications"]["dato_proveedor"], "garantía de 6 meses")
+        # Prueba #5: la respuesta se guarda bajo su tema real ("garantía"), no
+        # en un cajón `dato_proveedor` que mezcla respuestas distintas.
+        self.assertEqual(product["specifications"]["garantía"], "garantía de 6 meses")
+
+    def test_a_tcp_non_answer_keeps_the_escalation_pending(self):
+        # Prueba #5: "no recuerdo, consulta en la base de datos" no es un dato
+        # del producto. La consulta sigue abierta y el cliente no recibe nada.
+        message_id = self._message(
+            "[E-0001] no recuerdo, consulta en la base de datos, q seguro hay varios"
+        )
+        with patch(
+            "cuadra.ai.handlers.tcp_extractor.extract",
+            new=AsyncMock(return_value=None),
+        ):
+            self._tcp_process(message_id)
+
+        self.assertEqual(escalations.get(self.conn, 1)["status"], "PENDING")
+        specs = self.product()["specifications"]
+        self.assertNotIn("dato_proveedor", specs)
+        self.assertNotIn("no recuerdo", str(specs))
+        outbound = self.conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE direction = 'OUTBOUND'"
+        ).fetchone()[0]
+        self.assertEqual(outbound, 0)
+        event = self.conn.execute(
+            """SELECT COUNT(*) FROM events
+               WHERE type = 'escalation_unconfirmed'"""
+        ).fetchone()[0]
+        self.assertEqual(event, 1)
 
     def test_a_tcp_complaint_does_not_become_a_product_spec(self):
         # F2 (prueba #3): "No me has dado los datos de la venta..." se guardó

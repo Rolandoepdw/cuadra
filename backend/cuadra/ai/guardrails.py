@@ -12,6 +12,7 @@ A violation triggers one corrective retry and, if it persists, a deterministic
 template. Only the reason code is logged, never the offending text.
 """
 
+import json
 import re
 from decimal import Decimal, InvalidOperation
 
@@ -82,13 +83,17 @@ _PROMPT_DISCLOSURE = re.compile(
 # microprocesador"). La comprobación solo corre cuando el contexto trae el
 # producto con sus especificaciones; los textos del TCP se validan aparte.
 SPEC_TOPICS = {
-    "procesador": re.compile(r"microprocesador|procesador|\bcpu\b", re.IGNORECASE),
+    "procesador": re.compile(
+        r"microprocesador|procesador|\bcpu\b|\bmicro(?!fono)\b", re.IGNORECASE
+    ),
     "tarjeta gráfica": re.compile(
-        r"\bgpu\b|tarjeta\s+gr[aá]fica|gr[aá]ficos", re.IGNORECASE
+        r"\bgpu\b|tarjeta\s+gr[aá]fica|gr[aá]fic[oa]s?\b|\brtx\b|\bgtx\b",
+        re.IGNORECASE,
     ),
     "memoria RAM": re.compile(r"\bram\b|memoria", re.IGNORECASE),
     "almacenamiento": re.compile(
-        r"almacenamiento|\bssd\b|\bhdd\b|disco\s+(?:duro|s[oó]lido)",
+        r"almacenamiento|\bssd\b|\bhdd\b|disco\s*(?:duro|s[oó]lido)|"
+        r"\bdiscoduro\b",
         re.IGNORECASE,
     ),
     "pantalla": re.compile(r"pantalla|\bdisplay\b|pulgadas", re.IGNORECASE),
@@ -96,6 +101,59 @@ SPEC_TOPICS = {
     "cámara": re.compile(r"c[aá]mara", re.IGNORECASE),
     "garantía": re.compile(r"garant[ií]a", re.IGNORECASE),
 }
+
+# Prueba #5: la ficha real suele traer el dato sin el nombre del tema
+# ("Ryzen 7" en vez de "procesador"). Estos valores cuentan como si el tema
+# estuviera cubierto, tanto para decidir si hay que escalar como para validar
+# la respuesta del compositor. No sustituyen al tema: lo complementan.
+SPEC_VALUE_HINTS = {
+    "procesador": re.compile(
+        r"\b(?:ryzen|intel|core\s*i[3579]|i[3579][- ]?\d{3,}|celeron|pentium|"
+        r"athlon|snapdragon|apple\s+m\d)\b",
+        re.IGNORECASE,
+    ),
+    "tarjeta gráfica": re.compile(
+        r"\b(?:rtx|gtx)\s*\d{3,}|\bradeon\b|\bgr[aá]fic[oa]s?\b|\bgpu\b",
+        re.IGNORECASE,
+    ),
+    "memoria RAM": re.compile(
+        r"\d+\s*(?:gb|tb)\s*(?:de\s+)?ram|\bram\b|\bmemoria\b", re.IGNORECASE
+    ),
+    "almacenamiento": re.compile(
+        r"\d+\s*(?:gb|tb)\s*(?:de\s+)?(?:ssd|hdd|disco|almacenamiento)|"
+        r"\b(?:ssd|hdd|emmc)\b|disco\s*(?:duro|s[oó]lido)",
+        re.IGNORECASE,
+    ),
+    "pantalla": re.compile(
+        r"pantalla|\bdisplay\b|pulgadas|\d+\s*(?:\"|''|pulg)|full\s*hd|"
+        r"\d+\s*hz",
+        re.IGNORECASE,
+    ),
+    "batería": re.compile(r"bater[ií]a|autonom[ií]a|\d+\s*mah", re.IGNORECASE),
+    "cámara": re.compile(r"c[aá]mara|\d+\s*mp\b", re.IGNORECASE),
+    "garantía": re.compile(r"garant[ií]a|\d+\s*(?:meses|años)", re.IGNORECASE),
+}
+
+# Valores que un TCP pudo dejar guardados como "dato_proveedor" y que en
+# realidad no son un dato del producto (prueba #4). Nunca se muestran al
+# cliente ni cuentan como especificación disponible.
+_NON_SPEC_VALUE = re.compile(
+    r"\bno\s+recuerdo\b|"
+    r"\bconsulta(?:lo)?\s+(?:en\s+)?(?:la\s+)?base\s+de\s+datos\b|"
+    r"\bno\s+me\s+(?:has|ha|dieron)\b|"
+    r"\bno\s+puedo\s+confirmar\b|"
+    r"\bno\s+s[eé]\b",
+    re.IGNORECASE,
+)
+
+
+def spec_topic_present(topic: str, corpus: str) -> bool:
+    """True when the corpus names the topic or carries a recognisable value."""
+    pattern = SPEC_TOPICS.get(topic)
+    if pattern is not None and pattern.search(corpus or ""):
+        return True
+    hint = SPEC_VALUE_HINTS.get(topic)
+    return bool(hint and hint.search(corpus or ""))
 
 
 def _decimal(value) -> Decimal | None:
@@ -264,6 +322,10 @@ def _specs_corpus(context: dict) -> str | None:
     Only customer-facing product payloads carry `specifications`; replies built
     from a raw TCP answer are validated with a context without a product, so
     the supplier's own words are never blocked by this check.
+
+    Prueba #5: la ficha real vive en `description` ("ASUS ZenBook / Ryzen 7 /
+    16GB RAM / 1TB SSD"). Si no se incluye, el guardrail rechaza los datos que
+    el propio catálogo sí tiene y el bot termina preguntando por ellos.
     """
     products = []
     seen = set()
@@ -273,9 +335,12 @@ def _specs_corpus(context: dict) -> str | None:
         *(context.get("candidates") or []),
         *(context.get("alternatives") or []),
     ):
-        if not isinstance(value, dict) or not isinstance(
-            value.get("specifications"), dict
-        ):
+        if not isinstance(value, dict):
+            continue
+        has_specs = isinstance(value.get("specifications"), dict) or bool(
+            value.get("specifications_json")
+        )
+        if not has_specs and not value.get("description"):
             continue
         key = id(value)
         if key in seen:
@@ -286,10 +351,22 @@ def _specs_corpus(context: dict) -> str | None:
         return None
     parts = []
     for product in products:
-        for key, value in product["specifications"].items():
-            parts.append(str(key))
-            parts.append(str(value))
-    return " ".join(parts)
+        parts.append(str(product.get("name") or ""))
+        parts.append(str(product.get("description") or ""))
+        specs = product.get("specifications")
+        if not isinstance(specs, dict):
+            try:
+                specs = json.loads(product.get("specifications_json") or "{}")
+            except (TypeError, ValueError):
+                specs = {}
+        if isinstance(specs, dict):
+            for key, value in specs.items():
+                text = str(value or "").strip()
+                if not text or _NON_SPEC_VALUE.search(text):
+                    continue
+                parts.append(str(key))
+                parts.append(text)
+    return " ".join(part for part in parts if part)
 
 
 def check_specs(reply: str, context: dict) -> bool:
@@ -297,10 +374,10 @@ def check_specs(reply: str, context: dict) -> bool:
     corpus = _specs_corpus(context)
     if corpus is None:
         return True
-    for pattern in SPEC_TOPICS.values():
+    for topic, pattern in SPEC_TOPICS.items():
         if not pattern.search(reply or ""):
             continue
-        if pattern.search(corpus):
+        if spec_topic_present(topic, corpus):
             continue
         # "No tengo ese dato del procesador" no afirma nada: no gasta reintento.
         if _asserts(reply, pattern):
@@ -308,11 +385,11 @@ def check_specs(reply: str, context: dict) -> bool:
     return True
 
 
-def check_format(reply: str) -> bool:
+def check_format(reply: str, *, allow_table: bool = False) -> bool:
     text = (reply or "").strip()
     if not text:
         return False
-    if _CODE_FENCE.search(text):
+    if not allow_table and _CODE_FENCE.search(text):
         return False
     if _MARKDOWN_HEADING.search(text):
         return False
@@ -321,7 +398,12 @@ def check_format(reply: str) -> bool:
     return True
 
 
-def check_length(reply: str, *, max_chars: int = MAX_REPLY_CHARS) -> bool:
+def check_length(
+    reply: str,
+    *,
+    max_chars: int = MAX_REPLY_CHARS,
+    max_lines: int = MAX_LINES,
+) -> bool:
     text = (reply or "").strip()
     if not text or len(text) > max_chars:
         return False
@@ -329,14 +411,20 @@ def check_length(reply: str, *, max_chars: int = MAX_REPLY_CHARS) -> bool:
     if len(paragraphs) > MAX_PARAGRAPHS:
         return False
     lines = [line for line in text.splitlines() if line.strip()]
-    return len(lines) <= MAX_LINES
+    return len(lines) <= max_lines
 
 
-def validate_reply(reply: str, context: dict) -> tuple[bool, str]:
+def validate_reply(
+    reply: str, context: dict, *, table: bool = False
+) -> tuple[bool, str]:
     """Return ``(ok, reason)``; ``reason`` is a stable code for the event log."""
-    if not check_format(reply):
+    if not check_format(reply, allow_table=table):
         return False, "format"
-    if not check_length(reply):
+    if not check_length(
+        reply,
+        max_chars=1800 if table else MAX_REPLY_CHARS,
+        max_lines=20 if table else MAX_LINES,
+    ):
         return False, "length"
     if not check_internal_terms(reply):
         return False, "internal_terms"

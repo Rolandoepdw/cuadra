@@ -167,6 +167,12 @@ TEMPLATES = {
     ),
     # F3 (prueba #2): "¿qué laptops tienes?" se responde con la lista corta.
     "catalog_list": "De {categoria} tengo: {lista}. ¿Cuál te interesa?",
+    # Prueba #5: listado de búsqueda en tabla monoespaciada (ID, producto,
+    # precio, características), compatible con WhatsApp y Telegram.
+    "catalog_table": (
+        "Esto es lo que tengo en {categoria}:\n{tabla}\n"
+        "¿Cuál te interesa? Dime el ID o el nombre."
+    ),
     # F4 (prueba #2): "¿no tiene otro tipo de laptop?" -> alternativas reales.
     "siblings": (
         "Además de {producto} tengo {alternativa_1} en {precio_1} {moneda_1}"
@@ -301,6 +307,21 @@ TEMPLATES = {
         "Esa zona no la cubre el almacén de {producto}. Si quieres, te busco otra "
         "opción del catálogo o lo consulto con el almacén."
     ),
+    # Prueba #5: el cliente nombró varias zonas y solo algunas están cubiertas.
+    "zone_partial_coverage": (
+        "Sí entregamos en {cubiertas}, pero en {no_cubiertas} no llegamos por "
+        "ahora. ¿Te sirve una de las zonas donde sí entregamos?"
+    ),
+    # Prueba #5: pregunta de cobertura sin nombrar zona -> zonas reales.
+    "delivery_zones": "De {producto} entregamos en {zonas}. ¿En cuál estás?",
+    "delivery_zones_unknown": (
+        "La entrega de {producto} se coordina al confirmar el pedido; dime tu "
+        "zona y te confirmo si llegamos."
+    ),
+    "delivery_zone_covered": (
+        "Sí, en {zonas} sí entregamos {producto}. ¿Te lo reservo y coordinamos "
+        "la entrega?"
+    ),
     # F8 (prueba #3): post-venta cerrada. Solo el pedido y su estado; nunca
     # precios ni plazos que el almacén no confirmó.
     "post_sale_pending": (
@@ -384,6 +405,14 @@ TEMPLATE_VARIANTS = {
         "Te muestro lo que hay en {categoria}: {lista}. Dime cuál y te paso el detalle.",
         "En {categoria} ahora mismo tengo {lista}. ¿Te reservo alguno?",
     ],
+    "catalog_table": [
+        "Esto es lo que tengo en {categoria}:\n{tabla}\n"
+        "¿Cuál te interesa? Dime el ID o el nombre.",
+        "Te paso lo que hay en {categoria}:\n{tabla}\n"
+        "¿Cuál te interesa? Dime el ID o el nombre.",
+        "Mira lo disponible en {categoria}:\n{tabla}\n"
+        "¿Cuál te interesa? Dime el ID o el nombre.",
+    ],
     "siblings": [
         "Además de {producto} tengo {alternativa_1} en {precio_1} {moneda_1}"
         "{segunda}. ¿Te enseño alguno?",
@@ -396,6 +425,28 @@ TEMPLATE_VARIANTS = {
         "De {producto} no tengo otro modelo por ahora. ¿Te aviso si entra alguno?",
         "Por ahora {producto} es el único que tengo de esa línea. ¿Quieres que te "
         "avise cuando entre otro?",
+    ],
+    "zone_partial_coverage": [
+        "Sí entregamos en {cubiertas}, pero en {no_cubiertas} no llegamos por "
+        "ahora. ¿Te sirve una de las zonas donde sí entregamos?",
+        "En {cubiertas} sí llegamos; en {no_cubiertas} no tenemos cobertura. "
+        "¿Te sirve que lo coordine a una de las zonas cubiertas?",
+    ],
+    "delivery_zones": [
+        "De {producto} entregamos en {zonas}. ¿En cuál estás?",
+        "La entrega de {producto} cubre {zonas}. Dime en cuál estás y lo "
+        "coordinamos.",
+    ],
+    "delivery_zones_unknown": [
+        "La entrega de {producto} se coordina al confirmar el pedido; dime tu "
+        "zona y te confirmo si llegamos.",
+        "Todavía no tengo una zona fija para {producto}; dime dónde estás y te "
+        "confirmo la entrega.",
+    ],
+    "delivery_zone_covered": [
+        "Sí, en {zonas} sí entregamos {producto}. ¿Te lo reservo y coordinamos "
+        "la entrega?",
+        "Esa zona la cubrimos: entregamos {producto} en {zonas}. ¿Te lo reservo?",
     ],
     "ask_product_data": [
         "Sobre {producto}, ¿qué dato necesitas? Te lo confirmo.",

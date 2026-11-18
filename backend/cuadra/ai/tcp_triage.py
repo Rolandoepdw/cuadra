@@ -330,7 +330,21 @@ _NOT_AN_ANSWER = re.compile(
     r"\bno\s+puedo\s+confirmar\b|"
     r"\bno\s+tengo\s+(?:ni\s+)?(?:los\s+datos|la\s+direcci[oó]n|"
     r"el\s+tel[eé]fono|los\s+detalles)\b|"
-    r"\bno\s+(?:s[eé]|tengo\s+ese\s+dato|dispongo\s+de)\b",
+    r"\bno\s+(?:s[eé]|tengo\s+ese\s+dato|dispongo\s+de)\b|"
+    # Prueba #4: "no recuerdo, consulta en la base de datos..." se guardó como
+    # `dato_proveedor` y se reenvió al cliente como si fuera la ficha.
+    r"\bno\s+(?:me\s+)?(?:recuerdo|acuerdo)\b|"
+    r"\bconsulta(?:lo)?\s+(?:en\s+)?(?:la\s+)?base\s+de\s+datos\b|"
+    r"\brevisa(?:lo)?\s+(?:en\s+)?(?:la\s+)?base\s+de\s+datos\b|"
+    r"\bb[uú]scalo\s+en\b|"
+    r"\bno\s+estoy\s+seguro\b|"
+    r"\bno\s+tengo\s+(?:esa\s+)?informaci[oó]n\b|"
+    r"\bno\s+manejo\s+(?:ese\s+)?dato\b|"
+    r"\bno\s+dispongo\b|"
+    r"\bpreg[uú]ntale\s+a\b|"
+    r"\bahora\s+no\s+puedo\b|"
+    r"\bno\s+puedo\s+ahora\b|"
+    r"\bno\s+tengo\s+acceso\b",
     re.IGNORECASE,
 )
 
@@ -338,6 +352,22 @@ _NOT_AN_ANSWER = re.compile(
 def looks_like_answer(text: str | None) -> bool:
     """False when a TCP message complains or refuses instead of answering."""
     return not _NOT_AN_ANSWER.search(text or "")
+
+
+def spec_topic(question: str | None, answer: str | None = None) -> str:
+    """Canonical spec key for an escalation answer (prueba #5).
+
+    The fallback used to store every supplier answer under `dato_proveedor`,
+    which hid the topic and mixed answers from different questions. The
+    question already names the topic ("necesita saber: procesador"); when it
+    doesn't (a stock question answered with a warranty detail), the answer's
+    own wording is the next best key.
+    """
+    for text in (question, answer):
+        for topic, pattern in guardrails.SPEC_TOPICS.items():
+            if pattern.search(text or ""):
+                return topic
+    return "dato_proveedor"
 
 
 def _sanitize_customer_text(text: str | None) -> str:

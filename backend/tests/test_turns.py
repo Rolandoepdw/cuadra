@@ -2591,5 +2591,206 @@ class ConversationPolishTests(Phase1TestCase):
         self.assertEqual(self._scalar("SELECT COUNT(*) FROM sales"), 0)
 
 
+class PruebaCincoTests(Phase1TestCase):
+    """Prueba #5: ficha determinista, tabla de catálogo y cobertura de zonas."""
+
+    def setUp(self):
+        super().setUp()
+        conn = db.connect()
+        try:
+            conn.execute(
+                "UPDATE products SET description = ? WHERE id = 1",
+                ("Lenovo ThinkPad\ni5 11va gen\n16GB RAM\n512GB SSD",),
+            )
+            conn.executemany(
+                """INSERT INTO products
+                   (id, supplier_id, name, price, currency, commission, stock,
+                    status, description)
+                   VALUES (?, 1, ?, ?, 'USD', 1, ?, 'ACTIVE', ?)""",
+                [
+                    (
+                        2,
+                        "Laptop Ultraligera",
+                        720.0,
+                        3,
+                        "ASUS ZenBook\nRyzen 7\n16GB RAM\n1TB SSD",
+                    ),
+                    (
+                        3,
+                        "Laptop Gamer RTX 4060",
+                        1100.0,
+                        1,
+                        "Laptop gaming\nRTX 4060\n16GB RAM\n1TB SSD",
+                    ),
+                ],
+            )
+            conn.executemany(
+                "INSERT INTO zones (id, name, active) VALUES (?, ?, ?)",
+                [(1, "Marianao", 1), (2, "La Lisa", 0), (3, "UCI", 0)],
+            )
+            conn.execute(
+                """INSERT INTO supplier_delivery_zones (supplier_id, zone_id)
+                   VALUES (1, 1)"""
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _turn(self, text: str, intent) -> None:
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)):
+            self._ingest(text)
+            self._make_due()
+            self._run_process()
+
+    def _outbound(self) -> list[str]:
+        return [
+            row["body"]
+            for row in self._rows(
+                "SELECT body FROM messages WHERE direction = 'OUTBOUND' ORDER BY id"
+            )
+        ]
+
+    def _escalations(self) -> int:
+        return self._scalar("SELECT COUNT(*) FROM escalations")
+
+    # --------------------------------------------- contexto y ficha
+
+    def test_history_window_carries_twenty_messages(self):
+        self.assertEqual(config.HISTORY_WINDOW, 20)
+        self.assertGreaterEqual(config.LLM_MAX_PROMPT_TOKENS, 3200)
+
+    def test_open_details_come_from_the_description_without_the_composer(self):
+        compose = AsyncMock(return_value="inventado")
+        with patch("cuadra.ai.llm.compose", new=compose):
+            self._turn(
+                "ID 2, ¿qué propiedades tiene?",
+                llm.Intent(intencion="consulta_dato", producto=None, confianza=0.9),
+            )
+        body = self._outbound()[-1]
+        self.assertIn("Ryzen 7", body)
+        self.assertIn("16GB RAM", body)
+        self.assertIn("1TB SSD", body)
+        self.assertEqual(compose.await_count, 0)
+        self.assertEqual(self._escalations(), 0)
+
+    def test_a_concrete_detail_present_is_answered_from_the_ficha(self):
+        compose = AsyncMock(return_value="inventado")
+        with patch("cuadra.ai.llm.compose", new=compose):
+            self._turn(
+                "ID 2, ¿qué procesador trae?",
+                llm.Intent(intencion="consulta_dato", producto=None, confianza=0.9),
+            )
+        body = self._outbound()[-1]
+        self.assertIn("Ryzen 7", body)
+        self.assertEqual(compose.await_count, 0)
+        self.assertEqual(self._escalations(), 0)
+
+    def test_a_missing_detail_answers_what_it_has_and_escalates_only_that(self):
+        compose = AsyncMock(return_value="inventado")
+        with patch("cuadra.ai.llm.compose", new=compose):
+            self._turn(
+                "ID 2, ¿qué garantía trae?",
+                llm.Intent(intencion="consulta_dato", producto=None, confianza=0.9),
+            )
+        body = self._outbound()[-1]
+        self.assertIn("Ryzen 7", body)
+        self.assertIn("No tengo el dato de garantía", body)
+        self.assertEqual(compose.await_count, 0)
+        self.assertEqual(self._escalations(), 1)
+        question = self._rows("SELECT question FROM escalations")[0]["question"]
+        self.assertIn("garantía", question)
+
+    def test_the_guardrail_accepts_specs_from_the_description(self):
+        context = {
+            "product": {
+                "id": 1,
+                "price": 12.5,
+                "currency": "USD",
+                "description": "Ryzen 7\n16GB RAM\n1TB SSD",
+                "specifications": {},
+            }
+        }
+        ok, reason = guardrails.validate_reply("Trae Ryzen 7 y 16GB RAM.", context)
+        self.assertTrue(ok, reason)
+        ok, reason = guardrails.validate_reply(
+            "Tiene pantalla OLED de 15 pulgadas.", context
+        )
+        self.assertFalse(ok)
+        self.assertEqual(reason, "spec")
+
+    # --------------------------------------------- tabla de catálogo
+
+    def test_a_bare_category_is_listed_as_a_table_and_never_sold(self):
+        self._turn(
+            "Quiero ver laptops",
+            llm.Intent(intencion="comprar", producto="laptops", confianza=0.9),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("```", body)
+        self.assertIn("ID", body)
+        self.assertIn("Producto", body)
+        self.assertIn("Precio", body)
+        self.assertIn("Laptop Ultraligera", body)
+        self.assertIn("Dime el ID o el nombre", body)
+        self.assertEqual(self._scalar("SELECT COUNT(*) FROM sales"), 0)
+
+    def test_the_table_fence_is_only_allowed_for_the_listing(self):
+        table = "Esto es lo que tengo:\n```\nID Producto\n1 Laptop\n```"
+        self.assertTrue(guardrails.check_format(table, allow_table=True))
+        self.assertFalse(guardrails.check_format(table))
+
+    def test_other_properties_is_not_an_alternatives_request(self):
+        self.assertFalse(pipeline._asks_for_alternatives("¿qué otras propiedades tiene?"))
+        self.assertTrue(pipeline._asks_for_open_details("¿qué otras propiedades tiene?"))
+
+    # --------------------------------------------- zonas
+
+    def test_a_short_zone_resolves_without_a_delivery_hint(self):
+        conn = db.connect()
+        try:
+            zone = catalog.resolve_zone(conn, "La UCI", active_only=False)
+        finally:
+            conn.close()
+        self.assertIsNotNone(zone)
+        self.assertEqual(zone["name"], "UCI")
+
+    def test_multiple_zones_answer_by_coverage_instead_of_escalating(self):
+        self._turn(
+            "¿Entregan en Marianao o La Lisa?",
+            llm.Intent(
+                intencion="consulta_precio",
+                producto="Laptop Ultraligera",
+                confianza=0.95,
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("Marianao", body)
+        self.assertIn("La Lisa", body)
+        self.assertIn("no llegamos", body)
+        self.assertEqual(self._escalations(), 0)
+
+    def test_a_delivery_question_in_a_covered_zone_is_answered_yes(self):
+        self._turn(
+            "¿Entregan en Marianao?",
+            llm.Intent(
+                intencion="consulta_dato",
+                producto="Laptop Ultraligera",
+                confianza=0.95,
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("sí entregamos", body.lower())
+        self.assertEqual(self._escalations(), 0)
+
+    def test_a_delivery_question_without_a_zone_lists_the_real_zones(self):
+        self._turn(
+            "ID 2, ¿puedes entregar en mi zona?",
+            llm.Intent(intencion="consulta_dato", producto=None, confianza=0.9),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("Marianao", body)
+        self.assertEqual(self._escalations(), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
