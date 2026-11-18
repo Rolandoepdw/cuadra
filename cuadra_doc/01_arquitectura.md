@@ -265,8 +265,9 @@ Reglas:
 
 | Panel | Contenido | Escritura |
 |---|---|---|
-| General | mensajes hoy, conversaciones activas, latencia media LLM/STT, cola | — |
-| Conversaciones | historial en vivo, estados, duración, escalados abiertos | — |
+| General | mensajes hoy, conversaciones activas, clientes activos/conversión/riesgo, latencia media LLM/STT, cola | — |
+| Conversaciones | historial en vivo, estados, duración, escalados abiertos, cierre y enlace al cliente | cerrar |
+| Clientes | identidad, contactos enmascarados, esfuerzo/resultado, segmentos, señales, etiquetas, notas, bloqueo y merge manual | ✅ |
 | Catálogo | CRUD TCPs → productos → imágenes (subida) | ✅ |
 | Grupos | CRUD de grupos de difusión (canal, destino, zonas, identidad, topes, intervalos) y catálogos de categorías y zonas; asignar categorías y zonas por grupo, y categoría por producto | ✅ |
 | Estrategia | Tope diario e intervalo por defecto; aplicar a grupos nuevos o a todos | ✅ |
@@ -276,7 +277,7 @@ Reglas:
 
 - **Curaduría de grupos = 100% operador (nunca el bot):** el panel Grupos registra manualmente nombre, invite/chat id, zonas, identidad (`userbot` default), categorías permitidas, tope diario e intervalos. El scheduler solo publica en grupos activos cuya categoría coincida con la del producto; producto sin categoría → solo grupos sin restricción. No se modelan comunidades; solo grupos/canales. Ver `02_modelo_datos.md` §3 y `00_decisiones.md` §7.1–7.2.
 - **Publicación manual hoy, autopublicación después:** el operador elige producto/plantilla/grupos; el scheduler solo decide cuándo. La selección futura producto × grupo × franja será determinista (reglas + scoring), nunca por LLM. El panel Estrategia configura los defaults; ver `00_decisiones.md` §7.2.
-- Endpoints mínimos: `GET /api/health`, `GET /api/summary`; CRUD de catálogo `GET/POST/PATCH/DELETE /api/categories`, `/api/suppliers`, `/api/products` (+ `POST /api/products/{id}/images`, `PUT /api/products/{id}/main-image`, `DELETE /api/products/{id}/images/{image_id}`); LLM `GET /api/llm/status`, `GET /api/llm/models`, `POST /api/llm/start|stop|restart`; difusiones `GET/POST/PATCH/DELETE /api/broadcast-groups`, `GET/POST/PATCH /api/broadcasts`, `POST /api/broadcasts/{id}/send-now`, `POST /api/broadcasts/reevaluate`, `GET /api/broadcasts/{id}/posts`, estrategia `GET/PUT /api/settings/broadcast`; logs `GET /api/logs` (categoría, búsqueda y ventana); y (Hitos 5-8) `GET /api/conversations`, `GET /api/sales` (Fase 1 solo lectura). Las imágenes se sirven en `GET /media/<local_path>` (sin PIN).
+- Endpoints mínimos: `GET /api/health`, `GET /api/summary`; CRUD de catálogo `GET/POST/PATCH/DELETE /api/categories`, `/api/suppliers`, `/api/products` (+ `POST /api/products/{id}/images`, `PUT /api/products/{id}/main-image`, `DELETE /api/products/{id}/images/{image_id}`); LLM `GET /api/llm/status`, `GET /api/llm/models`, `POST /api/llm/start|stop|restart`; difusiones `GET/POST/PATCH/DELETE /api/broadcast-groups`, `GET/POST/PATCH /api/broadcasts`, `POST /api/broadcasts/{id}/send-now`, `POST /api/broadcasts/reevaluate`, `GET /api/broadcasts/{id}/posts`, estrategia `GET/PUT /api/settings/broadcast`; logs `GET /api/logs` (categoría, búsqueda y ventana); y (Hitos 5-8) `GET /api/conversations`, `GET /api/sales` (Fase 1 solo lectura); clientes `GET /api/customers`, `GET /api/customers/{id}`, `GET/PUT /api/customers/settings`, `POST /api/customers/scan-signals` y acciones administrativas (etiquetas, notas, señales, bloqueo y merge). Las imágenes se sirven en `GET /media/<local_path>` (sin PIN).
 
 ## 9. Riesgos conocidos
 

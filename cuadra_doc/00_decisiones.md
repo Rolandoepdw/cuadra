@@ -75,7 +75,7 @@ Los **adaptadores de canal** se diseñan desde Fase 1 con la interfaz pensada pa
 ## 7. Dashboard (Fase 1)
 
 - **Alcance:** lectura completa + **CRUD de catálogo** (TCPs, productos, imágenes) + **CRUD de grupos de difusión y categorías** (curaduría 100% del operador, nunca del bot). Nada de operación manual de conversaciones.
-- **Paneles:** General · Conversaciones · Catálogo · Grupos (difusión) · Difusiones · Estrategia · Auditoría · Salud.
+- **Paneles:** General · Conversaciones · Clientes · Catálogo · Grupos (difusión) · Difusiones · Estrategia · Auditoría · Salud.
 - **Acceso:** solo LAN (red local del hotspot/laptop). **Con PIN.**
 - **Futuro:** interacción (aprobar ventas, contestar manualmente) — ya previsto en el modelo de datos, no en Fase 1.
 - **¿Web y no Desktop?** El dashboard es web: acceso desde móvil en la misma red sin instalar nada, y los estáticos los sirve el propio FastAPI (cero despliegue extra). Se eligió **React + Vite + TypeScript** (no Flutter): bundle ~141 KB gzip, ecosistema shadcn/Tailwind v4 y sin toolchain Flutter que mantener.

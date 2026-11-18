@@ -69,6 +69,27 @@ def start() -> None:
     _scheduler = AsyncIOScheduler(timezone="America/Havana")
     # Escalation timeouts: check every couple of minutes (Hito 5).
     _scheduler.add_job(maintenance.check_escalation_timeouts, "interval", seconds=120)
+    # Customer signals are deterministic and cheap; never inside a turn.
+    _scheduler.add_job(
+        maintenance.scan_customer_signals,
+        "interval",
+        minutes=5,
+        id="customer_signal_scan",
+        max_instances=1,
+        coalesce=True,
+        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=1),
+    )
+    # Privacy: raw messages past `customers.message_retention_days` are purged
+    # once a day. Profile, sales and commissions stay.
+    _scheduler.add_job(
+        maintenance.purge_old_messages,
+        "interval",
+        hours=24,
+        id="message_retention_purge",
+        max_instances=1,
+        coalesce=True,
+        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
     # LLM traces are pruned once a day (default retention: 30 days).
     _scheduler.add_job(
         maintenance.purge_llm_traces,

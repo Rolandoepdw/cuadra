@@ -52,6 +52,13 @@ SALES_FOLLOWUP_MODE = "sales.followup.mode"
 SALES_FOLLOWUP_MODES = ("off", "shadow", "on")
 SALES_FOLLOWUP_DEFAULT = "off"
 
+# Privacy policy for the Clients panel: raw message bodies older than this are
+# purged by the scheduler. The profile, sales and commissions survive.
+CUSTOMER_MESSAGE_RETENTION = "customers.message_retention_days"
+MESSAGE_RETENTION_DEFAULT = 180  # 6 months
+MESSAGE_RETENTION_MIN = 1
+MESSAGE_RETENTION_MAX = 3650
+
 
 def _now() -> str:
     # Match the schema's `datetime('now')` (UTC, no offset).
@@ -142,6 +149,30 @@ def set_sales_followup_mode(conn, value: str) -> str:
         raise ValueError(f"invalid follow-up mode: {value}")
     set(conn, SALES_FOLLOWUP_MODE, value)
     return value
+
+
+def message_retention_days(conn) -> int:
+    """How long raw messages are kept (default six months).
+
+    Invalid stored values fall back to the default instead of accidentally
+    deleting a different amount of history.
+    """
+    value = _as_int(
+        get(conn, CUSTOMER_MESSAGE_RETENTION, str(MESSAGE_RETENTION_DEFAULT)),
+        MESSAGE_RETENTION_DEFAULT,
+    )
+    return min(max(value, MESSAGE_RETENTION_MIN), MESSAGE_RETENTION_MAX)
+
+
+def set_message_retention_days(conn, days: int) -> int:
+    days = int(days)
+    if not MESSAGE_RETENTION_MIN <= days <= MESSAGE_RETENTION_MAX:
+        raise ValueError(
+            "message retention must be between "
+            f"{MESSAGE_RETENTION_MIN} and {MESSAGE_RETENTION_MAX} days"
+        )
+    set(conn, CUSTOMER_MESSAGE_RETENTION, str(days))
+    return days
 
 
 def _as_float(value, default: float) -> float:

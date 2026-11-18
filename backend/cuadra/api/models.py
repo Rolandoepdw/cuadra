@@ -196,3 +196,9 @@ class CustomerMergeIn(BaseModel):
     from_id: int = Field(ge=1)
     into_id: int = Field(ge=1)
     reason: str | None = Field(default=None, max_length=500)
+
+
+class CustomerSettingsIn(BaseModel):
+    """Privacy policy for the Clients panel."""
+
+    message_retention_days: int = Field(ge=1, le=3650)

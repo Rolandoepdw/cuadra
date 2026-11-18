@@ -29,6 +29,7 @@ import type {
   CustomerPatch,
   CustomerReveal,
   CustomersPage,
+  CustomerSettings,
   CustomersSummary,
   DeliverySettings,
   FinanceSummary,
@@ -493,6 +494,15 @@ export const closeConversation = (id: number) =>
 // ---------------------------------------------------------------- customers
 export const getCustomersSummary = () =>
   request<CustomersSummary>("/api/customers/summary");
+
+export const getCustomerSettings = () =>
+  request<CustomerSettings>("/api/customers/settings");
+
+export const updateCustomerSettings = (messageRetentionDays: number) =>
+  request<CustomerSettings>("/api/customers/settings", {
+    method: "PUT",
+    body: JSON.stringify({ message_retention_days: messageRetentionDays }),
+  });
 
 export const listCustomers = (
   params: {

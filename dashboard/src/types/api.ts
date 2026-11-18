@@ -62,6 +62,9 @@ export interface Summary {
   messages_today: number;
   active_conversations: number;
   escalations_open: number;
+  customers_active_7d: number;
+  customers_conversion: number;
+  customers_at_risk: number;
   avg_llm_ms: number | null;
   avg_stt_ms: number | null;
   queue_size: number;
@@ -834,6 +837,13 @@ export interface CustomersSummary {
   revenue_cup: number;
   commission_usd: number;
   commission_cup: number;
+}
+
+export interface CustomerSettings {
+  message_retention_days: number;
+  message_retention_default: number;
+  message_retention_min: number;
+  message_retention_max: number;
 }
 
 export interface CustomerContact {

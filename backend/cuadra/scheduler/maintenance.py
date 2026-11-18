@@ -14,7 +14,14 @@ from zoneinfo import ZoneInfo
 
 from cuadra import config, db
 from cuadra.ai import queue, tracing
-from cuadra.domain import conversations, escalations, events, sales, settings
+from cuadra.domain import (
+    conversations,
+    customer_panel,
+    escalations,
+    events,
+    sales,
+    settings,
+)
 
 log = logging.getLogger("cuadra.scheduler")
 
@@ -99,6 +106,102 @@ def purge_llm_traces() -> None:
     removed = tracing.purge_old()
     if removed:
         log.info("purged %s llm trace rows past retention", removed)
+
+
+# ------------------------------------------------------- customer panel jobs
+
+
+def scan_customer_signals() -> None:
+    """Re-evaluate deterministic customer signals outside the reply path.
+
+    Runs every five minutes (and on demand from the Clients panel). Creating an
+    OPEN signal never changes the risk score: only an operator can confirm it.
+    """
+    conn = db.connect()
+    try:
+        result = customer_panel.scan_signals(conn)
+        if result.get("signals_created"):
+            log.info(
+                "customer signal scan: %s created across %s customer(s)",
+                result["signals_created"],
+                result["customers_scanned"],
+            )
+    except Exception:  # noqa: BLE001 - maintenance must not stop the scheduler
+        conn.rollback()
+        log.exception("customer signal scan failed")
+    finally:
+        conn.close()
+
+
+def purge_old_messages() -> None:
+    """Delete raw messages older than `customers.message_retention_days`.
+
+    Profile, sales and commissions survive: retention only removes message
+    bodies. References from turns/facts/catalog mutations are detached first so
+    SQLite foreign keys do not block the delete.
+    """
+    conn = db.connect()
+    try:
+        days = settings.message_retention_days(conn)
+        cutoff = f"-{days} days"
+        conn.execute(
+            """UPDATE turns SET reply_message_id = NULL
+                WHERE reply_message_id IN (
+                    SELECT id FROM messages
+                     WHERE created_at < datetime('now', ?))""",
+            (cutoff,),
+        )
+        conn.execute(
+            """UPDATE turns SET first_message_id = NULL
+                WHERE first_message_id IN (
+                    SELECT id FROM messages
+                     WHERE created_at < datetime('now', ?))""",
+            (cutoff,),
+        )
+        conn.execute(
+            """UPDATE turns SET last_message_id = NULL
+                WHERE last_message_id IN (
+                    SELECT id FROM messages
+                     WHERE created_at < datetime('now', ?))""",
+            (cutoff,),
+        )
+        conn.execute(
+            """UPDATE conversation_facts SET source_message_id = NULL
+                WHERE source_message_id IN (
+                    SELECT id FROM messages
+                     WHERE created_at < datetime('now', ?))""",
+            (cutoff,),
+        )
+        conn.execute(
+            """UPDATE catalog_mutation_log SET source_message_id = NULL
+                WHERE source_message_id IN (
+                    SELECT id FROM messages
+                     WHERE created_at < datetime('now', ?))""",
+            (cutoff,),
+        )
+        removed = conn.execute(
+            "DELETE FROM messages WHERE created_at < datetime('now', ?)",
+            (cutoff,),
+        ).rowcount or 0
+        conn.commit()
+        if removed:
+            events.log(
+                conn,
+                "scheduler",
+                "messages_purged",
+                entity="messages",
+                details={"count": removed, "retention_days": days},
+            )
+            log.info(
+                "purged %s message(s) past the %s-day retention",
+                removed,
+                days,
+            )
+    except Exception:  # noqa: BLE001 - maintenance must not stop the scheduler
+        conn.rollback()
+        log.exception("message retention purge failed")
+    finally:
+        conn.close()
 
 
 # --------------------------------------------------------------- sale follow-up

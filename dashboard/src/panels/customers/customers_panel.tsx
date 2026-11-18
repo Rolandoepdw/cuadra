@@ -1,9 +1,14 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Contact, RefreshCw, Search } from "lucide-react";
-import { getCustomersSummary, listCustomers } from "@/lib/api";
+import {
+  getCustomersSummary,
+  getCustomerSettings,
+  listCustomers,
+  updateCustomerSettings,
+} from "@/lib/api";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import type {
   CustomerListItem,
@@ -53,6 +58,72 @@ function money(usd: number, cup: number): string {
   if (usd) parts.push(formatMoney(usd, "USD"));
   if (cup) parts.push(formatMoney(cup, "CUP"));
   return parts.length ? parts.join(" · ") : "—";
+}
+
+function RetentionPolicy() {
+  const queryClient = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ["customers-settings"],
+    queryFn: getCustomerSettings,
+  });
+  const [days, setDays] = useState("");
+
+  useEffect(() => {
+    if (data) setDays(String(data.message_retention_days));
+  }, [data?.message_retention_days]);
+
+  const save = useMutation({
+    mutationFn: updateCustomerSettings,
+    onSuccess: (next) => {
+      setDays(String(next.message_retention_days));
+      queryClient.invalidateQueries({ queryKey: ["customers-settings"] });
+    },
+  });
+
+  const parsed = Number(days);
+  const valid =
+    data !== undefined &&
+    Number.isInteger(parsed) &&
+    parsed >= data.message_retention_min &&
+    parsed <= data.message_retention_max;
+
+  return (
+    <form
+      className="flex flex-wrap items-end gap-3 rounded-md border p-3 text-sm"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (valid) save.mutate(parsed);
+      }}
+    >
+      <div>
+        <p className="text-xs text-muted-foreground">Retención de mensajes</p>
+        <div className="mt-1 flex items-center gap-2">
+          <Input
+            type="number"
+            className="w-24"
+            min={data?.message_retention_min ?? 1}
+            max={data?.message_retention_max ?? 3650}
+            value={days}
+            disabled={isLoading}
+            onChange={(event) => setDays(event.target.value)}
+          />
+          <span>días</span>
+          <Button type="submit" size="sm" disabled={!valid || save.isPending}>
+            {save.isPending ? "Guardando…" : "Guardar"}
+          </Button>
+        </div>
+      </div>
+      <p className="max-w-md text-xs text-muted-foreground">
+        Por defecto 180 días (6 meses). Solo se borran los mensajes; el perfil,
+        las ventas y las comisiones se conservan.
+      </p>
+      {save.isError && (
+        <p className="text-xs text-destructive">
+          {(save.error as Error).message}
+        </p>
+      )}
+    </form>
+  );
 }
 
 const columns: ColumnDef<CustomerListItem, unknown>[] = [
@@ -272,6 +343,8 @@ function CustomerList({ onOpen }: { onOpen: (id: number) => void }) {
           {money(summary.data?.commission_usd ?? 0, summary.data?.commission_cup ?? 0)}
         </span>
       </div>
+
+      <RetentionPolicy />
 
       <form
         className="flex flex-wrap items-end gap-2"

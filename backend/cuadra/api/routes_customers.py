@@ -13,6 +13,7 @@ from cuadra.api.models import (
     CustomerMergeIn,
     CustomerNoteIn,
     CustomerPatch,
+    CustomerSettingsIn,
     CustomerTagIn,
 )
 from cuadra.domain import customer_panel
@@ -45,6 +46,19 @@ def customers_merge_preview(
     into_id: int = Query(ge=1),
 ) -> dict:
     return _run(customer_panel.merge_preview, from_id, into_id)
+
+
+@router.get("/customers/settings")
+def customers_settings() -> dict:
+    return _run(customer_panel.get_settings)
+
+
+@router.put("/customers/settings")
+def update_customers_settings(payload: CustomerSettingsIn) -> dict:
+    return _run(
+        customer_panel.update_settings,
+        payload.model_dump(exclude_unset=True),
+    )
 
 
 @router.post("/customers/merge")

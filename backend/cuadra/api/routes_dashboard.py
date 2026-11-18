@@ -12,7 +12,7 @@ from cuadra.api.auth import require_pin
 from cuadra.channels import rate_limit, telegram as telegram_channel
 from cuadra.channels import telegram_user
 from cuadra.ai import llm, llm_server, queue
-from cuadra.domain import clock
+from cuadra.domain import clock, customer_panel
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_pin)])
 
@@ -133,6 +133,7 @@ async def summary() -> dict:
         )
         stt_ms = _avg_stt_ms(conn)
         queue_size = queue.queue_size(conn)
+        customer_kpis = customer_panel.general_kpis(conn)
     finally:
         conn.close()
 
@@ -143,6 +144,9 @@ async def summary() -> dict:
         "active_conversations": active_conversations or 0,
         "escalations_open": escalations_open or 0,
         "customers_total": customers_total or 0,
+        "customers_active_7d": customer_kpis["customers_active_7d"],
+        "customers_conversion": customer_kpis["customers_conversion"],
+        "customers_at_risk": customer_kpis["customers_at_risk"],
         "products_active": products_active or 0,
         "avg_llm_ms": round(avg_llm_ms, 1) if avg_llm_ms is not None else None,
         "avg_stt_ms": stt_ms,

@@ -1,7 +1,7 @@
 # Plan — Paneles de Conversaciones y Clientes
 
 **Fecha:** 2026-11-17
-**Estado:** F0, F1, F2 y F3 implementadas y verificadas con datos reales; F4 pendiente.
+**Estado:** F0, F1, F2, F3 y F4 implementadas y verificadas con datos reales.
 **Origen:** conversación con el operador del 2026-11-17.
 **Base:** migraciones 001–019, pipeline de turnos, panel de Trazas, ventas/comisiones y dashboard React actual.
 
@@ -11,7 +11,7 @@
 | **F1** | ✅ este commit | API de conversaciones + panel listado/detalle + cierre + PII enmascarada. Etiquetar y bloquear se implementan con F3, como marca la tabla de fases. |
 | **F2** | ✅ este commit | Migración 021 aplicada; identidad (teléfono, zona, dirección, nombre de entrega) capturada desde mensajes y ventas; contactos normalizados; `posible_duplicado` sin auto-merge; backfill idempotente (0 cambios en la segunda pasada). 19 tests. |
 | **F3** | ✅ este commit | Panel de Clientes (listado, KPIs, detalle, etiquetas, notas, señales, bloqueo y merge manual), API `/api/customers`, inbound bloqueado sin turno/job y 26 tests. Verificado contra la BD real: listado, detalle, reveal auditado, merge preview y escaneo de señales. |
-| **F4** | Pendiente | Job de señales, settings de retención, KPIs y documentación. |
+| **F4** | ✅ este commit | Job de señales cada 5 min y purga diaria de mensajes con retención configurable (`customers.message_retention_days`, 180 días por defecto); migración 022 con umbrales en `settings`; KPIs de clientes en General; endpoint `GET/PUT /api/customers/settings` auditado; 7 tests. Verificado contra la BD real: `/api/summary`, settings y cambio auditado en `setting_changed`. |
 
 Notas de F1: `needs_attention` solo aplica a conversaciones de cliente abiertas (los TCP se gestionan por el flujo de escalaciones y un chat cerrado no pide atención). El panel no envía mensajes: la única escritura es cerrar, que cancela los turnos `OPEN` y sus jobs `PENDING` sin tocar un turno ya `PROCESSING`.
 
@@ -441,6 +441,8 @@ Router nuevo `api/routes_customers.py`.
 | `POST` | `/api/customers/{id}/block` / `unblock` | Bloquear/desbloquear. |
 | `POST` | `/api/customers/merge` | Fusionar dos clientes (manual, con vista previa). |
 | `POST` | `/api/customers/scan-signals` | Forzar el escaneo (operador). |
+| `GET` | `/api/customers/settings` | Política de retención vigente. |
+| `PUT` | `/api/customers/settings` | Cambiar la retención; queda en `events` (`setting_changed`). |
 
 **Filtros del listado:** `q` (nombre, teléfono normalizado, handle, orden), `segment`, `risk`, `status`, `kind` (por defecto `customer`), `zone_id`, `tag`, `has_sales`, `from`, `to`, `sort`, `limit`, `offset`.
 
@@ -474,7 +476,7 @@ Router nuevo `api/routes_customers.py`.
 
 - **Enmascarado por defecto** y revelado auditado (`events`).
 - **PIN:** hoy el valor por defecto es `0000` y no hay límite de intentos. Con PII en el panel se propone: cambiar el default, añadir rate limit al login y documentar que el dashboard debe ir en `127.0.0.1` salvo que se use LAN confiable.
-- **Retención:** **6 meses por defecto**, configurable en `settings` (`customers.message_retention_days`) y editable desde el dashboard sin tocar código. Perfil, ventas y comisiones se conservan por auditoría. El borrado de un cliente **anonimiza** (nombre, teléfono, dirección, contactos) y conserva las ventas con su `customer_id` para no romper finanzas; se registra el evento. La exposición de esta y las demás políticas queda anotada para el **panel de Configuración** (§12).
+- **Retención:** **6 meses por defecto**, configurable en `settings` (`customers.message_retention_days`) y editable desde el panel de Clientes sin tocar código. Un job diario borra solo los cuerpos de mensajes antiguos (desvinculando antes `turns.reply_message_id`, `conversation_facts.source_message_id` y `catalog_mutation_log.source_message_id`); perfil, ventas y comisiones se conservan por auditoría. El borrado de un cliente **anonimiza** (nombre, teléfono, dirección, contactos) y conserva las ventas con su `customer_id` para no romper finanzas; se registra el evento. La exposición de esta y las demás políticas queda anotada para el **panel de Configuración** (§12).
 - **Trazas y logs:** siguen enmascarando PII (`ai/redact.py`); se añaden tests para que un teléfono nuevo no se filtre.
 - **Exportación CSV:** opcional, con PIN, explícita y enmascarada por defecto. No se incluye en v1 salvo que se pida.
 
@@ -593,4 +595,4 @@ El operador pidió exponer como configuración la retención de mensajes y, en g
 - Cada cambio queda en `events` (`setting_changed`) con valor anterior y nuevo.
 - UI: ruta `/settings`, formulario por grupos, guardar por grupo, sin reiniciar para las claves de `settings`.
 
-**Orden sugerido:** después de F4, cuando ya existan los umbrales de segmentos y riesgo que este panel va a editar. Mientras tanto, F4 solo añade la clave de retención y un endpoint puntual si hace falta.
+**Orden sugerido:** después de F4, cuando ya existan los umbrales de segmentos y riesgo que este panel va a editar. F4 ya añadió la clave de retención, el endpoint puntual `GET/PUT /api/customers/settings` y un control en el panel de Clientes; el panel completo de Configuración sigue pendiente.

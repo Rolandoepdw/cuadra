@@ -618,6 +618,102 @@ def summary(conn) -> dict:
     }
 
 
+def general_kpis(conn) -> dict:
+    """Small customer KPIs for the General panel.
+
+    Deliberately SQL-only: the General panel refreshes every 15 seconds and must
+    not load every customer row just to show three numbers.
+    """
+    total = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM customers "
+            "WHERE kind = 'customer' AND status <> 'MERGED'"
+        ).fetchone()[0]
+        or 0
+    )
+    buyers = int(
+        conn.execute(
+            """SELECT COUNT(DISTINCT s.customer_id)
+                 FROM sales s JOIN customers c ON c.id = s.customer_id
+                WHERE c.kind = 'customer' AND c.status <> 'MERGED'
+                  AND s.status = 'SETTLED'"""
+        ).fetchone()[0]
+        or 0
+    )
+    active_7d = int(
+        conn.execute(
+            """SELECT COUNT(*) FROM customers c
+                WHERE c.kind = 'customer' AND c.status <> 'MERGED'
+                  AND COALESCE(
+                        c.last_seen_at,
+                        (SELECT MAX(cv.updated_at) FROM conversations cv
+                          WHERE cv.customer_id = c.id)
+                      ) >= datetime('now', '-7 days')"""
+        ).fetchone()[0]
+        or 0
+    )
+    thresholds = _thresholds(conn)
+    weights = " ".join(
+        f"WHEN '{kind}' THEN {weight}" for kind, weight in RISK_WEIGHTS.items()
+    )
+    at_risk = int(
+        conn.execute(
+            f"""SELECT COUNT(*) FROM (
+                    SELECT c.id,
+                           COALESCE(SUM(CASE s.kind {weights} ELSE 0 END), 0) AS score
+                      FROM customers c
+                      LEFT JOIN customer_signals s
+                             ON s.customer_id = c.id AND s.status = 'CONFIRMED'
+                     WHERE c.kind = 'customer'
+                       AND c.status NOT IN ('BLOCKED', 'SPAM', 'MERGED')
+                     GROUP BY c.id
+                ) WHERE score >= ?""",
+            (thresholds["customers.risk.high"],),
+        ).fetchone()[0]
+        or 0
+    )
+    return {
+        "customers_total": total,
+        "customers_active_7d": active_7d,
+        "customers_conversion": round(buyers / total, 4) if total else 0.0,
+        "customers_at_risk": at_risk,
+    }
+
+
+def get_settings(conn) -> dict:
+    """Customer-panel settings exposed to the dashboard (privacy policy)."""
+    return {
+        "message_retention_days": settings.message_retention_days(conn),
+        "message_retention_default": settings.MESSAGE_RETENTION_DEFAULT,
+        "message_retention_min": settings.MESSAGE_RETENTION_MIN,
+        "message_retention_max": settings.MESSAGE_RETENTION_MAX,
+    }
+
+
+def update_settings(conn, data: dict) -> dict:
+    if "message_retention_days" in data and data["message_retention_days"] is not None:
+        previous = settings.message_retention_days(conn)
+        try:
+            current = settings.set_message_retention_days(
+                conn, data["message_retention_days"]
+            )
+        except ValueError as exc:
+            raise Invalid(str(exc)) from exc
+        if current != previous:
+            events.log(
+                conn,
+                "dashboard",
+                "setting_changed",
+                entity="settings",
+                details={
+                    "key": settings.CUSTOMER_MESSAGE_RETENTION,
+                    "previous": previous,
+                    "value": current,
+                },
+            )
+    return get_settings(conn)
+
+
 # -------------------------------------------------------------------- detail
 
 
