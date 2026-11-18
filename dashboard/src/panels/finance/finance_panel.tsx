@@ -18,14 +18,13 @@ import {
   setSalesSettings,
   settleSale,
 } from "@/lib/api";
-import { formatDateTime, formatMoney } from "@/lib/format";
+import { formatDateTime, formatMoney, SALE_STATUS_LABELS, SALE_STATUS_VARIANTS } from "@/lib/format";
 import type {
   FollowupMode,
   LedgerEntry,
   LedgerStatus,
   Sale,
   SaleFollowup,
-  SaleStatus,
   SalesMode,
 } from "@/types/api";
 import { Badge } from "@/components/ui/badge";
@@ -35,33 +34,6 @@ import { Select } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { DataTable } from "@/components/data_table";
 import { ConfirmDialog } from "@/components/confirm_dialog";
-
-const SALE_STATUS_LABELS: Record<SaleStatus, string> = {
-  DRAFT: "Borrador",
-  PENDING_APPROVAL: "Por aprobar",
-  PENDING_DISPATCH: "Por despachar",
-  DISPATCHED: "Despachada",
-  CONFIRMED: "Confirmada por TCP",
-  DELIVERED: "Entregada",
-  SETTLED: "Comisión cobrada",
-  CANCELLED: "Cancelada",
-  NEEDS_OPERATOR: "Requiere operador",
-};
-
-const SALE_STATUS_VARIANTS: Record<
-  SaleStatus,
-  "success" | "warning" | "secondary" | "destructive" | "outline"
-> = {
-  DRAFT: "outline",
-  PENDING_APPROVAL: "warning",
-  PENDING_DISPATCH: "warning",
-  DISPATCHED: "secondary",
-  CONFIRMED: "secondary",
-  DELIVERED: "success",
-  SETTLED: "success",
-  CANCELLED: "destructive",
-  NEEDS_OPERATOR: "destructive",
-};
 
 const MODE_LABELS: Record<SalesMode, string> = {
   assisted: "Asistido",

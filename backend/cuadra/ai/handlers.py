@@ -301,6 +301,13 @@ async def process_turn(payload: dict) -> None:
             return
         turn = claimed
 
+        # `claim` only moves OPEN -> PROCESSING and a manual close only cancels
+        # OPEN turns, so this should never fire. It is free (the row is already
+        # re-read) and keeps a future close policy from leaking a reply.
+        if turn["status"] == "CANCELLED":
+            log.debug("turn %s was cancelled while claiming, skipping", turn_id)
+            return
+
         conversation = conversations.get_conversation(conn, turn["conversation_id"])
         result = await pipeline.handle_turn(conn, conversation, turn)
 

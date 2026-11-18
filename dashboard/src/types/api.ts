@@ -596,3 +596,170 @@ export interface CatalogMutationPage {
 export interface MutationReasonIn {
   reason: string;
 }
+
+// ------------------------------------------------------------- conversations
+export type CustomerKind = "customer" | "supplier";
+export type ConversationStatus = "ACTIVE" | "WAITING_TCP" | "CLOSED";
+export type MessageDirection = "INBOUND" | "OUTBOUND";
+export type MessageAuthor = "customer" | "bot" | "tcp" | "operator";
+
+export interface ConversationCustomerSummary {
+  id: number;
+  name: string | null;
+  handle: string | null;
+  phone_masked: string | null;
+}
+
+export interface ConversationLastMessage {
+  body: string | null;
+  direction: MessageDirection;
+  author: MessageAuthor;
+  created_at: string;
+}
+
+export interface ConversationLastSale {
+  id: number;
+  order_code: string | null;
+  status: SaleStatus;
+  amount: number;
+  currency: Currency;
+  product_name: string | null;
+}
+
+export interface ConversationListItem {
+  id: number;
+  kind: CustomerKind;
+  channel: string;
+  identity: string;
+  status: ConversationStatus;
+  stage: string | null;
+  customer: ConversationCustomerSummary;
+  last_message: ConversationLastMessage | null;
+  messages_count: number;
+  turns_count: number;
+  questions_count: number;
+  open_escalations: number;
+  last_sale: ConversationLastSale | null;
+  needs_attention: boolean;
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+}
+
+export interface ConversationsPage {
+  items: ConversationListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ConversationsSummary {
+  total: number;
+  open: number;
+  waiting_tcp: number;
+  needs_attention: number;
+  with_open_escalation: number;
+  with_sale: number;
+  customers: number;
+  suppliers: number;
+}
+
+export interface ConversationMessage {
+  id: number;
+  direction: MessageDirection;
+  author: MessageAuthor;
+  type: string;
+  body: string | null;
+  file_path: string | null;
+  latency_ms: number | null;
+  created_at: string;
+}
+
+export interface ConversationMessagesPage {
+  items: ConversationMessage[];
+  has_more: boolean;
+  limit: number;
+}
+
+export interface ConversationCustomerDetail {
+  id: number;
+  name: string | null;
+  kind: CustomerKind;
+  handle: string | null;
+  phone_masked: string | null;
+  usual_zone: string | null;
+  usual_address_masked: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface ConversationFact {
+  fact_key: string;
+  fact_value: string;
+  confidence: number;
+  updated_at: string | null;
+}
+
+export interface ConversationSale {
+  id: number;
+  order_code: string | null;
+  status: SaleStatus;
+  quantity: number;
+  amount: number;
+  currency: Currency;
+  product_id: number;
+  product_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationEscalation {
+  id: number;
+  product_id: number | null;
+  product_name: string | null;
+  supplier_id: number;
+  supplier_name: string | null;
+  question: string;
+  tcp_answer: string | null;
+  status: string;
+  created_at: string;
+  answered_at: string | null;
+  resolved_at: string | null;
+}
+
+export interface ConversationTurn {
+  id: number;
+  status: string;
+  intent: string | null;
+  product_id: number | null;
+  product_name: string | null;
+  stage: string | null;
+  generator: string | null;
+  escalated: boolean;
+  sale_id: number | null;
+  latency_ms: number | null;
+  outcome: "ok" | "error";
+  created_at: string;
+  finished_at: string | null;
+}
+
+export interface ConversationTrace {
+  id: number;
+  method: string;
+  ok: boolean;
+  duration_ms: number | null;
+  timestamp: string;
+}
+
+export interface ConversationDetail {
+  conversation: ConversationListItem;
+  customer: ConversationCustomerDetail;
+  context: Record<string, unknown>;
+  facts: ConversationFact[];
+  messages: ConversationMessage[];
+  messages_has_more: boolean;
+  sales: ConversationSale[];
+  escalations: ConversationEscalation[];
+  turns: ConversationTurn[];
+  traces: ConversationTrace[];
+}

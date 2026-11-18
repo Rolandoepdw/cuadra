@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   LogOut,
   Megaphone,
+  MessagesSquare,
   Package,
   ScrollText,
   SlidersHorizontal,
@@ -19,6 +20,7 @@ import { useAuth } from "@/lib/auth";
 
 const items = [
   { to: "/", label: "General", icon: LayoutDashboard, end: true },
+  { to: "/conversations", label: "Conversaciones", icon: MessagesSquare, end: false },
   { to: "/catalog", label: "Catálogo", icon: Package, end: false },
   { to: "/groups", label: "Grupos", icon: Users, end: false },
   { to: "/broadcasts", label: "Difusiones", icon: Megaphone, end: false },

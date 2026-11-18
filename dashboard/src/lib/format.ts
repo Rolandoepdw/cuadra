@@ -1,4 +1,4 @@
-import type { ProductStatus } from "@/types/api";
+import type { ProductStatus, SaleStatus } from "@/types/api";
 
 export function formatMoney(amount: number, currency: string): string {
   const n = new Intl.NumberFormat("es-CU", { maximumFractionDigits: 2 }).format(amount);
@@ -66,3 +66,30 @@ export const BROADCAST_STATUS_LABELS = {
   COMPLETED: "Completada",
   FAILED: "Fallida",
 } as const;
+
+export const SALE_STATUS_LABELS: Record<SaleStatus, string> = {
+  DRAFT: "Borrador",
+  PENDING_APPROVAL: "Por aprobar",
+  PENDING_DISPATCH: "Por despachar",
+  DISPATCHED: "Despachada",
+  CONFIRMED: "Confirmada por TCP",
+  DELIVERED: "Entregada",
+  SETTLED: "Comisión cobrada",
+  CANCELLED: "Cancelada",
+  NEEDS_OPERATOR: "Requiere operador",
+};
+
+export const SALE_STATUS_VARIANTS: Record<
+  SaleStatus,
+  "success" | "warning" | "secondary" | "destructive" | "outline"
+> = {
+  DRAFT: "outline",
+  PENDING_APPROVAL: "warning",
+  PENDING_DISPATCH: "warning",
+  DISPATCHED: "secondary",
+  CONFIRMED: "secondary",
+  DELIVERED: "success",
+  SETTLED: "success",
+  CANCELLED: "destructive",
+  NEEDS_OPERATOR: "destructive",
+};

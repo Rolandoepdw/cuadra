@@ -16,6 +16,13 @@ import type {
   Category,
   CategoryIn,
   CategoryPatch,
+  ConversationDetail,
+  ConversationListItem,
+  ConversationMessagesPage,
+  ConversationsPage,
+  ConversationsSummary,
+  ConversationStatus,
+  CustomerKind,
   DeliverySettings,
   FinanceSummary,
   FollowupPage,
@@ -421,3 +428,57 @@ export const getTrace = (id: number) => request<TraceEntry>(`/api/traces/${id}`)
 export const getMetricsSummary = () => request<MetricsSummary>("/api/metrics/summary");
 export const getMetricsTimeline = (days = 7) =>
   request<MetricsTimeline>(`/api/metrics/timeline?days=${days}`);
+
+// -------------------------------------------------------------- conversations
+export const getConversationsSummary = () =>
+  request<ConversationsSummary>("/api/conversations/summary");
+
+export const listConversations = (
+  params: {
+    kind?: CustomerKind;
+    status?: ConversationStatus;
+    identity?: string;
+    channel?: string;
+    stage?: string;
+    needs_attention?: boolean;
+    has_escalation?: boolean;
+    has_sale?: boolean;
+    q?: string;
+    date_from?: string;
+    date_to?: string;
+    sort?: string;
+    limit?: number;
+    offset?: number;
+  } = {},
+) => {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== "" && v !== null) qs.set(k, String(v));
+  }
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return request<ConversationsPage>(`/api/conversations${suffix}`);
+};
+
+export const getConversation = (id: number) =>
+  request<ConversationDetail>(`/api/conversations/${id}`);
+
+export const listConversationMessages = (
+  id: number,
+  params: { limit?: number; before_id?: number } = {},
+) => {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null) qs.set(k, String(v));
+  }
+  const suffix = qs.toString() ? `?${qs}` : "";
+  return request<ConversationMessagesPage>(
+    `/api/conversations/${id}/messages${suffix}`,
+  );
+};
+
+// Read-only panel: the only write is closing. Sending messages stays in the
+// paced queue (anti-ban), never in the dashboard.
+export const closeConversation = (id: number) =>
+  request<ConversationListItem>(`/api/conversations/${id}/close`, {
+    method: "POST",
+  });
