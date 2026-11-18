@@ -8,9 +8,10 @@ import {
   listCategories,
   listProducts,
   listSuppliers,
+  listZones,
   updateProduct,
 } from "@/lib/api";
-import type { CommissionType, Currency, Product, ProductIn, ProductStatus } from "@/types/api";
+import type { CommissionType, Currency, Product, ProductIn, ProductStatus, Zone } from "@/types/api";
 import { formatMoney, STATUS_LABELS, STATUS_VARIANTS } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,6 +40,7 @@ export function ProductsTab() {
     queryKey: ["categories"],
     queryFn: () => listCategories({ active: true }),
   });
+  const { data: zones = [] } = useQuery({ queryKey: ["zones"], queryFn: listZones });
 
   const [editing, setEditing] = useState<Product | null>(null);
   const [creating, setCreating] = useState(false);
@@ -117,6 +119,7 @@ export function ProductsTab() {
         product={editing}
         suppliers={suppliers}
         categories={categories}
+        zones={zones}
         loading={save.isPending}
         onClose={() => {
           setCreating(false);
@@ -152,6 +155,7 @@ function ProductForm({
   product,
   suppliers,
   categories,
+  zones,
   loading,
   onClose,
   onSave,
@@ -160,6 +164,7 @@ function ProductForm({
   product: Product | null;
   suppliers: { id: number; name: string }[];
   categories: { id: number; name: string }[];
+  zones: Zone[];
   loading: boolean;
   onClose: () => void;
   onSave: (v: ProductIn) => void;
@@ -176,6 +181,7 @@ function ProductForm({
     commission_type: "FIXED",
     stock: 1,
     status: "ACTIVE",
+    delivery_zone_ids: [],
   };
   const [form, setForm] = useState<ProductIn>(empty);
   const [initializedFor, setInitializedFor] = useState<number | "new" | null>(null);
@@ -196,6 +202,7 @@ function ProductForm({
             commission_type: product.commission_type,
             stock: product.stock,
             status: product.status,
+            delivery_zone_ids: product.delivery_zone_ids ?? [],
           }
         : empty,
     );
@@ -290,6 +297,32 @@ function ProductForm({
                 </option>
               ))}
             </Select>
+          </Field>
+          <Field label="Zonas de entrega del producto" className="sm:col-span-2">
+            <div className="max-h-44 overflow-y-auto rounded-md border p-3">
+              {zones.length === 0 && <p className="text-sm text-muted-foreground">Sin zonas registradas.</p>}
+              {zones.map((zone) => (
+                <label key={zone.id} className="flex items-center gap-2 py-0.5 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={(form.delivery_zone_ids ?? []).includes(zone.id)}
+                    onChange={(e) =>
+                      set(
+                        "delivery_zone_ids",
+                        e.target.checked
+                          ? [...(form.delivery_zone_ids ?? []), zone.id]
+                          : (form.delivery_zone_ids ?? []).filter((v) => v !== zone.id),
+                      )
+                    }
+                  />
+                  <span>{zone.name}</span>
+                </label>
+              ))}
+              <p className="mt-2 text-xs text-muted-foreground">
+                Sin selección = hereda las zonas del TCP. Si eliges, el producto solo se entrega donde
+                coincidan el TCP y esta lista.
+              </p>
+            </div>
           </Field>
         </div>
         <DialogFooter>

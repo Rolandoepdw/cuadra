@@ -55,6 +55,8 @@ export interface Product {
   stock_reserved: number | null;
   status: ProductStatus;
   specifications: Record<string, unknown>;
+  /** Empty = inherit the supplier's zones. */
+  delivery_zone_ids: number[];
   images?: ProductImage[];
 }
 
@@ -208,6 +210,8 @@ export interface ProductIn {
   stock?: number | null;
   status?: ProductStatus;
   specifications?: Record<string, unknown>;
+  /** Empty = inherit the supplier's zones. */
+  delivery_zone_ids?: number[];
 }
 
 export type CategoryPatch = Partial<CategoryIn>;

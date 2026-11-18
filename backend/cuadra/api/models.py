@@ -66,6 +66,9 @@ class ProductIn(BaseModel):
     stock: int | None = None
     status: Literal["ACTIVE", "OUT_OF_STOCK", "PAUSED", "REMOVED"] = "ACTIVE"
     specifications: dict = Field(default_factory=dict)
+    # Empty = inherit the supplier's zones. Non-empty = restrict this product to
+    # the intersection with the supplier's coverage.
+    delivery_zone_ids: list[int] = Field(default_factory=list)
 
 
 class ProductPatch(BaseModel):
@@ -80,6 +83,7 @@ class ProductPatch(BaseModel):
     stock: int | None = None
     status: Literal["ACTIVE", "OUT_OF_STOCK", "PAUSED", "REMOVED"] | None = None
     specifications: dict | None = None
+    delivery_zone_ids: list[int] | None = None
 
 
 class MainImageIn(BaseModel):

@@ -330,7 +330,8 @@ def delete_zone_alias(conn, alias: str) -> dict:
 # common words such as "regla" (a ruler) would be read as the Regla municipality.
 _ZONE_HINT_RE = re.compile(
     r"\b(vivo|vive|resido|reside|radico|radica|estoy en|soy de|somos de|"
-    r"es de|ubicad[oa] en|entrega|entregar|env[ií]o|enviar|"
+    r"es de|ubicad[oa] en|entrega|entregan|entregamos|entrego|entregar|"
+    r"env[ií]o|env[ií]an|enviar|"
     r"zona|municipio|direcci[oó]n|domicilio|reparto|llevar|mandar|mi casa)\b",
     re.IGNORECASE,
 )
@@ -616,6 +617,111 @@ def set_supplier_zones(conn, supplier_id: int, zone_ids: list[int]) -> list[int]
     return ids
 
 
+# ------------------------------------------------------- product delivery zones
+#
+# The supplier's zones are the outer boundary; a product may narrow them (a
+# small or low-margin item that is not worth a long trip). No rows for a product
+# means "inherit the supplier's zones", which keeps every existing listing valid.
+
+
+def list_product_zones(conn, product_id: int) -> list[dict]:
+    """Zones explicitly assigned to a product (empty = inherit the supplier's)."""
+    return [
+        dict(r)
+        for r in conn.execute(
+            """SELECT z.* FROM product_delivery_zones pz
+               JOIN zones z ON z.id = pz.zone_id
+               WHERE pz.product_id = ? ORDER BY z.name""",
+            (product_id,),
+        )
+    ]
+
+
+def product_zone_ids(conn, product_id: int) -> list[int]:
+    return [
+        int(r["zone_id"])
+        for r in conn.execute(
+            """SELECT zone_id FROM product_delivery_zones
+               WHERE product_id = ? ORDER BY zone_id""",
+            (product_id,),
+        )
+    ]
+
+
+def set_product_zones(conn, product_id: int, zone_ids: list[int]) -> list[int]:
+    """Replace a product's explicit zones. An empty list means "inherit"."""
+    _get(conn, "products", product_id, "product")
+    ids = sorted({int(v) for v in (zone_ids or [])})
+    for zone_id in ids:
+        _exists(conn, "zones", zone_id, "zone")
+    conn.execute(
+        "DELETE FROM product_delivery_zones WHERE product_id = ?", (product_id,)
+    )
+    for zone_id in ids:
+        conn.execute(
+            "INSERT INTO product_delivery_zones (product_id, zone_id) VALUES (?, ?)",
+            (product_id, zone_id),
+        )
+    return ids
+
+
+def effective_delivery_zones(conn, product: dict) -> list[dict]:
+    """Zones a product can actually be delivered to.
+
+    Explicit product zones restrict the supplier's coverage (intersection).
+    Without explicit rows the supplier's zones are inherited.
+    """
+    supplier_zones = list_supplier_zones(conn, product["supplier_id"])
+    explicit = list_product_zones(conn, product["id"])
+    if not explicit:
+        return supplier_zones
+    if not supplier_zones:
+        # The supplier has no structured coverage yet: the product's own list is
+        # the only signal available.
+        return explicit
+    allowed = {int(zone["id"]) for zone in explicit}
+    return [zone for zone in supplier_zones if int(zone["id"]) in allowed]
+
+
+def effective_delivery_zone_names(conn, product: dict) -> list[str]:
+    return [zone["name"] for zone in effective_delivery_zones(conn, product)]
+
+
+def product_covers_zone(conn, product: dict, zone_id: int) -> bool:
+    """Effective coverage of one product in one zone.
+
+    Mirrors `sales.supplier_covers_zone` (a link row is enough) and adds the
+    product restriction. When the supplier has no structured zones, the product
+    list is the only signal.
+    """
+    zone_id = int(zone_id)
+    explicit = conn.execute(
+        "SELECT 1 FROM product_delivery_zones WHERE product_id = ? AND zone_id = ?",
+        (product["id"], zone_id),
+    ).fetchone()
+    has_explicit = conn.execute(
+        "SELECT 1 FROM product_delivery_zones WHERE product_id = ? LIMIT 1",
+        (product["id"],),
+    ).fetchone()
+    supplier = conn.execute(
+        "SELECT 1 FROM supplier_delivery_zones WHERE supplier_id = ? AND zone_id = ?",
+        (product["supplier_id"], zone_id),
+    ).fetchone()
+    if has_explicit is not None:
+        # The product narrowed its coverage: the zone must be in its own list.
+        # If the supplier has no structured zones, that list is the only signal.
+        if explicit is None:
+            return False
+        if supplier is not None:
+            return True
+        supplier_any = conn.execute(
+            "SELECT 1 FROM supplier_delivery_zones WHERE supplier_id = ? LIMIT 1",
+            (product["supplier_id"],),
+        ).fetchone()
+        return supplier_any is None
+    return supplier is not None
+
+
 def set_supplier_telegram_peer(conn, supplier_id: int, peer_id: str | None) -> None:
     """Persist the numeric Telegram id resolved for a supplier handle.
 
@@ -729,7 +835,27 @@ def list_products(
         args += [f"%{q}%", f"%{q}%"]
     if where:
         sql += " WHERE " + " AND ".join(where)
-    return [dict(r) for r in conn.execute(sql + " ORDER BY p.id", args)]
+    return _attach_product_zones(
+        conn, [dict(r) for r in conn.execute(sql + " ORDER BY p.id", args)]
+    )
+
+
+def _attach_product_zones(conn, products: list[dict]) -> list[dict]:
+    """Add `delivery_zone_ids` to a batch of products with one query."""
+    if not products:
+        return products
+    ids = [int(product["id"]) for product in products]
+    marks = ", ".join("?" for _ in ids)
+    zones: dict[int, list[int]] = {product_id: [] for product_id in ids}
+    for row in conn.execute(
+        f"""SELECT product_id, zone_id FROM product_delivery_zones
+            WHERE product_id IN ({marks}) ORDER BY zone_id""",
+        ids,
+    ):
+        zones[int(row["product_id"])].append(int(row["zone_id"]))
+    for product in products:
+        product["delivery_zone_ids"] = zones[int(product["id"])]
+    return products
 
 
 def get_product(conn, product_id: int) -> dict:
@@ -738,6 +864,7 @@ def get_product(conn, product_id: int) -> dict:
         raise NotFound(f"product {product_id} not found")
     product = dict(row)
     product["specifications"] = json.loads(product.get("specifications_json") or "{}")
+    product["delivery_zone_ids"] = product_zone_ids(conn, product_id)
     product["images"] = [
         dict(r)
         for r in conn.execute(
@@ -831,6 +958,8 @@ def create_product(conn, data: dict) -> dict:
     cur = conn.execute(
         f"INSERT INTO products ({cols}) VALUES ({marks})", tuple(fields.values())
     )
+    if data.get("delivery_zone_ids") is not None:
+        set_product_zones(conn, cur.lastrowid, data["delivery_zone_ids"])
     events.log(
         conn,
         "dashboard",
@@ -846,12 +975,16 @@ def create_product(conn, data: dict) -> dict:
 def update_product(conn, product_id: int, data: dict) -> dict:
     product = _get(conn, "products", product_id, "product")
     fields = _validate_product_fields(conn, data, partial=True)
-    _require(bool(fields), "nothing to update")
-    clause, values = _set_clause(fields)
-    conn.execute(
-        f"UPDATE products SET {clause}, updated_at = ? WHERE id = ?",
-        (*values, _now(), product_id),
-    )
+    zone_ids = data["delivery_zone_ids"] if "delivery_zone_ids" in data else None
+    _require(bool(fields) or zone_ids is not None, "nothing to update")
+    if fields:
+        clause, values = _set_clause(fields)
+        conn.execute(
+            f"UPDATE products SET {clause}, updated_at = ? WHERE id = ?",
+            (*values, _now(), product_id),
+        )
+    if zone_ids is not None:
+        set_product_zones(conn, product_id, zone_ids)
     events.log(
         conn,
         "dashboard",
@@ -1105,14 +1238,18 @@ def _products_for_word(conn, word: str, *, limit: int) -> list[dict]:
             continue
         rows = conn.execute(
             """SELECT * FROM products
-               WHERE status = 'ACTIVE' AND category_id = ?
+               WHERE status IN ('ACTIVE', 'OUT_OF_STOCK') AND category_id = ?
                ORDER BY price LIMIT ?""",
             (row["id"], limit),
         ).fetchall()
         if rows:
             return [dict(r) for r in rows]
     # 2) The word is part of the product name ("laptops" -> "Laptop Empresarial").
-    ranked = search_products(conn, word, limit=max(limit * 4, 12))
+    #    Out-of-stock products are listed too: the customer may want to wait for
+    #    a restock, and the stock may simply be stale.
+    ranked = search_products(
+        conn, word, limit=max(limit * 4, 12), statuses=("ACTIVE", "OUT_OF_STOCK")
+    )
     found = []
     for product in ranked:
         name_tokens = _tokens(product["name"])
@@ -1136,6 +1273,29 @@ def category_products(conn, query: str, *, limit: int = 5) -> list[dict]:
     return []
 
 
+def family_products(conn, term: str, *, limit: int = 10) -> list[dict]:
+    """Products the word names as a *family*, not as a qualifier.
+
+    `category_products` matches any token of a name, so "empresarial" would
+    return the Laptop Empresarial. That is useful to resolve a concrete product,
+    but not to decide that the customer asked for the whole family: a real
+    category, or a word that is the head of the name ("laptop"), qualifies.
+    """
+    products = category_products(conn, term, limit=limit)
+    if not products:
+        return []
+    wanted = {_singular(term), _fold(term)}
+    for row in conn.execute("SELECT name FROM categories"):
+        names = {_singular(part) for part in _words(row["name"])}
+        names.add(_fold(row["name"]))
+        if wanted & names:
+            # A real category is authoritative: its products need not share a
+            # head noun ("tecnología" holds laptops, a monitor and a tablet).
+            return products
+    head = _singular(term)
+    return [product for product in products if _name_head(product["name"]) == head]
+
+
 def category_terms(text: str) -> list[str]:
     """Content words of a phrase, in order, for category matching.
 
@@ -1145,13 +1305,17 @@ def category_terms(text: str) -> list[str]:
     return _words(text)
 
 
-def narrow_products(products: list[dict], query: str, *, exclude: str = "") -> list[dict]:
+def narrow_products(
+    products: list[dict], query: str, *, exclude: str = "", fallback: bool = True
+) -> list[dict]:
     """Keep the products whose name matches every extra word in `query`.
 
     F14 (prueba #4): "laptops gaming" is a category plus a qualifier. The
     category lists three laptops; the qualifier must narrow the list to the
-    gamer one instead of answering about the cheapest laptop. If no product
-    matches, the original list is returned (the caller can still show it).
+    gamer one instead of answering about the cheapest laptop. With `fallback`
+    the original list is returned when nothing matches (the caller can still
+    show it); without it the empty list tells the caller the qualifier named no
+    product.
     """
     skip = _fold(exclude)
     words = [word for word in _words(query) if word != skip and len(word) >= 4]
@@ -1162,7 +1326,7 @@ def narrow_products(products: list[dict], query: str, *, exclude: str = "") -> l
         tokens = _tokens(product["name"])
         if all(_word_matches(word, tokens) for word in words):
             kept.append(product)
-    return kept or list(products)
+    return kept or (list(products) if fallback else [])
 
 
 def _word_matches(word: str, tokens: set[str]) -> bool:
@@ -1242,8 +1406,14 @@ def llm_product_json(conn, product: dict) -> dict:
         ).fetchone()
         supplier_zone = supplier["delivery_zone"] if supplier else None
 
-    zonas = delivery_zone_names(conn, product["supplier_id"])
-    if not zonas and (supplier_zone or "").strip():
+    zonas = effective_delivery_zone_names(conn, product)
+    if (
+        not zonas
+        and not product_zone_ids(conn, product["id"])
+        and (supplier_zone or "").strip()
+    ):
+        # Legacy supplier with a free-text zone and no structured coverage: the
+        # product has no restriction of its own, so the supplier's text applies.
         zonas = [supplier_zone.strip()]
 
     return {

@@ -799,8 +799,11 @@ def _product_context(conn, product_id: int | None) -> tuple[dict, dict | None]:
             "SELECT name FROM categories WHERE id = ?", (product["category_id"],)
         ).fetchone()
     price = product["price"]
-    supplier_zones = catalog.get_supplier_delivery_zones(conn, product["supplier_id"])
-    delivery_zone = ", ".join(z["name"] for z in supplier_zones) if supplier_zones else "Todas"
+    # Effective coverage: the product's own restriction intersected with the
+    # supplier's zones, so a broadcast never advertises a zone the product is
+    # not delivered to.
+    product_zones = catalog.effective_delivery_zones(conn, product)
+    delivery_zone = ", ".join(z["name"] for z in product_zones) if product_zones else "Todas"
     return (
         {
             "id": str(product["id"]),

@@ -235,6 +235,57 @@ class ValidationTests(Phase3TestCase):
             with self.assertRaises(sales.Invalid):
                 self.create_sale(delivery_zone=zone)
 
+    # ------------------------------------------- zonas por producto
+
+    def test_a_product_without_zones_inherits_the_supplier_coverage(self):
+        """Sin filas propias el producto hereda las zonas del TCP."""
+        self.conn.execute(
+            "INSERT INTO supplier_delivery_zones (supplier_id, zone_id) VALUES (1, 2)"
+        )
+        self.conn.commit()
+        product = self.product(1)
+        self.assertEqual(
+            catalog.effective_delivery_zone_names(self.conn, product),
+            ["San Miguel", "Vedado"],
+        )
+        self.assertTrue(catalog.product_covers_zone(self.conn, product, 2))
+
+    def test_a_product_can_narrow_the_supplier_coverage(self):
+        """El producto restringe: el TCP llega a Vedado, el artículo no."""
+        self.conn.execute(
+            "INSERT INTO supplier_delivery_zones (supplier_id, zone_id) VALUES (1, 2)"
+        )
+        catalog.set_product_zones(self.conn, 1, [1])
+        self.conn.commit()
+        product = self.product(1)
+        self.assertEqual(
+            catalog.effective_delivery_zone_names(self.conn, product), ["San Miguel"]
+        )
+        self.assertFalse(catalog.product_covers_zone(self.conn, product, 2))
+
+    def test_a_sale_is_rejected_in_a_zone_the_product_does_not_reach(self):
+        self.conn.execute(
+            "INSERT INTO supplier_delivery_zones (supplier_id, zone_id) VALUES (1, 2)"
+        )
+        catalog.set_product_zones(self.conn, 1, [1])
+        self.conn.commit()
+        with self.assertRaises(sales.Invalid):
+            self.create_sale(delivery_zone="Vedado")
+        self.assertEqual(self.count("sales"), 0)
+        # La misma zona sí se vende para un producto que la hereda del TCP.
+        self.create_sale(product_id=2, delivery_zone="Vedado")
+        self.assertEqual(self.count("sales"), 1)
+
+    def test_a_product_zone_the_supplier_does_not_cover_is_not_effective(self):
+        """Nunca se promete una zona que el TCP no cubre."""
+        catalog.set_product_zones(self.conn, 1, [1, 2])
+        self.conn.commit()
+        product = self.product(1)
+        self.assertEqual(
+            catalog.effective_delivery_zone_names(self.conn, product), ["San Miguel"]
+        )
+        self.assertFalse(catalog.product_covers_zone(self.conn, product, 2))
+
     def test_paused_product_cannot_be_sold(self):
         with self.assertRaises(sales.Invalid):
             self.create_sale(product_id=5)

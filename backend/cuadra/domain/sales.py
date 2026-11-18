@@ -239,7 +239,8 @@ def initial_status(
         return "PENDING_APPROVAL"
     if not _product_fresh(conn, product_id, hybrid_max_age_hours(conn)):
         return "PENDING_APPROVAL"
-    if not supplier_covers_zone(conn, supplier_id, zone_id):
+    product = catalog.get_product(conn, product_id)
+    if not catalog.product_covers_zone(conn, product, zone_id):
         return "PENDING_APPROVAL"
     return "PENDING_DISPATCH"
 
@@ -296,8 +297,8 @@ def create_sale(
     zone = catalog.resolve_zone(conn, delivery_zone or "")
     if zone is None:
         raise Invalid("unknown zone")
-    if not supplier_covers_zone(conn, supplier["id"], zone["id"]):
-        raise Invalid("supplier does not deliver to this zone")
+    if not catalog.product_covers_zone(conn, product, zone["id"]):
+        raise Invalid("product does not deliver to this zone")
 
     recipient = clean_recipient(recipient_name)
     address = clean_address(delivery_address)
