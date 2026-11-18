@@ -684,6 +684,7 @@ export interface ConversationMessagesPage {
 export interface ConversationCustomerDetail {
   id: number;
   name: string | null;
+  display_name: string | null;
   kind: CustomerKind;
   handle: string | null;
   phone_masked: string | null;

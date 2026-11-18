@@ -87,6 +87,7 @@ SELECT
          ORDER BY cc.id LIMIT 1
     ) AS customer_identifier,
     COALESCE(
+        NULLIF(cust.phone, ''),
         NULLIF(json_extract(cust.preferences_json, '$.phone'), ''),
         (
             SELECT s.customer_phone FROM sales s
@@ -523,14 +524,25 @@ def _traces(conn, conversation_id: int, *, limit: int = 20) -> list[dict]:
 def _customer_detail(conn, conversation: dict) -> dict:
     customer = conversations.get_customer(conn, conversation["customer"]["id"])
     prefs = _json(customer.get("preferences_json"))
+    zone_name = prefs.get("usual_zone")
+    if customer.get("usual_zone_id"):
+        zone = conn.execute(
+            "SELECT name FROM zones WHERE id = ?", (customer["usual_zone_id"],)
+        ).fetchone()
+        if zone is not None:
+            zone_name = zone["name"]
+    address = customer.get("usual_address") or prefs.get("usual_address")
+    phone = customer.get("phone") or prefs.get("phone")
     return {
         "id": customer["id"],
         "name": customer.get("name"),
+        "display_name": customer.get("display_name"),
         "kind": customer.get("kind", "customer"),
         "handle": conversation["customer"]["handle"],
-        "phone_masked": conversation["customer"]["phone_masked"],
-        "usual_zone": prefs.get("usual_zone"),
-        "usual_address_masked": mask_address(prefs.get("usual_address")),
+        "phone_masked": mask_phone(phone)
+        or conversation["customer"]["phone_masked"],
+        "usual_zone": zone_name,
+        "usual_address_masked": mask_address(address),
         "notes": prefs.get("notes"),
         "created_at": customer.get("created_at"),
     }

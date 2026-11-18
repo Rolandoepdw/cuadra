@@ -387,6 +387,11 @@ def create_sale(
             raise Invalid("not enough stock")
 
     sale = get_sale(conn, sale_id)
+    # The sale carries the phone, zone and address the customer actually gave.
+    # Imported here to avoid a module-level cycle (customers -> sales).
+    from cuadra.domain import customers as customers_domain
+
+    customers_domain.record_sale_contact(conn, sale)
     events.log(
         conn,
         "bot" if sale["source"] == "bot" else "dashboard",

@@ -1,7 +1,7 @@
 # Plan — Paneles de Conversaciones y Clientes
 
 **Fecha:** 2026-11-17
-**Estado:** F0 y F1 implementadas y verificadas con datos reales; F2–F4 pendientes.
+**Estado:** F0, F1 y F2 implementadas y verificadas con datos reales; F3–F4 pendientes.
 **Origen:** conversación con el operador del 2026-11-17.
 **Base:** migraciones 001–019, pipeline de turnos, panel de Trazas, ventas/comisiones y dashboard React actual.
 
@@ -9,7 +9,7 @@
 |---|---|---|
 | **F0** | ✅ `9411449` | Migración 020 aplicada; backfill 23/23 turnos; `customers.kind` separa cliente/proveedor. |
 | **F1** | ✅ este commit | API de conversaciones + panel listado/detalle + cierre + PII enmascarada. Etiquetar y bloquear se implementan con F3, como marca la tabla de fases. |
-| **F2** | Pendiente | Contactos, zonas y duplicados con fusión manual. |
+| **F2** | ✅ este commit | Migración 021 aplicada; identidad (teléfono, zona, dirección, nombre de entrega) capturada desde mensajes y ventas; contactos normalizados; `posible_duplicado` sin auto-merge; backfill idempotente (0 cambios en la segunda pasada). 19 tests. |
 | **F3** | Pendiente | Panel de Clientes, etiquetas, notas, señales, bloqueo y merge. |
 | **F4** | Pendiente | Job de señales, settings de retención, KPIs y documentación. |
 

@@ -64,6 +64,7 @@ function CustomerCard({ customer }: { customer: ConversationCustomerDetail }) {
       </CardHeader>
       <CardContent className="space-y-1.5 text-sm">
         <Field label="Nombre" value={customer.name} />
+        <Field label="Nombre de entrega" value={customer.display_name} />
         <Field label="Handle" value={customer.handle} />
         <Field
           label="Teléfono"
@@ -257,7 +258,7 @@ export function ConversationDetail({
           </Button>
           <div>
             <h2 className="text-lg font-semibold">
-              {customer.name ?? "Cliente sin nombre"}
+              {customer.display_name ?? customer.name ?? "Cliente sin nombre"}
             </h2>
             <p className="text-xs text-muted-foreground">
               {customer.handle ?? "sin handle"} · {conversation.channel} ·{" "}

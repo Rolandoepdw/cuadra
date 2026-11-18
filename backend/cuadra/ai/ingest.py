@@ -13,7 +13,7 @@ import logging
 
 from cuadra import config, db
 from cuadra.ai import assembler, queue
-from cuadra.domain import catalog, conversations, events, turns
+from cuadra.domain import catalog, conversations, customers, events, turns
 
 log = logging.getLogger("cuadra.ingest")
 
@@ -57,6 +57,7 @@ def ingest_incoming(
         customer = conversations.get_or_create_customer(
             conn, channel, identifier, customer_name
         )
+        customers.touch(conn, customer["id"])
         conversation = conversations.get_or_create_open_conversation(
             conn, customer["id"], channel, identity=identity
         )

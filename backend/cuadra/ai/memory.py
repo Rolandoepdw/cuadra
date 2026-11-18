@@ -20,7 +20,12 @@ import sqlite3
 
 from cuadra import config
 from cuadra.ai import guardrails, llm
-from cuadra.domain import catalog, conversations, sales as sales_domain
+from cuadra.domain import (
+    catalog,
+    conversations,
+    customers as customers_domain,
+    sales as sales_domain,
+)
 
 log = logging.getLogger("cuadra.memory")
 
@@ -369,6 +374,9 @@ def capture_facts(
             source_message_id=source_message_id,
         )
         _set_profile_pref(conn, customer_id, "usual_zone", zone["name"])
+        customers_domain.set_profile_fields(
+            conn, customer_id, zone_name=zone["name"], source="fact"
+        )
         found[FACT_ZONE] = zone["name"]
 
     name = _extract_name(text)
@@ -412,6 +420,9 @@ def capture_facts(
             source_message_id=source_message_id,
         )
         _set_profile_pref(conn, customer_id, "phone", phone)
+        customers_domain.set_profile_fields(
+            conn, customer_id, phone=phone, source="fact", confidence=0.8
+        )
         found[FACT_PHONE] = phone
 
     address = _extract_address(text)
@@ -425,6 +436,9 @@ def capture_facts(
             source_message_id=source_message_id,
         )
         _set_profile_pref(conn, customer_id, "usual_address", address)
+        customers_domain.set_profile_fields(
+            conn, customer_id, address=address, source="fact", confidence=0.8
+        )
         found[FACT_ADDRESS] = address
 
     objection = _extract_objection(text)
