@@ -181,3 +181,42 @@ La prueba #5 confirmó que la venta y los banales ya funcionan, pero el bot segu
 - **Las zonas se resuelven por cobertura, no por parecido.** `catalog.resolve_zones` devuelve todas las zonas nombradas; `resolve_zone` sigue siendo estricto para una venta. Una zona corta sin pista («La UCI») resuelve por clave (`_zone_key` ignora artículos y palabras de entrega). Si el cliente nombra varias («Marianao o La Lisa») y solo algunas están cubiertas, `_zone_coverage_outcome` responde `zone_partial_coverage`; si no nombra ninguna y pregunta por entrega, `_delivery_zones_outcome` lista las zonas reales del proveedor. Ya no se escala una pregunta de cobertura.
 - **Una no-respuesta del TCP no contamina la ficha.** `tcp_triage._NOT_AN_ANSWER` cubre «no recuerdo», «consulta en la base de datos», «no tengo esa información», etc. `handlers.tcp_process` deja la escalación `PENDING`, registra `escalation_unconfirmed` y no envía nada al cliente. El fallback guarda la respuesta bajo el tema canónico (`spec_topic(question, answer)`), no bajo `dato_proveedor`. `catalog.customer_specifications` filtra esos textos basura de la ficha y del prompt.
 - **Contexto y trazabilidad.** `HISTORY_WINDOW = 20` y `LLM_MAX_PROMPT_TOKENS = 3200`: 20 mensajes (~10 turnos) conservan el hilo sin salir del presupuesto. La traza de `pipeline._classify_light` registra `history_messages` y `history_window` para verificar cuánto contexto se está usando.
+
+## 16. Zona, ficha y zonas por producto (prueba #6)
+
+La prueba #6 detectó dos problemas de orden: el saludo hablaba de la zona antes de
+que el cliente la pidiera y, al pedir una categoría, el bot ofrecía un solo
+producto en lugar del listado. Estas reglas fijan **cuándo se habla de entrega** y
+**qué se responde al pedir una familia**.
+
+- **La zona no se menciona hasta que toque.** `_render_product_card` sustituye a
+  `greeting_product`: nombre, precio, ID, disponibilidad, especificaciones,
+  política de transporte y cierre en un solo mensaje, **sin zona**. La zona solo
+  aparece si el cliente la pregunta (`_delivery_zones_outcome`,
+  `_zone_coverage_outcome`) o al capturar la dirección en la venta. Tampoco se
+  asume la `zona_habitual`: puede vivir en un municipio y recibir en otro. La
+  pregunta correcta es «¿en qué zona/municipio lo recibirías?».
+- **Cada producto tiene sus propias zonas de entrega.** `migrations/023` añade
+  `product_delivery_zones`. Sin filas, el producto **hereda** las zonas del TCP;
+  con filas, se usa la **intersección** con la cobertura del TCP
+  (`catalog.effective_delivery_zones`), de modo que nunca se promete una zona que
+  el proveedor no cubre. `catalog.product_covers_zone` es la única comprobación
+  para ventas, respuestas de cobertura y `{zona}` de las difusiones.
+- **Pedir una familia devuelve la familia.** `_category_request` reconoce
+  peticiones conversacionales («ando buscando una laptop») y lista hasta
+  `_TABLE_LIMIT = 10` productos, incluidos los `OUT_OF_STOCK` (marcados
+  «agotado»). Si un calificador deja exactamente un producto («laptop gaming»), o
+  la familia solo tiene uno, se responde directo con su ficha; nunca se cotiza un
+  producto al azar ni se vende sin que el cliente elija.
+- **La pregunta de cobertura resuelve zonas cortas.** `_ZONE_HINT_RE` reconoce
+  «entregan/entregamos/entrego», así que «¿Entregan en Playa?» resuelve la zona
+  aunque el nombre tenga menos de 6 letras y no lleve artículo.
+- **La ficha crea una oferta nueva.** El cierre «¿Te lo reservo?» (o «¿Te lo
+  reservo y coordinamos la entrega?» si la intención es comprar) reemplaza
+  cualquier oferta anterior y es consumible en el turno siguiente.
+- **Un «sí» responde a la oferta, no pide la familia.** `_category_request`
+  devuelve `None` cuando el mensaje es una respuesta desnuda a la oferta
+  (`offers.answer`). El NLU repite el producto de la ficha («Laptop
+  Ultraligera») y sin esta regla el «sí» volvía a listar la categoría en vez de
+  iniciar la venta (prueba #7). Las confirmaciones («si», «dale», «ok»,
+  «listo»…) tampoco cuentan como calificador de la familia.

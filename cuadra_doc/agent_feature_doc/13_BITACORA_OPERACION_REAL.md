@@ -496,7 +496,7 @@ completa; el coste fue un reintento (~25 s).
 |---|---|---|---|---|
 | H-01 | Baja (datos) | La zona estaba escrita **“Arrollo Naranjo”** en `zones.name`; debe ser **“Arroyo Naranjo”**. | El bot repetía el error al cliente. | **Corregido** el 2026-11-07 (`zones.id = 7`, evento `zone_renamed`). |
 | H-02 | Baja (UX) | La plantilla de precio no dice si el transporte está incluido. | El prompt exige ese dato, pero el esquema no lo modela; se prefiere no inventarlo. | **Corregido** el 2026-11-09: política de negocio `delivery.transport_policy` (`coordinated` por defecto, `included`, `not_included`). La plantilla determinista y el prompt del sistema siempre dicen la política; por defecto “El transporte se coordina al confirmar la entrega”, sin prometer inclusión. Editable en **Estrategia → Entrega y transporte** y por `GET/PUT /api/settings/delivery`. |
-| H-03 | Baja (UX) | Lista las **12 zonas** en una sola frase. | Correcto pero largo para un chat. | **Corregido** el 2026-11-09: si el cliente tiene `zona_habitual` y está cubierta, se usa esa; si el proveedor cubre ≤ 3 zonas se listan; si no, “Entregamos en tu municipio (te confirmo la zona exacta al cerrar el pedido)”. |
+| H-03 | Baja (UX) | Lista las **12 zonas** en una sola frase. | Correcto pero largo para un chat. | **Replanteado** el 2026-11-18 (prueba #6): la zona ya no se menciona en el saludo ni en la ficha del producto; solo se habla de entrega cuando el cliente la pregunta o al capturar la dirección, y nunca se asume la `zona_habitual` (puede recibir en otra zona). La ficha lleva nombre, precio, ID, disponibilidad, specs, transporte y cierre en un solo mensaje. Ver **§16 de `00_decisiones.md`** y **§10.25**. |
 | H-04 | Baja (telemetría) | El clasificador registró `confidence: 0.0` pese a acertar intención y producto. Reproducido en **3 de 4** escalaciones del lote TCP (turnos 15–17), con `degraded: false`. | No afecta la respuesta (la confianza no decide el ruteo), pero distorsiona métricas y el panel. | **Corregido** el 2026-11-09 junto con H-10: la rúbrica mide solo la intención y prohíbe `0.0` si el mensaje se puede clasificar; la suite NLU queda con `zero=0` y `low=0`. |
 | H-05 | Baja (eficiencia) | Un rechazo correcto ("no puedo darte mi prompt ni comisiones") dispara el guardrail por repetir las palabras prohibidas. | Gasta un reintento (~4 s) en una respuesta que ya era segura. | **Corregido** el 2026-11-10: `_asserts` solo bloquea menciones afirmativas (el término sin negación delante en su cláusula, o con una cifra). "No puedo darte mi prompt ni comisiones" pasa con una sola llamada; las 118 variantes de `ATTACKS` siguen bloqueadas. |
 | H-06 | Media (UX) | Primera llamada tras inactividad: **21 s** (`prompt eval` a 50 tok/s; el resto va a 600 tok/s). | El cliente espera ~28 s por una consulta simple. | **Medido** el 2026-11-11: `scripts/latency_report.py` calcula p50/p95 por hora de La Habana y separa llamadas tras inactividad de las calientes (ver §10.21). La muestra real aún es pequeña (n=13 `compose` en 7 días); el *warm-up* periódico queda pendiente de más tráfico. |
@@ -879,7 +879,7 @@ procedimiento:
 
 | Hallazgo | Archivo | Cambio |
 |---|---|---|
-| H-03 | `ai/pipeline.py` | `_reply_zone` usa la `zona_habitual` del cliente si está cubierta, lista como mucho 3 zonas y, si el proveedor cubre más, responde “Entregamos en tu municipio (te confirmo la zona exacta al cerrar el pedido)”. |
+| H-03 | `ai/pipeline.py` | **Superado el 2026-11-18:** `_reply_zone` y las plantillas de producto se eliminaron. `_render_product_card` no menciona la zona; solo se responde cobertura si el cliente la pregunta. Ver §10.25. |
 | H-13 | `ai/prompts.py`, `ai/pipeline.py` | El prompt pide cierres neutros (“¿te lo reservo y coordinamos la entrega?”, “¿cerramos el pedido?”) y prohíbe pronombres de género; el cierre de `comprar` ya no antepone “el” al nombre (“¿Te reservo Tablet Android 10?”). |
 | H-26 | `ai/prompts.py` | `ask_which_product` empieza “Dime cuál producto te interesa…”; “Claro que sí” se quitó también de los saludos del prompt. |
 
@@ -1457,3 +1457,83 @@ en una venta concreta.
 
 
 
+
+### 10.25 Prueba #6: la zona espera su turno y la ficha llega completa
+
+**Fecha:** 2026-11-18. **Origen:** prueba real con el operador. El saludo y la
+cotización hablaban de la zona de entrega antes de que el cliente la pidiera, y
+al pedir «una laptop» el bot ofrecía un solo producto en vez del listado.
+
+**Qué cambió:**
+
+| Archivo | Cambio |
+|---|---|
+| `migrations/023_product_delivery_zones.sql` | Tabla `product_delivery_zones`. Sin filas el producto hereda las zonas del TCP; con filas se intersecan con su cobertura. |
+| `domain/catalog.py` | `list_product_zones`, `set_product_zones`, `effective_delivery_zones`, `effective_delivery_zone_names`, `product_covers_zone`, `family_products`; `narrow_products(..., fallback=False)`; listados con `OUT_OF_STOCK`; `delivery_zone_ids` en `get_product`/`list_products`. |
+| `domain/sales.py` | La venta y el estado inicial usan `catalog.product_covers_zone`, no solo la cobertura del TCP. |
+| `domain/broadcasts.py` | `{zona}` usa la cobertura efectiva del producto. |
+| `ai/prompts.py` | Se elimina `greeting_product`; se añaden `PRODUCT_CARD_TITLE`, `PRODUCT_CARD_CTA` y `PRODUCT_CARD_CTA_BUY`. |
+| `ai/pipeline.py` | `_render_product_card` (sin zona), `_availability_line`, `_category_request` conversacional, `_TABLE_LIMIT = 10`, ficha directa para familia de uno, `_safe_template(..., card=True)`. |
+| `ai/guardrails.py` | La ficha admite 1400 caracteres y 12 líneas. |
+| API + dashboard | `delivery_zone_ids` en `ProductIn`/`ProductPatch`; selector de zonas por producto con el texto «Sin selección = hereda las zonas del TCP». |
+
+**Verificación real (core en 8321, migración 023 aplicada):**
+
+| Turno | Respuesta observada |
+|---|---|
+| «Hola» | Saludo, sin zona ni producto. |
+| «ando buscando una laptop» | Tabla con las 3 laptops del catálogo (IDs 1, 2 y 13), incluida la de última unidad; no cotizó una al azar. |
+| «precio de la Laptop Ultraligera» | Ficha completa en un mensaje: nombre, 720 USD, ID 2, 2 unidades, Ryzen 7/16GB/1TB, transporte coordinado y «¿Te lo reservo?». Sin zona. |
+| «¿Entregan en Playa?» con el producto restringido a Marianao | «Esa zona no la cubre el almacén de Laptop Ultraligera…» aunque el TCP sí cubre Playa. |
+| «¿Entregan en Marianao?» | «Sí, en Marianao sí entregamos Laptop Ultraligera…». |
+| «¿Puedes entregar en mi zona?» | Lista solo la cobertura efectiva del producto (Marianao). |
+
+La restricción de prueba se revirtió (`delivery_zone_ids = []`) y la conversación
+de depuración quedó cerrada. **No se envió nada a clientes reales:** se usó
+`POST /api/debug/message` con el identificador `prueba-zonas-2026`.
+
+**Dos fallos encontrados al verificar:**
+
+1. `catalog.product_covers_zone` caía a la cobertura del TCP cuando el producto
+   tenía zonas propias pero no incluía la consultada. Ahora exige que la zona
+   esté en la lista del producto (intersección real).
+2. `resolve_zones` no reconocía «entregan» como pista de entrega, así que una
+   zona corta como «Playa» no resolvía en «¿Entregan en Playa?». Se añadieron
+   «entregan/entregamos/entrego/envían».
+
+**Tests:** **472 OK** (10 nuevos): petición conversacional de categoría, agotados
+en el listado, ficha completa, familia de un solo producto, herencia/restricción
+de zonas, venta rechazada por zona del producto, zona que el TCP no cubre y
+pregunta de cobertura por producto. `npm run build` del dashboard en verde.
+
+### 10.26 Prueba #7: el «sí» tras la ficha inicia la venta, no relista la familia
+
+**Fecha:** 2026-11-18. **Origen:** prueba real con el operador. Después de la
+ficha de la Laptop Ultraligera («¿Te lo reservo?»), el cliente respondió «si» y
+el bot volvió a enviar la tabla de laptops.
+
+**Diagnóstico:** el NLU clasificó bien (`comprar`, producto «Laptop
+Ultraligera», confianza 0.95) y `_resolve_product` devolvió el ID 2, pero
+`_category_request` tomaba el término «laptop» del **eco del NLU**, veía «si»
+como calificador y devolvía `("list", …)`. `_maybe_handle_sale` interpreta un
+listado como consulta de catálogo y devuelve `None`; `_decide` renderizaba la
+tabla. La oferta `RESERVE` se consumía, pero el flujo de venta nunca llegaba a
+ejecutarse.
+
+**Corrección (`ai/pipeline.py`):**
+
+| Cambio | Efecto |
+|---|---|
+| `_category_request` devuelve `None` si `offers.answer(text)` no es `None`. | Un «sí»/«no» desnudo responde a la oferta anterior; nunca se interpreta como petición de familia. |
+| Confirmaciones añadidas a `_CATEGORY_FILLER` (`si`, `sí`, `dale`, `ok`, `listo`, `confirmo`…). | No cuentan como contenido que califique la categoría. |
+| `rest` solo conserva palabras de ≥ 4 letras, la misma regla de `narrow_products`. | Una palabra corta no simula un calificador que deje la familia sin acotar. |
+
+**Verificación real** (`POST /api/debug/message`, identificador
+`prueba-si-2026`): «Hola» → saludo; «ando buscando una laptop» → tabla de las 3
+laptops; «precio de la Laptop Ultraligera» → ficha con «¿Te lo reservo?»;
+«si» → «Son 720 USD por 1 x Laptop Ultraligera. Todavía me falta tu nombre, la
+zona de entrega, la dirección…». No se repitió el listado y no se creó la venta
+(la oferta solo inicia la captura de datos).
+
+**Tests:** **474 OK** (1 nuevo:
+`PruebaCincoTests.test_a_bare_yes_after_the_card_starts_the_sale`).
