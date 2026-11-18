@@ -654,7 +654,8 @@ class PendingOfferTests(Phase1TestCase):
         self.assertIn("Sin problema", reply)
         self.assertEqual(self._scalar("SELECT COUNT(*) FROM sales"), 0)
 
-    def test_an_offer_does_not_survive_a_turn_with_a_question(self):
+    def test_an_offer_is_replaced_by_the_current_quote(self):
+        """La oferta anterior se consume; la ficha hace una oferta nueva."""
         self._escalate_with_offer()
         reply = self._reply_to(
             "¿cuánto cuesta?",
@@ -664,8 +665,13 @@ class PendingOfferTests(Phase1TestCase):
         )
         self.assertNotIn("me falta", reply)
         self.assertEqual(self._scalar("SELECT COUNT(*) FROM sales"), 0)
-        context = self._rows("SELECT context_json FROM conversations")[0]["context_json"]
-        self.assertNotIn("pending_offer", context)
+        context = json.loads(
+            self._rows("SELECT context_json FROM conversations")[0]["context_json"]
+        )
+        offer = context.get("pending_offer")
+        self.assertIsNotNone(offer)
+        self.assertEqual(offer["kind"], offers.RESERVE)
+        self.assertEqual(offer["product_id"], 1)
 
     def test_offer_answers_require_a_bare_message(self):
         self.assertEqual(offers.answer("Si"), "yes")
@@ -1048,7 +1054,7 @@ class ReplyWordingTests(Phase1TestCase):
             conversation = conversations.get_conversation(
                 conn, info["conversation_id"]
             )
-            body = pipeline._render_greeting(
+            body = pipeline._render_product_card(
                 conn, catalog.get_product(conn, 2), conversation
             )
         finally:
@@ -1079,7 +1085,8 @@ class ReplyWordingTests(Phase1TestCase):
         self.assertNotIn("Buenas", body)
         self.assertIn("ayudo", body)
 
-    def test_greeting_does_not_list_every_zone(self):
+    def test_the_product_card_never_mentions_the_delivery_zone(self):
+        """La zona no se habla hasta que toque la dirección (prueba #6)."""
         self._link_zones([f"Zona {index}" for index in range(1, 5)])
         self._turn(
             "precio del Power Bank",
@@ -1088,11 +1095,13 @@ class ReplyWordingTests(Phase1TestCase):
             ),
         )
         body = self._outbound()[-1]
-        self.assertIn("Entregamos en tu municipio", body)
-        self.assertIn("te confirmo la zona exacta", body)
+        self.assertNotIn("Entregamos en", body)
+        self.assertNotIn("municipio", body)
+        self.assertNotIn("zona exacta", body)
         self.assertNotIn("Zona 1", body)
+        self.assertIn("Power Bank", body)
 
-    def test_greeting_uses_the_usual_zone(self):
+    def test_the_product_card_does_not_assume_where_the_customer_lives(self):
         self._link_zones(["San Miguel", "Vedado"])
         self._ingest("precio del Power Bank")
         conn = db.connect()
@@ -1119,7 +1128,7 @@ class ReplyWordingTests(Phase1TestCase):
         ):
             self._run_process()
         body = self._outbound()[-1]
-        self.assertIn("Entregamos en San Miguel", body)
+        self.assertNotIn("San Miguel", body)
         self.assertNotIn("Vedado", body)
 
 
@@ -1135,7 +1144,7 @@ class TransportPolicyTests(Phase1TestCase):
             conversation = conversations.get_conversation(
                 conn, info["conversation_id"]
             )
-            return pipeline._render_greeting(
+            return pipeline._render_product_card(
                 conn, catalog.get_product(conn, 1), conversation
             )
         finally:
@@ -2739,6 +2748,124 @@ class PruebaCincoTests(Phase1TestCase):
         self.assertTrue(guardrails.check_format(table, allow_table=True))
         self.assertFalse(guardrails.check_format(table))
 
+    def test_a_conversational_category_request_lists_the_family(self):
+        """\"ando buscando una laptop\" es una familia, no un producto al azar."""
+        self._turn(
+            "ando buscando una laptop",
+            llm.Intent(intencion="consulta_precio", producto=None, confianza=0.9),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("```", body)
+        self.assertIn("Laptop Ultraligera", body)
+        # La columna de nombre se recorta para caber en el móvil.
+        self.assertIn("Laptop Gamer", body)
+        self.assertIn("1100 USD", body)
+        self.assertNotIn("📦", body)
+        self.assertNotIn(prompts.PRODUCT_CARD_CTA, body)
+        self.assertEqual(self._scalar("SELECT COUNT(*) FROM sales"), 0)
+
+    def test_the_listing_includes_products_out_of_stock(self):
+        conn = db.connect()
+        try:
+            conn.execute(
+                """INSERT INTO products
+                   (id, supplier_id, name, price, currency, commission, stock,
+                    status, description)
+                   VALUES (4, 1, 'Laptop Básica', 300.0, 'USD', 1, 0,
+                           'OUT_OF_STOCK', 'Celeron\n8GB RAM\n256GB SSD')"""
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        self._turn(
+            "¿qué laptops tienes?",
+            llm.Intent(
+                intencion="consulta_precio", producto="laptops", confianza=0.95
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("Laptop Básica", body)
+        self.assertIn("agotado", body)
+
+    def test_a_family_with_one_product_answers_with_the_card(self):
+        conn = db.connect()
+        try:
+            conn.execute("INSERT INTO categories (id, name) VALUES (9, 'Tablet')")
+            conn.execute(
+                """INSERT INTO products
+                   (id, supplier_id, category_id, name, price, currency,
+                    commission, stock, status, description)
+                   VALUES (4, 1, 9, 'Tablet Android 10', 220.0, 'USD', 1, 4,
+                           'ACTIVE', 'Android 13\n10 pulgadas\n64GB')"""
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        self._turn(
+            "¿qué tablets tienen?",
+            llm.Intent(
+                intencion="consulta_precio", producto="tablets", confianza=0.95
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("Tablet Android 10", body)
+        self.assertIn("220 USD", body)
+        self.assertIn("ID 4", body)
+        self.assertIn("4 unidades disponibles", body)
+        self.assertIn(prompts.PRODUCT_CARD_CTA, body)
+        self.assertNotIn("```", body)
+
+    def test_the_card_brings_every_detail_in_one_message(self):
+        self._turn(
+            "precio de la Laptop Ultraligera",
+            llm.Intent(
+                intencion="consulta_precio",
+                producto="Laptop Ultraligera",
+                confianza=0.95,
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("Laptop Ultraligera", body)
+        self.assertIn("720 USD", body)
+        self.assertIn("ID 2", body)
+        self.assertIn("3 unidades disponibles", body)
+        self.assertIn("Ryzen 7", body)
+        self.assertIn("16GB RAM", body)
+        self.assertIn("El transporte se coordina", body)
+        self.assertIn(prompts.PRODUCT_CARD_CTA, body)
+        # La zona no aparece hasta que toque la dirección.
+        self.assertNotIn("Entregamos en", body)
+        self.assertNotIn("Marianao", body)
+
+    def test_a_bare_yes_after_the_card_starts_the_sale(self):
+        """Prueba #7: «si» tras la ficha no puede volver a listar la familia.
+
+        El NLU repite el producto de la ficha ("Laptop Ultraligera") y la
+        palabra "si" no califica la familia; el turno debe avanzar la venta.
+        """
+        self._turn(
+            "precio de la Laptop Ultraligera",
+            llm.Intent(
+                intencion="consulta_precio",
+                producto="Laptop Ultraligera",
+                confianza=0.95,
+            ),
+        )
+        self.assertIn(prompts.PRODUCT_CARD_CTA, self._outbound()[-1])
+        self._turn(
+            "si",
+            llm.Intent(
+                intencion="comprar",
+                producto="Laptop Ultraligera",
+                confianza=0.95,
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertNotIn("```", body)
+        self.assertNotIn("Dime el ID o el nombre", body)
+        self.assertIn("me falta", body)
+        self.assertEqual(self._scalar("SELECT COUNT(*) FROM sales"), 0)
+
     def test_other_properties_is_not_an_alternatives_request(self):
         self.assertFalse(pipeline._asks_for_alternatives("¿qué otras propiedades tiene?"))
         self.assertTrue(pipeline._asks_for_open_details("¿qué otras propiedades tiene?"))
@@ -2753,6 +2880,17 @@ class PruebaCincoTests(Phase1TestCase):
             conn.close()
         self.assertIsNotNone(zone)
         self.assertEqual(zone["name"], "UCI")
+
+    def test_a_short_zone_resolves_inside_a_delivery_question(self):
+        """\"¿Entregan en Playa?\" es una pregunta de entrega, no la palabra playa."""
+        conn = db.connect()
+        try:
+            conn.execute("INSERT INTO zones (id, name, active) VALUES (5, 'Playa', 1)")
+            conn.commit()
+            zones = catalog.resolve_zones(conn, "¿Entregan en Playa?", active_only=False)
+        finally:
+            conn.close()
+        self.assertEqual([zone["name"] for zone in zones], ["Playa"])
 
     def test_multiple_zones_answer_by_coverage_instead_of_escalating(self):
         self._turn(
@@ -2789,6 +2927,49 @@ class PruebaCincoTests(Phase1TestCase):
         )
         body = self._outbound()[-1]
         self.assertIn("Marianao", body)
+        self.assertEqual(self._escalations(), 0)
+
+    def _restrict_product_to_playa(self, product_id: int) -> None:
+        """El TCP cubre Marianao y Playa; el producto solo se entrega en Playa."""
+        conn = db.connect()
+        try:
+            conn.execute(
+                "INSERT INTO zones (id, name, active) VALUES (4, 'Playa', 1)"
+            )
+            conn.execute(
+                """INSERT INTO supplier_delivery_zones (supplier_id, zone_id)
+                   VALUES (1, 4)"""
+            )
+            catalog.set_product_zones(conn, product_id, [4])
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_a_product_zone_question_respects_its_own_coverage(self):
+        """El TCP llega a Marianao, pero este producto no."""
+        self._restrict_product_to_playa(2)
+        self._turn(
+            "¿Entregan en Marianao?",
+            llm.Intent(
+                intencion="consulta_dato",
+                producto="Laptop Ultraligera",
+                confianza=0.95,
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("no la cubre", body)
+        self.assertNotIn("sí entregamos", body.lower())
+        self.assertEqual(self._escalations(), 0)
+
+    def test_a_zone_question_without_a_zone_lists_the_product_zones(self):
+        self._restrict_product_to_playa(2)
+        self._turn(
+            "ID 2, ¿puedes entregar en mi zona?",
+            llm.Intent(intencion="consulta_dato", producto=None, confianza=0.9),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("Playa", body)
+        self.assertNotIn("Marianao", body)
         self.assertEqual(self._escalations(), 0)
 
 

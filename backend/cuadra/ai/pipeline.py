@@ -302,52 +302,52 @@ def _comparison_products(conn, text: str, intent, product: dict | None) -> list[
     return list(found.values())[:4]
 
 
-def _render_greeting(
-    conn, product: dict, conversation: dict, context: dict | None = None
+def _availability_line(product: dict) -> str:
+    available = _available_stock(product)
+    if available <= 0:
+        return "sin unidades disponibles por ahora"
+    if available == 1:
+        return "1 unidad disponible"
+    return f"{available} unidades disponibles"
+
+
+def _render_product_card(
+    conn,
+    product: dict,
+    conversation: dict,
+    *,
+    buy: bool = False,
+    context: dict | None = None,
 ) -> str:
+    """One message with everything the bot knows about an identified product.
+
+    Replaces the old greeting template, which mixed the price with a delivery
+    zone the customer had not asked about yet. The zone is intentionally absent:
+    it is only discussed when the customer asks or when the address is captured.
+    """
     info = catalog.llm_product_json(conn, product)
-    zona, zona_clause = _reply_zone(conn, conversation, info)
     policy = settings.transport_policy(conn)
-    # F5 (prueba #2): usa el contexto del turno, no una copia recargada, para que
-    # `last_template_greeting_product` llegue a `_update_context` y se guarde.
+    lines = [
+        prompts.PRODUCT_CARD_TITLE.format(
+            producto=info["nombre"],
+            precio=f"{info['precio']:g}",
+            moneda=info["moneda"],
+        ),
+        f"ID {info['id']} · {_availability_line(product)}",
+    ]
+    entries = sorted(_detail_entries(product), key=_entry_priority)
+    if entries:
+        detail = " · ".join(line for line, _topics in entries[:4])
+        if len(detail) > 320:
+            detail = detail[:317].rstrip() + "…"
+        lines.append(detail)
+    lines.append(prompts.TRANSPORT_CLAUSES[policy].strip())
+    lines.append(
+        prompts.PRODUCT_CARD_CTA_BUY if buy else prompts.PRODUCT_CARD_CTA
+    )
     if context is None:
         context = conversations.get_context(conn, conversation["id"])
-    context["conversation_id"] = conversation["id"]
-    reply = prompts.template_variant(
-        "greeting_product",
-        context,
-        producto=info["nombre"],
-        precio=f"{info['precio']:g}",
-        moneda=info["moneda"],
-        transporte_clause=prompts.TRANSPORT_CLAUSES[policy],
-        zona=zona,
-        zona_clause=zona_clause,
-    )
-    return _with_greeting(reply, context)
-
-
-# H-03: a chat message should not list a dozen municipalities at once.
-_MAX_ZONES_IN_REPLY = 3
-_DEFERRED_ZONE = "tu municipio"
-_DEFERRED_ZONE_CLAUSE = " (te confirmo la zona exacta al cerrar el pedido)"
-
-
-def _reply_zone(conn, conversation, info: dict) -> tuple[str, str]:
-    """Zone phrase for a greeting: the known one, a short list or a promise."""
-    zones = [str(zone) for zone in (info.get("zonas_entrega") or []) if zone]
-    usual = ""
-    try:
-        profile = memory.customer_profile(conn, conversation["customer_id"])
-        usual = str(profile.get("zona_habitual") or "").strip()
-    except Exception:  # noqa: BLE001 - wording must never break the reply
-        log.warning("could not read the customer profile for zones", exc_info=True)
-    if usual and any(usual.casefold() == zone.casefold() for zone in zones):
-        return usual, ""
-    if 0 < len(zones) <= _MAX_ZONES_IN_REPLY:
-        return ", ".join(zones), ""
-    if not zones and info.get("zona_entrega"):
-        return str(info["zona_entrega"]), ""
-    return _DEFERRED_ZONE, _DEFERRED_ZONE_CLAUSE
+    return _with_greeting("\n".join(lines), context)
 
 
 def _render_out_of_stock(product: dict, alternatives: list[dict]) -> str:
@@ -626,35 +626,82 @@ def _category_listing(
 
 _CATEGORY_FILLER = {
     "de", "del", "la", "el", "los", "las", "un", "una", "unos", "unas", "que",
-    "tienes", "tiene", "hay", "tengo", "venden", "vendes", "me", "quiero",
-    "busco", "necesito", "algo", "por", "para", "en", "y", "o", "favor",
-    "porfa", "ver", "mostrar", "dame", "lista", "listado", "catalogo",
-    "precio", "precios", "cuanto", "cuesta", "cuestan", "vale", "valen",
-    "disponible", "disponibles", "opciones", "opcion", "muestrame", "ensename",
+    "tienes", "tiene", "tienen", "hay", "tengo", "venden", "vende", "vendes",
+    "me", "quiero", "queremos", "quisiera", "queria", "quería", "deseo",
+    "busco", "buscamos", "buscando", "buscar", "ando", "andan", "andamos",
+    "estoy", "estaba", "interesado", "interesada", "interesados", "interesadas",
+    "interesa", "necesito", "necesitamos", "necesita", "algo", "por", "para",
+    "en", "y", "o", "favor", "porfa", "ver", "mostrar", "muestrame",
+    "muéstrame", "ensename", "enséñame", "dame", "lista", "listado", "catalogo",
+    "catálogo", "precio", "precios", "cuanto", "cuánto", "cuesta", "cuestan",
+    "vale", "valen", "disponible", "disponibles", "opciones", "opcion",
+    "opción", "comprar", "compra", "cantidad", "stock", "hola", "buenas",
+    "tardes", "dias", "días", "noches", "gracias", "mi", "mis", "su", "sus",
+    "con", "sin", "sobre", "tambien", "también", "mas", "más", "otro", "otra",
+    "otros", "otras", "tipo", "modelo", "modelos", "gama", "serie", "linea",
+    "línea", "producto", "productos", "articulo", "artículo", "articulos",
+    "artículos", "unidad", "unidades", "oferta", "ofertas", "promocion",
+    "promoción", "promociones", "ocupo",
+    # Confirmaciones: aceptan la pregunta anterior, no califican una familia.
+    "si", "sí", "claro", "dale", "ok", "okay", "perfecto", "confirmo",
+    "confirmado", "listo", "seguro", "obvio",
 }
 
 
-def _bare_category(conn, text: str) -> str | None:
-    """Return the category when the message names only a category (prueba #5).
+def _category_request(conn, intent, text: str) -> tuple[str, object] | None:
+    """Resolve a message that asks about a product family.
 
-    "laptop", "tengo laptops" o "qué laptops hay" son una consulta de catálogo:
-    se lista la tabla, nunca se inicia la venta de un producto al azar. Un
-    calificador ("laptop gaming") no es una categoría desnuda.
+    Returns:
+      - ``("list", (term, products))`` when the customer asked for the family
+        and did not narrow it to a single product;
+      - ``("product", product)`` when a qualifier names exactly one product, or
+        when the family itself has only one;
+      - ``None`` when the message is not a catalog-family request.
+
+    The customer's own words are tried first: the NLU can echo a concrete
+    product in a question that is really about the whole family.
     """
+    if offers.answer(text) is not None:
+        # Un "si"/"no" suelto responde a la pregunta del turno anterior (la
+        # oferta), no pide una familia. El NLU repite el producto de la ficha y
+        # sin esto "si" volvía a listar la categoría (prueba #7).
+        return None
+    if _asks_for_alternatives(text):
+        # "¿no tienes otro tipo de laptop?" pide alternativas, no la familia.
+        return None
     folded = catalog._fold(text or "")
     words = [w for w in re.split(r"[^a-z0-9]+", folded) if len(w) > 1]
     content = [w for w in words if w not in _CATEGORY_FILLER]
     if not content:
         return None
-    for term in catalog.category_terms(text):
-        if len(term) < 4:
+    terms = [t for t in catalog.category_terms(text) if len(t) >= 4]
+    terms += [
+        t
+        for t in catalog.category_terms(intent.producto or "")
+        if len(t) >= 4 and t not in terms
+    ]
+    for term in terms:
+        if term in _CATEGORY_FILLER:
+            continue
+        products = catalog.family_products(conn, term, limit=_TABLE_LIMIT)
+        if not products:
             continue
         singular = term[:-1] if term.endswith("s") else term
-        remaining = [w for w in content if w not in (term, singular)]
-        if remaining:
-            continue
-        if catalog.category_products(conn, term, limit=1):
-            return term
+        # Solo las palabras que `narrow_products` puede aplicar cuentan como
+        # calificador: "si" o "ok" no acotan la familia.
+        rest = [
+            w for w in content if w not in (term, singular) and len(w) >= 4
+        ]
+        if rest:
+            narrowed = catalog.narrow_products(
+                products, " ".join(rest), exclude=term, fallback=False
+            )
+            if len(narrowed) == 1:
+                return "product", narrowed[0]
+            return "list", (term, products)
+        if len(products) == 1:
+            return "product", products[0]
+        return "list", (term, products)
     return None
 
 
@@ -856,9 +903,9 @@ _DELIVERY_COVERAGE = re.compile(
     re.IGNORECASE,
 )
 
-# Prueba #5: un listado de búsqueda no debe saturar el chat. 8 filas caben en
-# una pantalla de móvil y respetan el límite de 5–10 pedido.
-_TABLE_LIMIT = 8
+# Un listado de búsqueda no debe saturar el chat, pero el cliente necesita ver
+# variedad antes de elegir: hasta 10 filas (y todas si hay menos de 5).
+_TABLE_LIMIT = 10
 
 # F3 (prueba #2): el cliente pide explícitamente el catálogo de una categoría
 # ("dame un listado de laptops"), aunque el contexto tenga un producto abierto.
@@ -1224,8 +1271,8 @@ def _zone_coverage_outcome(
     covered: list[str] = []
     uncovered: list[str] = []
     for zone in zones:
-        covers = bool(zone.get("active")) and sales_domain.supplier_covers_zone(
-            conn, product["supplier_id"], int(zone["id"])
+        covers = bool(zone.get("active")) and catalog.product_covers_zone(
+            conn, product, int(zone["id"])
         )
         (covered if covers else uncovered).append(zone["name"])
     if not uncovered:
@@ -1482,9 +1529,10 @@ def _maybe_handle_sale(
         and not _is_decline(text)
     ):
         return None
-    # Prueba #5: "laptop" / "tengo laptops" es una consulta de catálogo, no una
+    # "laptop" / "ando buscando una laptop" es una consulta de catálogo, no una
     # orden de compra de un producto al azar. `_decide` la responde con la tabla.
-    if _bare_category(conn, text) is not None:
+    category = _category_request(conn, intent, text)
+    if category is not None and category[0] == "list":
         return None
     if product is None:
         if intent.producto:
@@ -1695,13 +1743,17 @@ def _safe_template(
     generator: str,
     *,
     table: bool = False,
+    card: bool = False,
 ):
     """Validate a deterministic reply; fall back instead of sending garbage.
 
     `table=True` only for the catalog listing: it is the one reply that carries
-    a ``` block (aligned table), and the format guard must allow it.
+    a ``` block (aligned table), and the format guard must allow it. `card=True`
+    is the product card, which needs a few more lines than a chat reply.
     """
-    ok, reason = guardrails.validate_reply(reply, guard_context, table=table)
+    ok, reason = guardrails.validate_reply(
+        reply, guard_context, table=table, card=card
+    )
     if ok:
         return reply, generator
     _log_guardrail(conn, conversation, reason, "template")
@@ -1815,12 +1867,28 @@ async def _decide(
         return reply, False, generator, None
 
     if intent.intencion in ("consulta_precio", "consulta_stock", "comprar"):
-        # Prueba #5: una categoría desnuda ("laptop", "tengo laptops") se lista
-        # en tabla; nunca se cotiza ni se vende un producto al azar.
-        if _bare_category(conn, text) is not None:
-            listing = _category_listing(conn, conversation, intent, context, text)
-            if listing is not None:
-                return listing
+        # Una petición de familia ("laptop", "ando buscando una laptop") se lista
+        # en tabla; nunca se cotiza ni se vende un producto al azar. Si un
+        # calificador deja un solo producto, se responde directo con su ficha.
+        category = _category_request(conn, intent, text)
+        if category is not None:
+            kind, payload = category
+            if kind == "list":
+                term, products = payload
+                return _render_catalog_table(
+                    conn,
+                    conversation,
+                    context,
+                    term,
+                    products,
+                    quantity=intent.cantidad,
+                )
+            product, product_source = payload, "text"
+            if intent.cantidad:
+                # "Quiero 3 laptops" con una sola laptop: la cantidad se
+                # conserva igual que en el listado en tabla.
+                context["sale_qty"] = int(intent.cantidad)
+                context["sale_qty_product_id"] = None
         # F13 (prueba #4): "laptops gaming" no es un nombre exacto; la categoría
         # más el calificador resuelven el producto antes de responder stock.
         if product is None and _STOCK_QUESTION.search(text or ""):
@@ -1889,12 +1957,15 @@ async def _decide(
         guard_context = _guard_context(
             product, None, context, product_source=product_source
         )
-        reply = _render_greeting(conn, product, conversation, context)
-        if intent.intencion == "comprar":
-            canonical = catalog.llm_product_json(conn, product)
-            reply += f" ¿Te reservo {canonical['nombre']} y coordinamos la entrega?"
+        reply = _render_product_card(
+            conn,
+            product,
+            conversation,
+            buy=intent.intencion == "comprar",
+            context=context,
+        )
         reply, generator = _safe_template(
-            conn, conversation, reply, guard_context, "template"
+            conn, conversation, reply, guard_context, "template", card=True
         )
         return reply, False, generator, None
 

@@ -415,15 +415,20 @@ def check_length(
 
 
 def validate_reply(
-    reply: str, context: dict, *, table: bool = False
+    reply: str, context: dict, *, table: bool = False, card: bool = False
 ) -> tuple[bool, str]:
-    """Return ``(ok, reason)``; ``reason`` is a stable code for the event log."""
+    """Return ``(ok, reason)``; ``reason`` is a stable code for the event log.
+
+    `card=True` is for the product card: one structured message with title,
+    availability and specs. It needs more lines than a chat reply but must stay
+    within a mobile screen.
+    """
     if not check_format(reply, allow_table=table):
         return False, "format"
     if not check_length(
         reply,
-        max_chars=1800 if table else MAX_REPLY_CHARS,
-        max_lines=20 if table else MAX_LINES,
+        max_chars=1800 if table else (1400 if card else MAX_REPLY_CHARS),
+        max_lines=20 if table else (12 if card else MAX_LINES),
     ):
         return False, "length"
     if not check_internal_terms(reply):

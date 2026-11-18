@@ -142,11 +142,15 @@ TRANSPORT_CLAUSES = {
     "included": " Incluye transporte.",
     "not_included": " El transporte se cobra aparte; lo coordinamos al confirmar.",
 }
+# Product card ("ficha"): the full detail of an already identified product in a
+# single message, formatted like a broadcast post. The delivery zone is
+# deliberately absent: it is only discussed when the customer asks or when the
+# address is captured, and never assumed from where the customer lives.
+PRODUCT_CARD_TITLE = "📦 {producto} — {precio} {moneda}"
+PRODUCT_CARD_CTA = "¿Te lo reservo?"
+PRODUCT_CARD_CTA_BUY = "¿Te lo reservo y coordinamos la entrega?"
+
 TEMPLATES = {
-    "greeting_product": (
-        "Sí, tenemos {producto}. Está en {precio} {moneda}."
-        "{transporte_clause} Entregamos en {zona}{zona_clause}."
-    ),
     "missing_data_escalate": (
         "Ese detalle no lo tengo a mano, pero le consulto al almacén ahora mismo "
         "y te confirmo en un rato. Mientras tanto, ¿te interesa que te reserve uno?"
@@ -386,13 +390,6 @@ TEMPLATE_VARIANTS = {
         "disponibilidad ahora mismo.",
         "¡Buenas! Cuéntame qué producto necesitas y te ayudo con precio, stock y "
         "entrega.",
-    ],
-    "greeting_product": [
-        "Sí, tenemos {producto}. Está en {precio} {moneda}."
-        "{transporte_clause} Entregamos en {zona}{zona_clause}.",
-        "Sí, lo tenemos: {producto} a {precio} {moneda}."
-        "{transporte_clause} Llegamos a {zona}{zona_clause}.",
-        "{producto}, {precio} {moneda}. {transporte_clause} Entrega en {zona}{zona_clause}.",
     ],
     "ask_which_product": [
         "Dime cuál producto te interesa y te paso precio y "
