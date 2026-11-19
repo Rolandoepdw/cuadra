@@ -136,9 +136,11 @@ def sale_mode(conn) -> str:
             "SELECT value FROM settings WHERE key = ?", (MODE_KEY,)
         ).fetchone()
     except Exception:  # noqa: BLE001 - pre-migration database
-        return "assisted"
-    mode = (row["value"] if row is not None else "") or "assisted"
-    return mode if mode in SALES_MODES else "assisted"
+        return "autonomous"
+    # D23: a fresh database must not require setting the mode by hand. The
+    # operator can still switch to `assisted`/`hybrid` from the Finance panel.
+    mode = (row["value"] if row is not None else "") or "autonomous"
+    return mode if mode in SALES_MODES else "autonomous"
 
 
 def hybrid_max_age_hours(conn) -> float:
@@ -154,8 +156,8 @@ def hybrid_max_age_hours(conn) -> float:
 def set_sale_mode(conn, value: str) -> str:
     """Persist the operating mode chosen from the dashboard (Fase 3 pending).
 
-    `sale_mode` already falls back to `assisted` on an unknown stored value, so
-    the API rejects anything outside SALES_MODES instead of storing garbage.
+    `sale_mode` already falls back to `autonomous` on an unknown stored value,
+    so the API rejects anything outside SALES_MODES instead of storing garbage.
     """
     if value not in SALES_MODES:
         raise ValueError(f"invalid sales mode: {value}")

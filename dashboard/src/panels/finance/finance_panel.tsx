@@ -43,11 +43,11 @@ const MODE_LABELS: Record<SalesMode, string> = {
 
 const MODE_DESCRIPTIONS: Record<SalesMode, string> = {
   assisted:
-    "El bot prepara la venta y tú apruebas, despachas y cobras. Es el modo seguro por defecto.",
+    "El bot prepara la venta y tú apruebas, despachas y cobras. Úsalo si quieres revisar cada venta.",
   hybrid:
     "El bot despacha solo si el producto es reciente y el TCP está disponible; si no, pasa a aprobación.",
   autonomous:
-    "El bot despacha sin aprobación y tú cobras al final. Úsalo solo con el catálogo validado.",
+    "El bot despacha sin aprobación y tú cobras al final. Es el modo por defecto; úsalo con el catálogo validado.",
 };
 
 const FOLLOWUP_MODE_LABELS: Record<FollowupMode, string> = {
@@ -141,7 +141,7 @@ export function FinancePanel() {
     queryKey: ["sales-settings"],
     queryFn: getSalesSettings,
   });
-  const [mode, setMode] = useState<SalesMode>("assisted");
+  const [mode, setMode] = useState<SalesMode>("autonomous");
   useEffect(() => {
     if (salesSettings.data) setMode(salesSettings.data.mode);
   }, [salesSettings.data]);
@@ -164,7 +164,7 @@ export function FinancePanel() {
     queryKey: ["followup-settings"],
     queryFn: getFollowupSettings,
   });
-  const [followupMode, setFollowupMode] = useState<FollowupMode>("off");
+  const [followupMode, setFollowupMode] = useState<FollowupMode>("shadow");
   useEffect(() => {
     if (followupSettings.data) setFollowupMode(followupSettings.data.mode);
   }, [followupSettings.data]);

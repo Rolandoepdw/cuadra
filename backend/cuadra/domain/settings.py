@@ -45,12 +45,12 @@ DELIVERY_TRANSPORT_POLICY = "delivery.transport_policy"
 TRANSPORT_POLICIES = ("coordinated", "included", "not_included")
 TRANSPORT_DEFAULT = "coordinated"
 
-# `sale_followup` v2 (doc 13 §10.24). Off by default: messaging a real customer
-# is opt-in. `shadow` records what would be sent without sending it, so the
-# operator can watch real sales before turning automation on.
+# `sale_followup` v2 (doc 13 §10.24). `shadow` by default: the operator sees
+# the candidates in the Finance panel without messaging a real customer. `on`
+# sends the reminder; `off` hides nothing but records nothing either.
 SALES_FOLLOWUP_MODE = "sales.followup.mode"
 SALES_FOLLOWUP_MODES = ("off", "shadow", "on")
-SALES_FOLLOWUP_DEFAULT = "off"
+SALES_FOLLOWUP_DEFAULT = "shadow"
 
 # Privacy policy for the Clients panel: raw message bodies older than this are
 # purged by the scheduler. The profile, sales and commissions survive.

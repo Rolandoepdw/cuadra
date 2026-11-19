@@ -108,6 +108,15 @@ class Phase3TestCase(unittest.TestCase):
         finally:
             conn.close()
         self.conn = db.connect()
+        # D23: the product default is autonomous/shadow. Most Phase 3 tests
+        # describe the assisted flow, so pin it explicitly instead of relying
+        # on the old default. The values are captured first so a test can
+        # assert what a freshly migrated database actually contains.
+        self.fresh_sales_mode = sales.sale_mode(self.conn)
+        self.fresh_followup_mode = settings.sales_followup_mode(self.conn)
+        self.fresh_summary_mode = sales.summary(self.conn)["mode"]
+        sales.set_sale_mode(self.conn, "assisted")
+        settings.set_sales_followup_mode(self.conn, "off")
 
     def tearDown(self):
         self.conn.close()
@@ -389,9 +398,26 @@ class StateMachineTests(Phase3TestCase):
 class SalesModeSettingsTests(Phase3TestCase):
     """Fase 3 pending: the dashboard can change `sales.mode` safely."""
 
-    def test_default_mode_is_assisted(self):
-        self.assertEqual(sales.sale_mode(self.conn), "assisted")
-        self.assertEqual(sales.summary(self.conn)["mode"], "assisted")
+    def test_fresh_database_defaults_to_autonomous_sales(self):
+        self.assertEqual(self.fresh_sales_mode, "autonomous")
+        self.assertEqual(self.fresh_summary_mode, "autonomous")
+
+    def test_missing_sales_mode_falls_back_to_autonomous(self):
+        self.conn.execute(
+            "DELETE FROM settings WHERE key = ?", (sales.MODE_KEY,)
+        )
+        self.conn.commit()
+        self.assertEqual(sales.sale_mode(self.conn), "autonomous")
+
+    def test_fresh_database_defaults_to_shadow_followup(self):
+        self.assertEqual(self.fresh_followup_mode, "shadow")
+
+    def test_missing_followup_mode_falls_back_to_shadow(self):
+        self.conn.execute(
+            "DELETE FROM settings WHERE key = ?", (settings.SALES_FOLLOWUP_MODE,)
+        )
+        self.conn.commit()
+        self.assertEqual(settings.sales_followup_mode(self.conn), "shadow")
 
     def test_set_mode_persists_and_reaches_the_summary(self):
         self.assertEqual(sales.set_sale_mode(self.conn, "hybrid"), "hybrid")
@@ -404,9 +430,9 @@ class SalesModeSettingsTests(Phase3TestCase):
             sales.set_sale_mode(self.conn, "free")
         self.assertEqual(sales.sale_mode(self.conn), "assisted")
 
-    def test_unknown_stored_mode_falls_back_to_assisted(self):
+    def test_unknown_stored_mode_falls_back_to_autonomous(self):
         settings.set(self.conn, sales.MODE_KEY, "manual")
-        self.assertEqual(sales.sale_mode(self.conn), "assisted")
+        self.assertEqual(sales.sale_mode(self.conn), "autonomous")
 
 
 class TcpAckTests(Phase3TestCase):
@@ -1485,7 +1511,13 @@ class FollowupMessageTests(Phase3TestCase):
         muted = routes_finance.mute_followup(sale["id"])
         self.assertIsNotNone(muted["followup_muted_at"])
 
-        self.assertEqual(routes_settings.get_followup_settings(), {"mode": "off"})
+        self.conn.execute(
+            "DELETE FROM settings WHERE key = ?", (settings.SALES_FOLLOWUP_MODE,)
+        )
+        self.conn.commit()
+        self.assertEqual(
+            routes_settings.get_followup_settings(), {"mode": "shadow"}
+        )
         self.assertEqual(
             routes_settings.set_followup_settings(FollowupSettingsIn(mode="shadow")),
             {"mode": "shadow"},

@@ -257,7 +257,8 @@ Reglas:
 - `sales.source` solo `bot` u `operator`; `supplier_id` es obligatorio.
 - `order_code = V-{id:06d}` después del insert.
 - Reservar `stock_reserved`; no descontar `stock` hasta `DELIVERED`.
-- Modo `assisted` (default): `PENDING_APPROVAL`; modo `autonomous`: `PENDING_DISPATCH`.
+- Modo `autonomous` (default desde D23): `PENDING_DISPATCH`; modo `assisted`:
+  `PENDING_APPROVAL`. `hybrid` decide según frescura, stock y zona.
 - `DELIVERED` = el TCP entregó y cobró; `SETTLED` = Cuadra cobró su comisión.
 - No se suman USD y CUP en una métrica.
 - Si la moneda de comisión no coincide con la de venta, `supplier_payout = NULL`.

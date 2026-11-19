@@ -2,10 +2,10 @@
 tipo: indice
 proyecto: Cuadra
 modulo: agent_feature_doc
-estado: DISEÑO APROBADO — fases 0–5 implementadas
-revisado: 2026-11-03
+estado: DISEÑO APROBADO — fases 0–5 implementadas; L3 en revisión
+revisado: 2026-11-19
 aprobado: 2026-11-03
-tags: [indice, agente-ia, diseno-aprobado, revision]
+tags: [indice, agente-ia, diseno-aprobado, revision, L3]
 ---
 
 # Documentación del agente autónomo (diseño aprobado)
@@ -61,6 +61,8 @@ Fase 0 (medición). Las fases 0–5 ya están implementadas y commiteadas.
 | 12 | `11_RUNBOOK_OPERACION.md` | Cómo aprobar, cancelar, revertir, reindexar y restaurar en operación real. |
 | 13 | `12_CIERRE_FASE_5.md` | Endurecimiento, replay del golden set, recall@3 y métricas contra los criterios de aceptación. |
 | 14 | `13_BITACORA_OPERACION_REAL.md` | Pruebas end-to-end en vivo con Telegram y la BD de prueba: plan, resultados y hallazgos. |
+| 15 | `14_VISION_Y_CAPACIDADES_DEL_AGENTE.md` | Visión L3: contrato de capacidades, orquestador, TurnFrame, grounding, modos y decisiones D11–D22. |
+| 16 | `15_PLAN_FASE_L3.md` | Plan ejecutable de L3: cortes L3.0–L3.7, migración multi-categoría, ranking, pruebas y criterios de encendido. |
 | — | `../10_contexto_agente_ia.md` | Brief original que alimentó la propuesta. |
 
 ---
@@ -84,7 +86,7 @@ Están detalladas en `05`, sección 4. Resumen:
 
 | ID | Tema | Decisión aprobada |
 |---|---|---|
-| D1 | Modo de autonomía inicial | `assisted` ahora; `autonomous` al cumplir métricas |
+| D1 | Modo de autonomía inicial | `assisted` al inicio; **desde D23 (2026-11-19) el default es `autonomous`** |
 | D2 | Mutación automática de precio | Auto con límites (±50 %, confianza ≥ 0.85) |
 | D3 | Zonas | CRUD `zones`; cualquier zona activa es válida |
 | D4 | Moneda de comisión | Cruzada; `supplier_payout` nulo y “requiere conversión” |
@@ -94,6 +96,7 @@ Están detalladas en `05`, sección 4. Resumen:
 | D8 | Modelo | Bake-off en Fase 0 con los modelos del dueño |
 | D9 | Prompts | Mantener `prompts.py` |
 | D10 | Tests | Mantener `unittest` |
+| D23 | Defaults de operación | `sales.mode=autonomous`, `sales.followup.mode=shadow`; sin setup manual tras borrar la BD |
 
 ---
 
@@ -155,3 +158,33 @@ Con la Fase 5 se completa el plan de **6 fases (0–5)**. Lo que queda son tarea
 operación real, no fases nuevas: correlación con mensajes TCP reales, sets de slots y
 de ventas end-to-end, y medición de recall@3/p95 con muestra suficiente. Están
 detalladas con su criterio de cierre en la bitácora **§9.2** (`13`).
+
+---
+
+## 7. Fase L3 — capa de lectura del agente
+
+La prueba #8 («accesorios para laptop» incluyó la laptop) no fue un bug de catálogo:
+fue el patrón de **una afirmación factual sin una lectura del turno que la
+respaldara**. El mismo patrón puede repetirse en stock, zonas, fechas, estado de
+pedido, escalaciones y memoria.
+
+L3 lo corrige de forma estructural, no con otra cláusula:
+
+- **Orquestador explícito** (`ai/orchestrator.py`): secuencia el turno y garantiza
+  los invariantes.
+- **TurnFrame** (`ai/turn/frame.py`): conserva producto en juego, último listado,
+  oferta pendiente, venta activa, hechos y perfil. Resuelve «esos», «el segundo» y
+  «el de antes».
+- **Contrato de capacidad** (`ai/tools/base.py`): `ToolSpec`, `ToolResult`,
+  errores estables, modos `off`/`shadow`/`on`, cache por turno.
+- **Tools de lectura** por dominio: catálogo, ventas, zonas, memoria, escalaciones
+  y conocimiento. Las escrituras siguen solo en la máquina de estados.
+- **Grounding** (`ai/grounding.py`): toda afirmación de precio, stock, zona, fecha,
+  estado de pedido, existencia o specs necesita evidencia del turno.
+- **Calidad antes que latencia:** sin tope de iteraciones ni de tools; solo un
+  watchdog de cuelgue (`AGENT_TURN_WATCHDOG_S`, default 180 s).
+
+El plan está en `15_PLAN_FASE_L3.md` y la visión/decisiones en
+`14_VISION_Y_CAPACIDADES_DEL_AGENTE.md`. **L3.0 no cambia el comportamiento del
+bot**: extrae el orquestador y fija el contrato. Las capacidades nuevas empiezan en
+L3.1 (catálogo) y siguen ventas/zonas, memoria, escalaciones y conocimiento.

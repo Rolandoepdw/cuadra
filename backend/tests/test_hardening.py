@@ -129,6 +129,9 @@ class HardeningTestCase(unittest.TestCase):
         finally:
             conn.close()
         self.conn = db.connect()
+        # D23: a fresh database defaults to autonomous sales. These tests
+        # describe the assisted flow (approve -> dispatch), so pin it.
+        sales.set_sale_mode(self.conn, "assisted")
 
     def tearDown(self):
         self.conn.close()

@@ -30,9 +30,9 @@ Cuadra adopta **autonomía configurable**:
 
 | Modo | Qué hace el bot | Qué hace el operador | Cuándo usarlo |
 |---|---|---|---|
-| `assisted` (default) | Captura datos, crea la venta en `PENDING_APPROVAL`, prepara el despacho. | Aprueba con un clic (dashboard/Telegram); el bot despacha. | Piloto y primeras semanas. |
+| `assisted` | Captura datos, crea la venta en `PENDING_APPROVAL`, prepara el despacho. | Aprueba con un clic (dashboard/Telegram); el bot despacha. | Piloto y revisión venta por venta. |
 | `hybrid` | Si el producto tiene stock, precio y zona confirmados, crea y despacha solo. Si falta algo, pasa a asistido. | Solo interviene en excepciones. | Operación estable con datos confiables. |
-| `autonomous` | Crea la venta en `PENDING_DISPATCH` y despacha al TCP sin aprobación. | Audita, cobra comisiones y revierte errores. | Cuando las métricas lo justifiquen. |
+| `autonomous` (default desde D23) | Crea la venta en `PENDING_DISPATCH` y despacha al TCP sin aprobación. | Audita, cobra comisiones y revierte errores. | Operación normal; el catálogo debe estar validado. |
 
 La autonomía se controla por settings, no por código duplicado:
 
@@ -45,9 +45,11 @@ catalog.price_max_delta_pct = 50      # ±50% para auto-aplicar
 catalog.autoapply.min_confidence = 0.85
 ```
 
-> **Decisión aprobada (D1/D2):** el sistema arranca en `assisted` y pasa a
-> `autonomous` cuando se cumplan las métricas de aceptación; el precio se auto-aplica
-> dentro de los límites anteriores y, si no, va a revisión.
+> **Decisión aprobada (D1/D2):** el sistema arrancó en `assisted`; desde **D23
+> (2026-11-19)** el default es `autonomous` para que borrar la BD no obligue a
+> configurar el panel de Finanzas. `assisted` e `hybrid` siguen disponibles y se
+> cambian con el selector. El precio se auto-aplica dentro de los límites
+> anteriores y, si no, va a revisión.
 
 **Regla de oro:** toda mutación autónoma deja un `catalog_mutation_log` con estado
 anterior y nuevo. Si el bot interpretó mal al TCP, el operador revierte con un clic.

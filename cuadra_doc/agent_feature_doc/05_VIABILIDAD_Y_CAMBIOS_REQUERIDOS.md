@@ -147,7 +147,7 @@ decisión pendiente para empezar la Fase 0.
 
 | ID | Decisión | Efecto en el diseño |
 |---|---|---|
-| D1 | **Asistido ahora; autónomo después de medir.** | `sales.mode='assisted'` por defecto. Al cumplir las métricas se cambia el setting a `autonomous`, sin reescribir código. |
+| D1 | **Asistido ahora; autónomo después de medir.** | `sales.mode='assisted'` por defecto al aprobar D1. **Actualizado por D23 (2026-11-19):** el default pasa a `autonomous`; `assisted` sigue disponible en el panel. |
 | D2 | **Auto con límites.** | `catalog.autoapply.price=1`; solo aplica si la correlación es inequívoca, la confianza ≥ 0.85 y el cambio está dentro de ±50 %. Si no, revisión. |
 | D3 | **Catálogo CRUD de zonas.** | `zones` activas es la fuente de verdad. Cualquier zona creada por el operador es válida; no se asume La Habana ni una lista fija. Las zonas se desactivan, no se borran. |
 | D4 | **Comisión cruzada.** | `commission_currency` se guarda aparte; si no coincide con la moneda de venta, `supplier_payout=NULL` y el dashboard muestra “requiere conversión”. |
@@ -160,10 +160,11 @@ decisión pendiente para empezar la Fase 0.
 
 ### D1 — Autonomía
 
-El bot arranca en `assisted`: crea la venta en `PENDING_APPROVAL`, el operador aprueba
-con un clic y el bot despacha. Cuando el golden set y la operación real cumplan las
-métricas de la sección 10, se cambia `sales.mode='autonomous'` y el bot despacha solo.
-El cambio es de configuración, no de código.
+El bot arrancó en `assisted`: crea la venta en `PENDING_APPROVAL`, el operador aprueba
+con un clic y el bot despacha. **Desde D23 (2026-11-19)** el default es
+`sales.mode='autonomous'`: crea en `PENDING_DISPATCH` y despacha solo. `assisted` e
+`hybrid` siguen disponibles en el panel de Finanzas. El cambio es de configuración,
+no de código.
 
 ### D2 — Precio
 

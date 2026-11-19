@@ -142,8 +142,11 @@ LEFT JOIN products p ON p.id = s.product_id
 WHERE s.status != 'CANCELLED';
 
 -- ------------------------------------------------- autonomy configuration
+-- D23 (2026-11-19): a fresh database defaults to autonomous sales so the
+-- operator does not have to configure the Finance panel after a reset. The
+-- panel can still switch back to assisted/hybrid.
 INSERT OR IGNORE INTO settings (key, value) VALUES
-    ('sales.mode', 'assisted'),
+    ('sales.mode', 'autonomous'),
     ('sales.hybrid_max_age_hours', '24'),
     ('catalog.autoapply.price', '1'),
     ('catalog.autoapply.stock', '1'),

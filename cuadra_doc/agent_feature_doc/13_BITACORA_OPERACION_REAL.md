@@ -1425,13 +1425,17 @@ esperando algo que nosotros le debemos.
 
 1. **Revalidación:** el handler relee la venta y no hace nada si cambió de estado, si está silenciada o si la conversación está `CLOSED`. Un job aparcado para la mañana vuelve a comprobar el modo antes de enviar.
 2. **Idempotencia:** `external_id = sale-followup-{id}`, `sales.followup_sent_at` y evento `sale_followup_sent`. Un reintento o un reinicio no duplica el mensaje ni lo vuelve a ofrecer al barrido.
-3. **Control del operador:** `sales.followup.mode` = `off` (por defecto) / `shadow` (registra `sale_followup_due` sin enviar) / `on`; botón **Silenciar** por venta (`followup_muted_at`) y botón **Recordar** para enviarlo a mano aunque el modo esté apagado (sigue siendo uno por venta).
+3. **Control del operador:** `sales.followup.mode` = `off` / `shadow` (registra `sale_followup_due` sin enviar) / `on`; botón **Silenciar** por venta (`followup_muted_at`) y botón **Recordar** para enviarlo a mano aunque el modo esté apagado (sigue siendo uno por venta).
+
+> **Actualización 2026-11-19 (D23):** el default pasó de `off` a `shadow` para que,
+> al borrar la BD, el seguimiento se vea en el panel sin escribir al cliente. `off`
+> y `on` siguen disponibles en Finanzas.
 
 | Archivo | Cambio |
 |---|---|
 | `migrations/017_sale_followup.sql` | `sales.followup_sent_at`, `sales.followup_muted_at` (aditivo; las filas existentes quedan NULL). |
 | `domain/sales.py` | `FOLLOWUP_MESSAGE_STATUSES`, `_LAST_MOVEMENT_SQL`, `followup_candidates()`, `mark_followup_sent()`, `mute_followup()`; `followups()` ahora mide el movimiento real (estado o mensaje entrante). |
-| `domain/settings.py` | `sales.followup.mode` (`off`/`shadow`/`on`), default `off`; un valor corrupto cae en `off`. |
+| `domain/settings.py` | `sales.followup.mode` (`off`/`shadow`/`on`), default histórico `off`; un valor corrupto cae en `off`. **D23:** el default vigente es `shadow`. |
 | `ai/prompts.py` | `sale_followup_preparing`, `sale_followup_optional`. |
 | `ai/handlers.py` | Job `sale_followup`: revalida, crea el `OUTBOUND` y encola `send_message`. |
 | `scheduler/maintenance.py` | `queue_sale_followups()` + `_next_send_window()` (ventana 09–20 y guardas de duplicado). |

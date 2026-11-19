@@ -39,7 +39,8 @@ tags: [fase-3, ventas, stock-reservado, ledger, comisiones, tcp, finanzas]
 
 Settings nuevos (en `settings`, no en `.env`):
 
-- `sales.mode` = `assisted` (default), `hybrid` o `autonomous`.
+- `sales.mode` = `assisted` (default histórico), `hybrid` o `autonomous`.
+  **D23 (2026-11-19):** el default vigente es `autonomous`.
 - `sales.hybrid_max_age_hours` = 24.
 - `catalog.autoapply.*`, `catalog.price_max_delta_pct`, `catalog.autoapply.min_confidence`
   quedan preparados para la Fase 4; esta fase no los lee.
@@ -203,7 +204,8 @@ settings existen y `PRAGMA quick_check` devuelve `ok`. **La base real no se toc�
 - **`sale_followup` solo en el dashboard (histórico)**: la card **Seguimiento**
   lista las ventas abiertas sin cambios en 12/24/48/72 h (bitácora §10.19). La v2
   con recordatorio al cliente se implementó el 2026-11-12 (bitácora §10.24), con
-  modo `off`/`shadow`/`on`; por defecto no se escribe.
+  modo `off`/`shadow`/`on`; por defecto no se escribe. **D23 (2026-11-19):** el
+  default vigente es `shadow` (se ve en el panel, no escribe al cliente).
 - **Cancelar después de `DELIVERED`**: no se permite por API; requiere decisión
   manual del operador, tal como pide §5. La venta entregada ya movió stock físico.
 - **Conversión de moneda**: no hay tabla de tasas. Las comisiones cruzadas quedan
