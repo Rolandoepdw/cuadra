@@ -869,7 +869,7 @@ class ProductResolutionTests(Phase1TestCase):
         try:
             moto = catalog.get_product(conn, 2)
             with patch(
-                "cuadra.ai.pipeline._retrieve_candidates", return_value=[moto]
+                "cuadra.ai.turn.references._retrieve_candidates", return_value=[moto]
             ):
                 product, source = pipeline._resolve_product(
                     conn,

@@ -171,6 +171,24 @@ CONVERSATION_IDLE_HOURS = float(
 TURN_DEBOUNCE_S = float(os.environ.get("CUADRA_TURN_DEBOUNCE_S", "0.8"))
 TURN_MAX_WAIT_S = float(os.environ.get("CUADRA_TURN_MAX_WAIT_S", "2.5"))
 
+# Agent turn lifecycle (doc 14 §6, doc 15 L3.0). The watchdog detects a hung
+# turn; it is NOT a latency budget. 0 disables it.
+AGENT_TURN_WATCHDOG_S = float(
+    os.environ.get("CUADRA_AGENT_TURN_WATCHDOG_S", "180")
+)
+# Tool contract: `off` keeps the deterministic route in charge.
+AGENT_TOOLS_MODE = os.environ.get("CUADRA_AGENT_TOOLS_MODE", "off").strip().lower()
+AGENT_TOOLS_CACHE_TTL_S = float(
+    os.environ.get("CUADRA_AGENT_TOOLS_CACHE_TTL_S", "0")
+)
+AGENT_GROUNDING_MODE = os.environ.get(
+    "CUADRA_AGENT_GROUNDING_MODE", "shadow"
+).strip().lower()
+# A local read that takes longer than this is a bug, not a slow customer.
+AGENT_TOOL_TIMEOUT_S = float(
+    os.environ.get("CUADRA_AGENT_TOOL_TIMEOUT_S", "5")
+)
+
 # Whisper (speech-to-text). Empty language = auto-detect ("es" in production).
 WHISPER_MODEL = os.environ.get("CUADRA_WHISPER_MODEL", "small")
 WHISPER_THREADS = int(os.environ.get("CUADRA_WHISPER_THREADS", "4"))

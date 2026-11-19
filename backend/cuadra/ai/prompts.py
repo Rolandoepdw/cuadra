@@ -151,6 +151,10 @@ PRODUCT_CARD_CTA = "¿Te lo reservo?"
 PRODUCT_CARD_CTA_BUY = "¿Te lo reservo y coordinamos la entrega?"
 
 TEMPLATES = {
+    # L3.0: a hung turn gets one safe answer and is not retried.
+    "turn_timeout": (
+        "Ahora mismo no puedo confirmarte ese dato. Dame un momento y te respondo."
+    ),
     "missing_data_escalate": (
         "Ese detalle no lo tengo a mano, pero le consulto al almacén ahora mismo "
         "y te confirmo en un rato. Mientras tanto, ¿te interesa que te reserve uno?"

@@ -2,7 +2,7 @@
 tipo: plan_implementacion
 proyecto: Cuadra
 modulo: agente_ia
-estado: PROPUESTA — pendiente de aprobación del dueño
+estado: L3.0 implementado — L3.1 pendiente de aprobación del dueño
 revisado: 2026-11-19
 tags: [plan, L3, orquestador, tools, catalogo, grounding, evaluacion]
 ---
@@ -207,16 +207,17 @@ y dejar el marco del turno listo para el catálogo. **Sin cambiar respuestas.**
 
 ### 4.3 Criterios de aceptación
 
-- [ ] La suite completa sigue verde (478+ tests).
-- [ ] `check_all.ps1 -SkipBuild` verde.
-- [ ] Replay de 20 conversaciones reales: mismas respuestas (o diferencias
-      explicadas y aprobadas).
-- [ ] `pipeline.handle_turn` funciona igual; el dashboard sigue viendo la traza
+- [x] La suite completa sigue verde (527 tests).
+- [x] `check_all.ps1 -SkipBuild` verde.
+- [x] Replay de 20 conversaciones: respuestas y contexto idénticos contra `main`
+      (determinista: BD temporal, NLU y compositor scripteados, sin Telegram). Un
+      replay con tráfico real sigue siendo opcional antes de encender L3.1.
+- [x] `pipeline.handle_turn` funciona igual; el dashboard sigue viendo la traza
       raíz.
-- [ ] Un test simula un cuelgue y verifica: watchdog, plantilla segura, una sola
+- [x] Un test simula un cuelgue y verifica: watchdog, plantilla segura, una sola
       respuesta, sin reintento.
-- [ ] Los tests que importan funciones privadas de `pipeline` siguen pasando.
-- [ ] `agent.tools.mode=off` no ejecuta ninguna tool propuesta por el modelo.
+- [x] Los tests que importan funciones privadas de `pipeline` siguen pasando.
+- [x] `agent.tools.mode=off` no ejecuta ninguna tool propuesta por el modelo.
 
 ### 4.4 Riesgos y mitigación
 
@@ -227,6 +228,74 @@ y dejar el marco del turno listo para el catálogo. **Sin cambiar respuestas.**
 | Tests acoplados a privates | Alias en `pipeline.py`; migración gradual. |
 | Watchdog que corta turnos válidos | Default alto (180 s) y configurable; se calibra con datos reales. |
 | Duplicar respuesta al cancelar | Marcar el turno como terminado y no reintentar. |
+
+### 4.5 Estado de implementación (2026-11-19)
+
+Implementado en la rama `feat/l3-0-orchestrator`, sin commit ni push todavía.
+
+**Archivos nuevos:**
+
+| Archivo | Contenido |
+|---|---|
+| `ai/orchestrator.py` | `handle_turn`, `run_turn`, `_run_with_watchdog`, `_timeout_result`; trazas hijas `orchestrator.assemble`, `orchestrator.interpret`, `orchestrator.resolve`, `orchestrator.plan`, `orchestrator.decide`, `orchestrator.compose`, `orchestrator.persist`; registro de las tools de catálogo al importar. |
+| `ai/turn/__init__.py` | Paquete del ciclo de turno. |
+| `ai/turn/constants.py` | Regexes y constantes compartidas, movidas de `pipeline.py`. |
+| `ai/turn/frame.py` | `TurnFrame`, `Listing`, `build_frame`, `commit`, `_update_context`. |
+| `ai/turn/references.py` | `Reference`, `resolve_reference` (ordinales, demostrativos, foco, ambigüedad) + `_resolve_product`. |
+| `ai/turn/policy.py` | `TurnPlan`, `plan_turn` trivial y la decisión determinista movida. |
+| `ai/turn/composer.py` | `_build_base_messages`, `_fast_template`, `_compose_open`. |
+| `ai/turn/render.py` | Fichas, tablas y helpers de specs. |
+| `ai/turn/guards.py` | `_guard_context`, `_guard_product`, `_safe_template`, `_log_guardrail`. |
+| `ai/turn/sales_flow.py` | Pasos de venta, ofertas, zonas y post-venta. |
+| `ai/tools/__init__.py`, `ai/tools/base.py` | `ToolSpec`, `ToolResult`, `ToolError`, `ToolCall`, `Registry` cerrado, cache por turno, `allowed(mode)`. |
+| `ai/tools/catalog.py` | `catalog.search`, `catalog.get`, `catalog.list_category` como prueba del contrato. |
+| `ai/grounding.py` | `Claim`, `Violation`, `GroundingReport`, `validate_claims`; precio/specs delegan en `guardrails`; negaciones solo con evidencia del turno. |
+
+`ai/pipeline.py` queda como fachada: `handle_incoming`, `maybe_summarize` y
+alias de compatibilidad (`handle_turn`, `_run_turn` y todas las funciones
+privadas que usan los tests).
+
+**Cambios de soporte:**
+
+- `config.py`: `AGENT_TURN_WATCHDOG_S=180`, `AGENT_TOOLS_MODE=off`,
+  `AGENT_TOOLS_CACHE_TTL_S=0`, `AGENT_GROUNDING_MODE=shadow`,
+  `AGENT_TOOL_TIMEOUT_S=5`.
+- `prompts.py`: plantilla `turn_timeout` («Ahora mismo no puedo confirmarte ese
+  dato. Dame un momento y te respondo.»), sin placeholders.
+- Watchdog: al dispararse registra el evento `turn_timeout`, devuelve la
+  plantilla segura, marca `outcome="timeout"` y no reintenta. `0` lo desactiva.
+- Grounding en `shadow`: registra `grounding_violation` en `events` y no cambia
+  la respuesta. El chequeo de negaciones solo corre cuando el frame trae
+  evidencia de tools (en L3.0 todavía no hay lecturas en el flujo).
+- Tests nuevos: `test_orchestrator.py`, `test_frame.py`, `test_references.py`,
+  `test_tools_contract.py`, `test_grounding.py` (46 tests).
+- `test_turns.py`: el patch de `_retrieve_candidates` apunta ahora a
+  `cuadra.ai.turn.references`, su módulo real.
+- `test_turn_outcomes.py`: el fallo simulado se parchea en
+  `cuadra.ai.orchestrator.run_turn`.
+
+**Desviaciones conscientes respecto de §4.2:**
+
+- No se añadió `apply_plan(frame, plan)`: en L3.0 el plan es trivial y la
+  decisión sigue en `_decide`, que el orquestador ya traza como
+  `orchestrator.decide`. `apply_plan` nace en L3.1, cuando el plan trae lecturas.
+- Tampoco se añadió `compose_reply(frame, outcome, evidence)`: la composición
+  sigue dentro de la ruta determinista. La evidencia entra en L3.1, junto con
+  las tools de catálogo.
+- La fase `orchestrator.read` no se emite todavía: no hay lecturas que trazar.
+  `compose` y `persist` sí se emiten, con la duración ya medida por el turno.
+- Los eventos usan la fuente `system` (no `agent`, que no está en `SOURCES`).
+
+**Pendiente para cerrar L3.0:**
+
+- Revisión del dueño y decisión de commit/merge.
+- Replay opcional con tráfico real antes de encender L3.1.
+
+**Replay determinista (2026-11-19):** `scripts/replay_turns.py` ejecuta 20
+conversaciones (30 turnos) con BD temporal, NLU y compositor scripteados, y sin
+enviar nada por Telegram. El reporte de la rama y el de `main` (`49d8bbe`) son
+idénticos salvo `last_greeting_at`, que es reloj de pared: mismas respuestas y
+mismo `context_json` en los 20 casos.
 
 ---
 
@@ -777,18 +846,16 @@ Un corte está terminado cuando:
 
 ## 18. Próximo paso inmediato
 
-1. Revisar y aprobar `14` y `15`.
-2. Crear la rama `feat/l3-0-orchestrator`.
-3. Implementar L3.0 en el orden:
-   - `tools/base.py` (contrato + registry + cache);
-   - `turn/frame.py` (TurnFrame + `last_listing` + `pending_offer`);
-   - `turn/references.py` (resolución determinista);
-   - `orchestrator.py` (mover `handle_turn`/`_run_turn` con alias);
-   - `turn/policy.py`, `turn/composer.py`, `turn/render.py`,
-     `turn/sales_flow.py` (movimiento mecánico);
-   - `grounding.py` (esqueleto en `shadow`);
-   - tests y replay.
-4. No empezar L3.1 hasta que L3.0 esté verde y el replay no tenga regresiones.
+1. Replay opcional con tráfico real antes de encender L3.1.
+2. Revisión del dueño: commit de L3.0 y decisión de merge.
+3. Empezar L3.1 solo cuando L3.0 esté verde y el replay no tenga regresiones:
+   - migración `024_product_categories.sql` y backfill;
+   - ranking determinista y `empty_reason`;
+   - `catalog.search`, `catalog.get`, `catalog.list_category`,
+     `catalog.check_stock`;
+   - `last_listing` y `resolve_reference` encendidos en la política;
+   - grounding de negaciones en `shadow`.
+4. No hacer push ni merge sin pedido explícito.
 
 ---
 

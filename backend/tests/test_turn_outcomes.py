@@ -173,7 +173,7 @@ class OutcomeWriteTests(TurnOutcomeTestCase):
                 conn, info["conversation_id"]
             )
             with patch(
-                "cuadra.ai.pipeline._run_turn",
+                "cuadra.ai.orchestrator.run_turn",
                 new=AsyncMock(side_effect=RuntimeError("boom")),
             ):
                 with self.assertRaises(RuntimeError):

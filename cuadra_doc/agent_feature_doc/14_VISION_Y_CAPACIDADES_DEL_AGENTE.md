@@ -259,6 +259,12 @@ No se comparte entre turnos salvo `cache_ttl_s > 0` explícito.
 - Una inyección en un mensaje del cliente no puede crear una tool ni saltarse la
   política.
 
+**Estado (2026-11-19):** contrato implementado en `ai/tools/base.py`
+(`ToolSpec`, `ToolResult`, `ToolError`, `ToolCall`, `Registry` cerrado, cache por
+turno, `allowed(mode)`), con `catalog.search`, `catalog.get` y
+`catalog.list_category` registradas como prueba. `AGENT_TOOLS_MODE=off` por
+defecto: el modelo todavía no propone tools.
+
 ---
 
 ## 6. El orquestador
