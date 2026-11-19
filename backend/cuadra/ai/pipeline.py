@@ -1002,6 +1002,23 @@ def _asks_for_open_details(text: str) -> bool:
     return bool(_OPEN_DETAILS.search(text or ""))
 
 
+def _catalog_request(text: str) -> bool:
+    """True when the message asks for products, not for a datum (prueba #8).
+
+    "Qué productos tienes de accesorios para laptop" is a catalog listing even
+    when the NLU labels it `consulta_dato`; "¿qué procesador trae la laptop?"
+    asks for one specification and must stay on the product-detail path.
+    """
+    body = text or ""
+    if not _LIST_REQUEST.search(body):
+        return False
+    if _asks_for_open_details(body) or _STOCK_QUESTION.search(body):
+        return False
+    # Un tema técnico concreto ("procesador", "RAM", "garantía") es una pregunta
+    # de detalle, aunque el mensaje empiece con "qué ... tienes".
+    return not _asked_detail_topics(body, [])
+
+
 def _is_generic_detail_label(value: str) -> bool:
     folded = catalog._fold(value or "").strip()
     return folded in _GENERIC_DETAIL_LABELS
@@ -1841,6 +1858,7 @@ async def _decide(
     *,
     last_text: str | None = None,
     product_source: str = "",
+    category_request: tuple[str, object] | None = None,
 ) -> tuple[str, bool, str, str | None]:
     """Returns (reply, escalate, generator, escalation_question)."""
     text = last_text if last_text is not None else (inbound["body"] or "")
@@ -1970,6 +1988,35 @@ async def _decide(
         return reply, False, generator, None
 
     if intent.intencion == "consulta_dato":
+        if category_request is not None:
+            # Prueba #8: "qué productos tienes de accesorios para laptop" pide
+            # catálogo aunque el NLU lo clasifique como `consulta_dato`. Se
+            # responde con la tabla de la categoría (o con la ficha si el
+            # calificador deja un solo producto) y nunca con el compositor, que
+            # sin datos afirmaba "no hay accesorios".
+            kind, payload = category_request
+            if kind == "list":
+                term, products = payload
+                return _render_catalog_table(
+                    conn,
+                    conversation,
+                    context,
+                    term,
+                    products,
+                    quantity=intent.cantidad,
+                )
+            product = payload
+            guard_context = _guard_context(
+                product, None, context, product_source="text"
+            )
+            reply = _render_product_card(
+                conn, product, conversation, buy=False, context=context
+            )
+            reply, generator = _safe_template(
+                conn, conversation, reply, guard_context, "template", card=True
+            )
+            return reply, False, generator, None
+
         datos = list(intent.datos_faltantes) if intent.datos_faltantes else []
         if product is None:
             # Nothing in the catalog matches what the customer asked about
@@ -2226,13 +2273,18 @@ def _update_context(
     sale: dict | None = None,
     sale_qty: int | None = None,
     context: dict | None = None,
+    clear_product: bool = False,
 ) -> None:
     # F5 (prueba #2): guardar el mismo dict que mutó el turno. Recargarlo desde
     # la BD borraba `last_template_*` y las variantes nunca rotaban.
     if context is None:
         context = conversations.get_context(conn, conversation["id"])
     context["conversation_id"] = conversation["id"]
-    if product is not None:
+    if clear_product:
+        # Prueba #8: un listado de catálogo no deja un producto "en juego". Se
+        # conservan sale_id/order_code para las preguntas post-venta.
+        context.pop("product_id", None)
+    elif product is not None:
         context["product_id"] = product["id"]
     context["last_intent"] = intent.intencion
     context["last_generator"] = generator
@@ -2478,11 +2530,25 @@ async def _run_turn(conn, conversation, turn: dict) -> dict:
     )
 
     product, product_source = _resolve_product(conn, intent, context, text)
+    previous_stage = str(context.get("stage") or "").upper()
+    # Prueba #8: una petición de catálogo ("qué productos tienes de accesorios")
+    # no es una pregunta sobre el producto del turno anterior ni sobre una venta
+    # ya entregada. Se resuelve con la categoría real y no hereda el producto.
+    category_request = (
+        _category_request(conn, intent, text) if _catalog_request(text) else None
+    )
+    if category_request is not None:
+        kind, payload = category_request
+        if kind == "product":
+            product, product_source = payload, "text"
+        elif previous_stage not in _SALE_STAGES:
+            # Un listado no selecciona producto: no queda nada "en juego".
+            product, product_source = None, ""
     # H-09: a low-confidence read must not inherit the previous product. An
     # unknown product ("¿Tienes neveras?") would otherwise be answered or
     # escalated about the monitor of the previous turn. An in-progress sale is
     # exempt: there the context product is the one being purchased.
-    stage_hint = str(context.get("stage") or "").upper()
+    stage_hint = previous_stage
     if (
         product_source == "context"
         and intent.confianza < LOW_CONFIDENCE
@@ -2523,6 +2589,7 @@ async def _run_turn(conn, conversation, turn: dict) -> dict:
 
     sale = None
     sale_qty = None
+    clear_product = False
     compose_started = time.perf_counter()
     # F5 (prueba #3): un "Si" suelto se resuelve contra la pregunta del turno
     # anterior, no contra el NLU. La oferta se consume aquí y no sobrevive a
@@ -2610,8 +2677,17 @@ async def _run_turn(conn, conversation, turn: dict) -> dict:
             history,
             last_text=text,
             product_source=product_source,
+            category_request=category_request,
         )
         stage = _stage_for(context, intent, product, escalate)
+        # Prueba #8: tras una venta entregada, un listado de catálogo abre una
+        # consulta nueva: vuelve a DISCOVERY y suelta el producto de la venta,
+        # conservando sale_id/order_code para el post-venta.
+        if category_request is not None:
+            if previous_stage == "DONE":
+                stage = "DISCOVERY"
+            if category_request[0] == "list" and previous_stage not in _SALE_STAGES:
+                clear_product = True
     compose_ms = int((time.perf_counter() - compose_started) * 1000)
 
     supplier_id = product["supplier_id"] if (escalate and product) else None
@@ -2630,6 +2706,7 @@ async def _run_turn(conn, conversation, turn: dict) -> dict:
         sale=sale,
         sale_qty=sale_qty,
         context=context,
+        clear_product=clear_product,
     )
     return {
         "turn_id": turn.get("id"),

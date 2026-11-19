@@ -2973,5 +2973,156 @@ class PruebaCincoTests(Phase1TestCase):
         self.assertEqual(self._escalations(), 0)
 
 
+class PruebaOchoTests(Phase1TestCase):
+    """Prueba #8: una petición de catálogo no es un detalle ni una venta."""
+
+    def setUp(self):
+        super().setUp()
+        conn = db.connect()
+        try:
+            conn.execute("INSERT INTO categories (id, name) VALUES (1, 'tecnología')")
+            conn.execute("INSERT INTO categories (id, name) VALUES (3, 'accesorios')")
+            conn.executemany(
+                """INSERT INTO products
+                   (id, supplier_id, category_id, name, price, currency,
+                    commission, stock, status, description)
+                   VALUES (?, 1, ?, ?, ?, 'USD', 1, ?, 'ACTIVE', ?)""",
+                [
+                    (
+                        2,
+                        1,
+                        "Laptop Ultraligera",
+                        720.0,
+                        1,
+                        "ASUS ZenBook\nRyzen 7\n16GB RAM\n1TB SSD",
+                    ),
+                    (3, 3, "Mouse Inalámbrico", 15.0, 25, ""),
+                    (4, 3, "Teclado Mecánico", 45.0, 10, ""),
+                    (5, 3, "Audífonos Bluetooth", 35.0, 8, ""),
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _turn(self, text: str, intent) -> None:
+        with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=intent)):
+            self._ingest(text)
+            self._make_due()
+            self._run_process()
+
+    def _outbound(self) -> list[str]:
+        return [
+            row["body"]
+            for row in self._rows(
+                "SELECT body FROM messages WHERE direction = 'OUTBOUND' ORDER BY id"
+            )
+        ]
+
+    def _conversation(self) -> dict:
+        conn = db.connect()
+        try:
+            customer = conversations.get_or_create_customer(
+                conn, "telegram", "55500001", "Cliente"
+            )
+            return conversations.get_or_create_open_conversation(
+                conn, customer["id"], "telegram", identity="bot"
+            )
+        finally:
+            conn.close()
+
+    def _set_context(self, context: dict) -> None:
+        conversation = self._conversation()
+        conn = db.connect()
+        try:
+            conversations.set_context(conn, conversation["id"], context)
+        finally:
+            conn.close()
+
+    def _context(self) -> dict:
+        conversation = self._conversation()
+        conn = db.connect()
+        try:
+            return conversations.get_context(conn, conversation["id"])
+        finally:
+            conn.close()
+
+    # ------------------------------------------------- ruta de catálogo
+
+    def test_only_explicit_catalog_requests_take_the_listing_path(self):
+        self.assertTrue(
+            pipeline._catalog_request(
+                "Que productos tienes de accesorios para laptop"
+            )
+        )
+        self.assertTrue(pipeline._catalog_request("¿qué laptops tienes?"))
+        self.assertTrue(pipeline._catalog_request("dame un listado de laptops"))
+        # Un dato concreto no es un listado: sigue siendo detalle del producto.
+        self.assertFalse(pipeline._catalog_request("¿qué procesador trae la laptop?"))
+        self.assertFalse(
+            pipeline._catalog_request("¿qué características tiene la laptop?")
+        )
+        self.assertFalse(pipeline._catalog_request("¿cuántas laptops tienes?"))
+        self.assertFalse(pipeline._catalog_request("precio de la Laptop Ultraligera"))
+
+    def test_a_catalog_question_after_a_done_sale_lists_the_accessories(self):
+        self._set_context(
+            {
+                "stage": "DONE",
+                "sale_id": 7,
+                "order_code": "V-000001",
+                "product_id": 2,
+            }
+        )
+        compose = AsyncMock(return_value="Cuadra no tiene accesorios")
+        with patch("cuadra.ai.llm.compose", new=compose):
+            self._turn(
+                "Que productos tienes de accesorios para laptop",
+                llm.Intent(
+                    intencion="consulta_dato", producto=None, confianza=0.95
+                ),
+            )
+        body = self._outbound()[-1]
+        for name in ("Mouse Inalámbrico", "Teclado Mecánico", "Audífonos Bluetooth"):
+            self.assertIn(name, body)
+        self.assertIn("```", body)
+        self.assertNotIn("Laptop Ultraligera", body)
+        self.assertNotIn("no tiene accesorios", body)
+        # El listado se responde con el catálogo real, no con el compositor.
+        self.assertEqual(compose.await_count, 0)
+        # Una consulta nueva vuelve a DISCOVERY y suelta el producto de la venta.
+        context = self._context()
+        self.assertEqual(context.get("stage"), "DISCOVERY")
+        self.assertNotIn("product_id", context)
+        self.assertEqual(context.get("sale_id"), 7)
+        self.assertEqual(context.get("order_code"), "V-000001")
+
+    def test_a_catalog_question_does_not_inherit_the_previous_product(self):
+        self._set_context({"stage": "PRODUCT_MATCH", "product_id": 2})
+        self._turn(
+            "¿Qué accesorios tienes?",
+            llm.Intent(intencion="consulta_dato", producto=None, confianza=0.95),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("Mouse Inalámbrico", body)
+        self.assertNotIn("Laptop Ultraligera", body)
+        context = self._context()
+        self.assertNotIn("product_id", context)
+        self.assertEqual(context.get("stage"), "DISCOVERY")
+
+    def test_a_detail_question_still_answers_the_product(self):
+        self._set_context({"stage": "PRODUCT_MATCH", "product_id": 2})
+        compose = AsyncMock(return_value="inventado")
+        with patch("cuadra.ai.llm.compose", new=compose):
+            self._turn(
+                "¿Qué procesador trae la laptop?",
+                llm.Intent(intencion="consulta_dato", producto=None, confianza=0.95),
+            )
+        body = self._outbound()[-1]
+        self.assertIn("Ryzen 7", body)
+        self.assertNotIn("```", body)
+        self.assertEqual(compose.await_count, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
