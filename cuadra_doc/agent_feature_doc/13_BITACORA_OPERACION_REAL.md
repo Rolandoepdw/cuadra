@@ -1537,3 +1537,37 @@ zona de entrega, la dirección…». No se repitió el listado y no se creó la 
 
 **Tests:** **474 OK** (1 nuevo:
 `PruebaCincoTests.test_a_bare_yes_after_the_card_starts_the_sale`).
+
+### 10.27 Prueba #8: «accesorios para laptop» no es un detalle de la laptop
+
+**Fecha:** 2026-11-18. **Origen:** prueba real con el operador (conversación 1,
+mensajes 22–23). Tras una venta entregada, el cliente preguntó «Que productos
+tienes de accesorios para laptop» y el bot respondió que no había accesorios y
+que «el producto en juego» era la Laptop Ultraligera.
+
+**Diagnóstico:** el NLU clasificó bien (`consulta_dato`, producto `null`,
+confianza 0.95) y `_category_request` resolvía la categoría `accesorios` con sus
+tres productos. El fallo era de enrutamiento: `_decide` solo consultaba la
+familia para `consulta_precio | consulta_stock | comprar`. Con `consulta_dato`
+cayó en la rama de detalle, heredó el producto de una venta ya `DONE`
+(`product_source: context`) y llamó al compositor con el prompt del «PRODUCTO EN
+JUEGO»; sin datos de accesorios, el modelo afirmó algo falso.
+
+**Corrección (`ai/pipeline.py`):**
+
+| Cambio | Efecto |
+|---|---|
+| `_catalog_request(text)` = `_LIST_REQUEST` y no una pregunta de detalle abierta, de stock o de un tema técnico concreto. | «Qué productos tienes de accesorios» es catálogo; «¿qué procesador trae la laptop?» sigue siendo detalle. |
+| La petición de categoría se evalúa también para `consulta_dato` y un listado no hereda el producto del contexto (salvo dentro de una venta en curso). | La consulta nueva no responde sobre el producto entregado. |
+| `_decide` responde el listado con la tabla real de la categoría (o la ficha si queda un solo producto), sin compositor. | Se elimina la afirmación negativa inventada. |
+| Tras una venta `DONE`, un listado vuelve a `DISCOVERY` y limpia `product_id`; conserva `sale_id`/`order_code`. | El post-venta sigue disponible sin dejar el producto entregado «en juego». |
+
+**Verificación real** (`POST /api/debug/message`, identificador
+`prueba-8b-2026`): ficha de la Laptop Ultraligera → contexto forzado a `DONE` /
+V-000001 → «Que productos tienes de accesorios para laptop» → tabla con Mouse
+Inalámbrico, Audífonos Bluetooth y Teclado Mecánico, sin mención a la laptop;
+contexto `DISCOVERY`, `product_id` limpio, `sale_id`/`order_code` conservados.
+«¿qué procesador trae la laptop?» siguió respondiendo «Ryzen 7».
+
+**Tests:** **478 OK** (4 nuevos en `PruebaOchoTests`). `check_all.ps1
+-SkipBuild` en verde.
