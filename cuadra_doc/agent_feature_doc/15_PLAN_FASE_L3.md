@@ -654,9 +654,25 @@ nunca convierte eso en una fecha estimada por el modelo.
 
 ### 7.4 Criterios de aceptación
 
-- [ ] No se contradice un hecho vigente.
-- [ ] Una corrección se persiste y se usa en el siguiente turno.
-- [ ] Sin fugas de PII en trazas.
+- [x] No se contradice un hecho vigente.
+- [x] Una corrección se persiste y se usa en el siguiente turno.
+- [x] Sin fugas de PII en trazas.
+
+### 7.5 Estado de implementación (2026-11-21)
+
+- `ai/tools/memory.py`: `memory.facts`, `memory.profile` y `memory.summary`,
+  de solo lectura, con `empty_reason` (`no_facts`, `no_profile`, `no_summary`).
+- `ai/orchestrator._memory_evidence` registra en `frame.evidence` solo las
+  **claves** de los hechos vigentes, no sus valores: el frame no transporta PII.
+- `ai/grounding.py`: «ya me dijiste X» exige el hecho presente; «no me has
+  dicho X» exige su ausencia. Una corrección («mi dirección es otra») no
+  coincide con esos patrones y nunca se bloquea. Sigue en `shadow`.
+- `ai/tools/base._trace` redacta teléfonos, correos y direcciones del resultado
+  de la tool antes de escribir la traza (D7); el resto del trazado no cambia.
+- `config.py`: `AGENT_TOOLS_MEMORY_MODE=off`.
+- Tests: `tests/test_memory_tools.py` (17): hechos, corrección, perfil entre
+  conversaciones, resumen, evidencia sin valores y PII en trazas.
+- Suite completa: **597 tests OK**; `check_all.ps1 -SkipBuild` en verde.
 
 ---
 
@@ -874,6 +890,7 @@ Cambios:
 | `AGENT_TOOLS_MODE` | `off` | modo global de tools |
 | `AGENT_TOOLS_CATALOG_MODE` | `off` | modo por dominio |
 | `AGENT_TOOLS_SALES_MODE` | `off` | modo por dominio |
+| `AGENT_TOOLS_MEMORY_MODE` | `off` | modo por dominio |
 | `AGENT_TOOLS_CACHE_TTL_S` | `0` | cache entre turnos (0 = solo turno) |
 | `AGENT_GROUNDING_MODE` | `shadow` | `off`/`shadow`/`on` |
 
@@ -936,13 +953,14 @@ Un corte está terminado cuando:
 
 ## 18. Próximo paso inmediato
 
-L3.0 y L3.1 están mergeados en `main`. **L3.2 está implementado en el árbol de
-trabajo** y la suite queda en **580 tests** verdes, pendiente de commit.
+L3.0–L3.2 están mergeados en `main`. **L3.3 está implementado en el árbol de
+trabajo** y la suite queda en **597 tests** verdes, pendiente de commit.
 
-1. Revisar y commitear L3.2.
-2. Empezar L3.3 (memoria y cliente):
-   - tools `memory.profile`, `memory.facts`, `customer.lookup`;
-   - grounding de hechos, perfil y preferencias en `shadow`.
+1. Revisar y commitear L3.3.
+2. Empezar L3.4 (escalaciones y TCP):
+   - tools `escalations.status` y `escalations.pending`;
+   - grounding de «ya consulté», «el proveedor dijo que sí» y «no me han
+     respondido».
 3. No hacer push ni merge sin pedido explícito.
 
 ---

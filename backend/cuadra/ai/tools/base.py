@@ -25,7 +25,7 @@ from typing import Any, Callable, Literal
 from pydantic import BaseModel, ValidationError
 
 from cuadra import config
-from cuadra.ai import tracing
+from cuadra.ai import redact, tracing
 
 ToolMode = Literal["off", "shadow", "on"]
 
@@ -115,6 +115,17 @@ class ToolCall:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _redact(value: Any) -> Any:
+    """Mask PII in a tool payload before it reaches the trace (D7)."""
+    if isinstance(value, str):
+        return redact.text(value)
+    if isinstance(value, dict):
+        return {key: _redact(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact(item) for item in value]
+    return value
 
 
 def _cache_key(name: str, args: dict[str, Any]) -> str:
@@ -258,6 +269,22 @@ class Registry:
             ]
             if not data["sales"]:
                 empty_reason = empty_reason or data.get("empty_reason") or "no_sale"
+        elif isinstance(data, dict) and isinstance(data.get("facts"), list):
+            evidence = [
+                {"fact_key": row.get("key")}
+                for row in data["facts"]
+                if isinstance(row, dict) and row.get("key")
+            ]
+            if not data["facts"]:
+                empty_reason = empty_reason or data.get("empty_reason") or "no_facts"
+        elif isinstance(data, dict) and isinstance(data.get("profile"), dict):
+            evidence = [{"profile": True}]
+            if not data["profile"]:
+                empty_reason = (
+                    empty_reason or data.get("empty_reason") or "no_profile"
+                )
+        elif isinstance(data, dict) and "summary" in data:
+            evidence = [{"summary": bool(data.get("summary"))}]
         elif isinstance(data, dict) and data.get("sale_id"):
             evidence = [{"sale_id": data["sale_id"], "status": data.get("status")}]
         elif isinstance(data, dict) and data.get("zone_id"):
@@ -293,8 +320,8 @@ class Registry:
         conversation = getattr(frame, "conversation", None) or {}
         tracing.trace_call(
             f"tool.{name}",
-            {"args": args},
-            result.as_dict(),
+            _redact({"args": args}),
+            _redact(result.as_dict()),
             ok=result.ok,
             error=result.error.message if result.error else None,
             error_type=result.error.code if result.error else None,

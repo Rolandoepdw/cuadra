@@ -64,6 +64,29 @@ _DATE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# L3.3: claims about what the customer already said need the fact read. A
+# correction ("mi dirección es otra") never matches these: it is not a claim
+# about the past, so grounding can never block it.
+_FACT_MENTION = re.compile(
+    r"\b(?:ya\s+me\s+(?:dijiste|diste|pasaste|compartiste|confirmaste)|"
+    r"me\s+dijiste|te\s+dije|recuerdo\s+que|"
+    r"seg[uú]n\s+lo\s+que\s+me\s+dijiste|ya\s+tengo\s+tu)\b",
+    re.IGNORECASE,
+)
+_FACT_NEGATION = re.compile(
+    r"\b(?:no\s+me\s+(?:has\s+)?(?:dicho|diste|pasado|compartido|confirmado)|"
+    r"a[uú]n\s+no\s+me\s+(?:has\s+)?(?:dicho|diste)|"
+    r"todav[ií]a\s+no\s+me\s+(?:has\s+)?(?:dicho|diste))\b",
+    re.IGNORECASE,
+)
+_FACT_KEYWORDS = (
+    ("delivery_address", (r"\bdirecci[oó]n\b",)),
+    ("customer_name", (r"\bnombre\b",)),
+    ("customer_phone", (r"\btel[eé]fono\b", r"\bcelular\b", r"\bm[oó]vil\b")),
+    ("zone_name", (r"\bzona\b",)),
+    ("budget", (r"\bpresupuesto\b",)),
+)
+
 
 @dataclass(frozen=True)
 class Claim:
@@ -159,6 +182,22 @@ def _has_tcp_eta(frame) -> bool:
     return False
 
 
+def _fact_keys(text: str) -> list[str]:
+    keys = []
+    for key, patterns in _FACT_KEYWORDS:
+        if any(re.search(pattern, text or "", re.IGNORECASE) for pattern in patterns):
+            keys.append(key)
+    return keys
+
+
+def _present_facts(frame) -> set[str] | None:
+    """Keys the turn's `memory.facts` read returned; None means not measurable."""
+    for item in getattr(frame, "evidence", []) or []:
+        if _field(item, "tool") == "memory.facts":
+            return set(_field(item, "present") or [])
+    return None
+
+
 def _claim_text(reply: str, pattern) -> str:
     match = pattern.search(reply or "")
     if not match:
@@ -243,4 +282,26 @@ def validate_claims(
                 evidence_required="logistics.eta source=tcp",
             )
         )
+
+    # L3.3: "ya me dijiste X" needs X present; "no me has dicho X" needs it absent.
+    present = _present_facts(frame)
+    if present is not None:
+        mention = _FACT_MENTION.search(reply or "")
+        negation = _FACT_NEGATION.search(reply or "")
+        if mention or negation:
+            expected = not bool(negation)
+            pattern = _FACT_NEGATION if negation else _FACT_MENTION
+            for key in _fact_keys(reply or ""):
+                if (key in present) == expected:
+                    continue
+                report.violations.append(
+                    Violation(
+                        kind="memory",
+                        claim=Claim(
+                            kind="memory", text=_claim_text(reply, pattern)
+                        ),
+                        reason="fact_claim_not_supported",
+                        evidence_required=f"memory.facts:{key}",
+                    )
+                )
     return report

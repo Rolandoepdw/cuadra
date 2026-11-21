@@ -9,6 +9,7 @@ from cuadra.ai import grounding, llm, memory, offers, prompts, tracing
 from cuadra.ai.context import build_nlu_messages
 from cuadra.ai.tools import base as tools_base
 from cuadra.ai.tools import catalog as catalog_tools
+from cuadra.ai.tools import memory as memory_tools
 from cuadra.ai.tools import sales as sales_tools
 from cuadra.domain import catalog, conversations, events, sales as sales_domain, turns
 
@@ -69,6 +70,9 @@ if not tools_base.registry.has("catalog.search"):
 # L3.2 adds the reads that already back the sale, zone and post-sale routes.
 if not tools_base.registry.has("sales.status"):
     sales_tools.register(tools_base.registry)
+# L3.3 adds the facts/profile/summary reads that back memory claims.
+if not tools_base.registry.has("memory.facts"):
+    memory_tools.register(tools_base.registry)
 
 
 def _turn_messages(conn, turn: dict) -> list[dict]:
@@ -249,6 +253,22 @@ def _sales_evidence(
             }
         )
     return evidence
+
+
+def _memory_evidence(conn, conversation) -> list[dict]:
+    """Which facts exist, as keys only: the frame must not carry PII."""
+    try:
+        facts = memory.facts_map(conn, conversation["id"])
+    except Exception:  # noqa: BLE001 - memory must never block the turn
+        facts = {}
+    return [
+        {
+            "tool": "memory.facts",
+            "conversation_id": int(conversation["id"]),
+            "present": sorted(facts.keys()),
+            "empty_reason": None if facts else "no_facts",
+        }
+    ]
 
 
 async def _classify(conn, conversation, messages: list[dict], text: str, message_id):
@@ -805,7 +825,7 @@ async def run_turn(conn, conversation, turn: dict) -> dict:
         product=product,
         stage=stage,
         sale=sale,
-    )
+    ) + _memory_evidence(conn, conversation)
 
     tracing.trace_call(
         "orchestrator.decide",
