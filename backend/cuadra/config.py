@@ -189,6 +189,9 @@ AGENT_TOOLS_SALES_MODE = os.environ.get(
 AGENT_TOOLS_MEMORY_MODE = os.environ.get(
     "CUADRA_AGENT_TOOLS_MEMORY_MODE", "off"
 ).strip().lower()
+AGENT_TOOLS_ESCALATIONS_MODE = os.environ.get(
+    "CUADRA_AGENT_TOOLS_ESCALATIONS_MODE", "off"
+).strip().lower()
 AGENT_TOOLS_CACHE_TTL_S = float(
     os.environ.get("CUADRA_AGENT_TOOLS_CACHE_TTL_S", "0")
 )

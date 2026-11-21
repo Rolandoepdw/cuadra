@@ -32,6 +32,15 @@ def get(conn, escalation_id: int) -> dict:
     return dict(row)
 
 
+def latest_for_product(conn, product_id: int) -> dict | None:
+    """The most recent escalation of a product, whatever its status."""
+    row = conn.execute(
+        "SELECT * FROM escalations WHERE product_id = ? ORDER BY id DESC LIMIT 1",
+        (product_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
 def _normalise_question(question: str) -> str:
     """Case/punctuation/accents-insensitive key for duplicate detection."""
     folded = unicodedata.normalize("NFKD", (question or "").lower())

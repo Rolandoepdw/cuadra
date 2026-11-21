@@ -697,6 +697,24 @@ nunca convierte eso en una fecha estimada por el modelo.
 - No duplicar escalación.
 - No prometer una respuesta que no llegó.
 
+### 8.4 Estado de implementación (2026-11-21)
+
+- `domain/escalations.latest_for_product`: última consulta de un producto.
+- `ai/tools/escalations.py`: `escalations.status` (por id o producto) y
+  `escalations.pending` (consultas abiertas de la conversación), de solo
+  lectura y con `empty_reason="no_escalation"`.
+- `ai/orchestrator._escalation_evidence` añade al frame las consultas abiertas
+  y el estado de la última consulta del producto, sin el texto de la pregunta.
+- `ai/grounding.py`: «ya me confirmó el almacén» exige una consulta respondida;
+  «ya lo consulté» exige una consulta creada; «sigo esperando / no me han
+  respondido» exige una consulta PENDING. Una oferta condicional («lo consulto
+  con el almacén») y un futuro («te confirmo en un rato») no cuentan como
+  afirmación. Sigue en `shadow`.
+- `config.py`: `AGENT_TOOLS_ESCALATIONS_MODE=off`.
+- Tests: `tests/test_escalation_tools.py` (17): estado, pendientes, no
+  duplicado y grounding de las tres afirmaciones.
+- Suite completa: **614 tests OK**; `check_all.ps1 -SkipBuild` en verde.
+
 ---
 
 ## 9. L3.5 — Conocimiento y políticas (opcional)
@@ -891,6 +909,7 @@ Cambios:
 | `AGENT_TOOLS_CATALOG_MODE` | `off` | modo por dominio |
 | `AGENT_TOOLS_SALES_MODE` | `off` | modo por dominio |
 | `AGENT_TOOLS_MEMORY_MODE` | `off` | modo por dominio |
+| `AGENT_TOOLS_ESCALATIONS_MODE` | `off` | modo por dominio |
 | `AGENT_TOOLS_CACHE_TTL_S` | `0` | cache entre turnos (0 = solo turno) |
 | `AGENT_GROUNDING_MODE` | `shadow` | `off`/`shadow`/`on` |
 
@@ -953,14 +972,12 @@ Un corte está terminado cuando:
 
 ## 18. Próximo paso inmediato
 
-L3.0–L3.2 están mergeados en `main`. **L3.3 está implementado en el árbol de
-trabajo** y la suite queda en **597 tests** verdes, pendiente de commit.
+L3.0–L3.3 están mergeados en `main`. **L3.4 está implementado en el árbol de
+trabajo** y la suite queda en **614 tests** verdes, pendiente de commit.
 
-1. Revisar y commitear L3.3.
-2. Empezar L3.4 (escalaciones y TCP):
-   - tools `escalations.status` y `escalations.pending`;
-   - grounding de «ya consulté», «el proveedor dijo que sí» y «no me han
-     respondido».
+1. Revisar y commitear L3.4.
+2. L3.5 (conocimiento) es opcional; si no hay corpus, el siguiente corte es
+   **L3.6**: tool calling del modelo en `shadow` → `on`.
 3. No hacer push ni merge sin pedido explícito.
 
 ---

@@ -87,6 +87,29 @@ _FACT_KEYWORDS = (
     ("budget", (r"\bpresupuesto\b",)),
 )
 
+# L3.4: escalation claims ("already asked", "the supplier confirmed", "still
+# waiting") need the escalation read from this turn.
+_ESCALATION_ANSWERED = re.compile(
+    r"\bya\s+me\s+(?:confirmó|respondió|contestó)\b"
+    r"|\b(?:el\s+proveedor|el\s+almac[eé]n|el\s+tcp)\b[^.\n]{0,25}"
+    r"\b(?:me\s+)?(?:confirmó|respondió|contestó|dijo\s+que\s+s[ií])\b"
+    r"|\bme\s+confirmó\s+el\s+(?:proveedor|almac[eé]n|tcp)\b",
+    re.IGNORECASE,
+)
+_ESCALATION_ASKED = re.compile(
+    r"\bya\s+(?:lo\s+)?(?:consult[eé]|pregunt[eé])\b"
+    r"|\b(?:lo\s+)?(?:consult[eé]|pregunt[eé])\s+(?:con\s+el|al)\s+"
+    r"(?:almac[eé]n|proveedor)\b",
+    re.IGNORECASE,
+)
+_ESCALATION_PENDING = re.compile(
+    r"\b(?:sigo|estoy)\s+esperando\b[^.\n]{0,30}"
+    r"\b(?:almac[eé]n|proveedor|tcp|confirme|responda)\b"
+    r"|\bno\s+me\s+han\s+(?:respondido|contestado|confirmado)\b"
+    r"|\btodav[ií]a\s+no\s+me\s+(?:responden|contestan|confirman)\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class Claim:
@@ -198,6 +221,39 @@ def _present_facts(frame) -> set[str] | None:
     return None
 
 
+def _escalation_items(frame) -> list:
+    return [
+        item
+        for item in getattr(frame, "evidence", []) or []
+        if _field(item, "tool") in ("escalations.status", "escalations.pending")
+    ]
+
+
+def _has_escalation(frame, statuses: tuple[str, ...]) -> bool:
+    for item in _escalation_items(frame):
+        if _field(item, "status") in statuses:
+            return True
+        for row in _field(item, "escalations") or []:
+            if isinstance(row, dict) and row.get("status") in statuses:
+                return True
+    return False
+
+
+def _has_answered_escalation(frame) -> bool:
+    for item in _escalation_items(frame):
+        if _field(item, "answered") is True:
+            return True
+        if _field(item, "status") in ("ANSWERED", "RESOLVED"):
+            return True
+        for row in _field(item, "escalations") or []:
+            if isinstance(row, dict) and row.get("status") in (
+                "ANSWERED",
+                "RESOLVED",
+            ):
+                return True
+    return False
+
+
 def _claim_text(reply: str, pattern) -> str:
     match = pattern.search(reply or "")
     if not match:
@@ -304,4 +360,48 @@ def validate_claims(
                         evidence_required=f"memory.facts:{key}",
                     )
                 )
+
+    # L3.4: "the supplier confirmed" / "already asked" / "still waiting".
+    if _ESCALATION_ANSWERED.search(reply or "") and not _has_answered_escalation(
+        frame
+    ):
+        report.violations.append(
+            Violation(
+                kind="escalation_answer",
+                claim=Claim(
+                    kind="escalation_answer",
+                    text=_claim_text(reply, _ESCALATION_ANSWERED),
+                ),
+                reason="answer_without_answered_escalation",
+                evidence_required="escalations.status answered",
+            )
+        )
+    if _ESCALATION_ASKED.search(reply or "") and not _has_escalation(
+        frame, ("PENDING", "ANSWERED", "RESOLVED")
+    ):
+        report.violations.append(
+            Violation(
+                kind="escalation_asked",
+                claim=Claim(
+                    kind="escalation_asked",
+                    text=_claim_text(reply, _ESCALATION_ASKED),
+                ),
+                reason="asked_without_escalation",
+                evidence_required="escalations.status / escalations.pending",
+            )
+        )
+    if _ESCALATION_PENDING.search(reply or "") and not _has_escalation(
+        frame, ("PENDING",)
+    ):
+        report.violations.append(
+            Violation(
+                kind="escalation_pending",
+                claim=Claim(
+                    kind="escalation_pending",
+                    text=_claim_text(reply, _ESCALATION_PENDING),
+                ),
+                reason="pending_without_open_escalation",
+                evidence_required="escalations.pending status=PENDING",
+            )
+        )
     return report

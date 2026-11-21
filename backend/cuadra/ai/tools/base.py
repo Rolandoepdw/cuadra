@@ -285,6 +285,26 @@ class Registry:
                 )
         elif isinstance(data, dict) and "summary" in data:
             evidence = [{"summary": bool(data.get("summary"))}]
+        elif isinstance(data, dict) and isinstance(data.get("escalations"), list):
+            evidence = [
+                {
+                    "escalation_id": row.get("escalation_id"),
+                    "status": row.get("status"),
+                }
+                for row in data["escalations"]
+                if isinstance(row, dict) and row.get("escalation_id")
+            ]
+            if not data["escalations"]:
+                empty_reason = (
+                    empty_reason or data.get("empty_reason") or "no_escalation"
+                )
+        elif isinstance(data, dict) and data.get("escalation_id"):
+            evidence = [
+                {
+                    "escalation_id": data["escalation_id"],
+                    "status": data.get("status"),
+                }
+            ]
         elif isinstance(data, dict) and data.get("sale_id"):
             evidence = [{"sale_id": data["sale_id"], "status": data.get("status")}]
         elif isinstance(data, dict) and data.get("zone_id"):

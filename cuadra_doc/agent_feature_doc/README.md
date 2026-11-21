@@ -2,7 +2,7 @@
 tipo: indice
 proyecto: Cuadra
 modulo: agent_feature_doc
-estado: DISEÑO APROBADO — fases 0–5 y L3.0–L3.2 en main; L3.3 en el árbol
+estado: DISEÑO APROBADO — fases 0–5 y L3.0–L3.3 en main; L3.4 en el árbol
 revisado: 2026-11-19
 aprobado: 2026-11-03
 tags: [indice, agente-ia, diseno-aprobado, revision, L3]
@@ -198,7 +198,10 @@ oferta, zona y fecha (`sales.status`, `sales.history`, `offers.pending`,
 `zones.check`, `zones.list`, `logistics.eta`) y grounding de estado, cobertura y
 fecha.
 
-**L3.3 está implementada en el árbol de trabajo**: `memory.facts`,
+**L3.3 ya está implementada y mergeada en `main`** (`71c2a8e`): `memory.facts`,
 `memory.profile` y `memory.summary`, grounding de hechos («ya me dijiste» / «no
-me has dicho») y redacción de PII en las trazas de tools. La suite queda en
-**597 tests**.
+me has dicho») y redacción de PII en las trazas de tools.
+
+**L3.4 está implementada en el árbol de trabajo**: `escalations.status` y
+`escalations.pending`, y grounding de «ya consulté», «el proveedor confirmó» y
+«sigo esperando». La suite queda en **614 tests**.

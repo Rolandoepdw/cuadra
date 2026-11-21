@@ -9,9 +9,17 @@ from cuadra.ai import grounding, llm, memory, offers, prompts, tracing
 from cuadra.ai.context import build_nlu_messages
 from cuadra.ai.tools import base as tools_base
 from cuadra.ai.tools import catalog as catalog_tools
+from cuadra.ai.tools import escalations as escalations_tools
 from cuadra.ai.tools import memory as memory_tools
 from cuadra.ai.tools import sales as sales_tools
-from cuadra.domain import catalog, conversations, events, sales as sales_domain, turns
+from cuadra.domain import (
+    catalog,
+    conversations,
+    escalations as escalations_domain,
+    events,
+    sales as sales_domain,
+    turns,
+)
 
 log = logging.getLogger("cuadra.orchestrator")
 
@@ -73,6 +81,9 @@ if not tools_base.registry.has("sales.status"):
 # L3.3 adds the facts/profile/summary reads that back memory claims.
 if not tools_base.registry.has("memory.facts"):
     memory_tools.register(tools_base.registry)
+# L3.4 adds the escalation reads that back "already asked / still waiting".
+if not tools_base.registry.has("escalations.status"):
+    escalations_tools.register(tools_base.registry)
 
 
 def _turn_messages(conn, turn: dict) -> list[dict]:
@@ -269,6 +280,49 @@ def _memory_evidence(conn, conversation) -> list[dict]:
             "empty_reason": None if facts else "no_facts",
         }
     ]
+
+
+def _escalation_evidence(conn, conversation, product: dict | None) -> list[dict]:
+    """Open escalations and the latest status for the product in play."""
+    evidence: list[dict] = []
+    try:
+        pending = escalations_domain.pending_for_conversation(
+            conn, conversation["id"]
+        )
+    except Exception:  # noqa: BLE001 - escalation reads must not block a turn
+        pending = []
+    if pending:
+        evidence.append(
+            {
+                "tool": "escalations.pending",
+                "conversation_id": int(conversation["id"]),
+                "escalations": [
+                    {
+                        "escalation_id": int(item["id"]),
+                        "product_id": item.get("product_id"),
+                        "status": item.get("status"),
+                    }
+                    for item in pending
+                ],
+                "empty_reason": None,
+            }
+        )
+    if product is not None:
+        latest = escalations_domain.latest_for_product(
+            conn, int(product["id"])
+        )
+        if latest is not None:
+            evidence.append(
+                {
+                    "tool": "escalations.status",
+                    "escalation_id": int(latest["id"]),
+                    "product_id": latest.get("product_id"),
+                    "status": latest.get("status"),
+                    "answered": bool(latest.get("tcp_answer")),
+                    "empty_reason": None,
+                }
+            )
+    return evidence
 
 
 async def _classify(conn, conversation, messages: list[dict], text: str, message_id):
@@ -825,7 +879,9 @@ async def run_turn(conn, conversation, turn: dict) -> dict:
         product=product,
         stage=stage,
         sale=sale,
-    ) + _memory_evidence(conn, conversation)
+    ) + _memory_evidence(conn, conversation) + _escalation_evidence(
+        conn, conversation, product
+    )
 
     tracing.trace_call(
         "orchestrator.decide",

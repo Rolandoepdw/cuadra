@@ -10,8 +10,8 @@
 </p>
 
 <p align="center">
-  <img alt="L3.3" src="https://img.shields.io/badge/L3.3-memoria%20y%20catalogo-10E0A0?style=for-the-badge&labelColor=101828">
-  <img alt="597 tests" src="https://img.shields.io/badge/tests-597-10E0A0?style=for-the-badge&labelColor=101828">
+  <img alt="L3.4" src="https://img.shields.io/badge/L3.4-tcp%20y%20catalogo-10E0A0?style=for-the-badge&labelColor=101828">
+  <img alt="614 tests" src="https://img.shields.io/badge/tests-614-10E0A0?style=for-the-badge&labelColor=101828">
   <img alt="offline" src="https://img.shields.io/badge/offline-100%25-10E0A0?style=for-the-badge&labelColor=101828">
 </p>
 
@@ -148,7 +148,7 @@ Los colores salen del logo: verde menta sobre azul noche.
 | Datos | SQLite, FTS5 y embeddings opcionales con FastEmbed |
 | Agente | Orquestador propio, política determinista y LLM local (llama.cpp / GGUF) |
 | Panel | React 19, TypeScript, Vite 6 y Tailwind 4 |
-| Pruebas | `unittest` (597) y `tsc` |
+| Pruebas | `unittest` (614) y `tsc` |
 
 ## Estructura del repositorio
 
@@ -161,7 +161,7 @@ cuadra/
 │   │   ├── api/           # FastAPI + panel
 │   │   └── channels/      # Telegram bot + userbot
 │   ├── migrations/        # SQL aditivo (024 = multi-categoría)
-│   ├── tests/             # 597 tests
+│   ├── tests/             # 614 tests
 │   └── scripts/           # seeds, replay y laboratorio
 ├── dashboard/             # React + Vite
 ├── cuadra_doc/            # visión, planes, runbook y bitácoras
@@ -236,7 +236,7 @@ reales.
 | L3.1: catálogo multi-categoría, ranking y referencias | ✅ |
 | L3.2: ventas, ofertas, zonas y fechas | ✅ |
 | L3.3: memoria y cliente | ✅ |
-| L3.4: escalaciones y TCP | ⏳ |
+| L3.4: escalaciones y TCP | ✅ |
 | L3.5: conocimiento y políticas | ⏳ |
 | L3.6: tool calling del modelo (`shadow` → `on`) | ⏳ |
 | L3.7: endurecimiento y runbook | ⏳ |
