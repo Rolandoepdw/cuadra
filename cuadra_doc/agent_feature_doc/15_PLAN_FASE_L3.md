@@ -1044,7 +1044,8 @@ Un corte está terminado cuando:
 L3.0–L3.6 están commiteados en `main`. **L3.7 está implementado en el árbol de
 trabajo**; L3.5 queda diferido.
 
-1. Revisar y commitear L3.7.
+1. Ejecutar `16_GUIA_EVALUACION_L3.md` con `scripts/seed_l3_eval.py`: camino
+   crítico con cliente/TCP y dashboard.
 2. Prueba de carga con el modelo local y replay de 20 conversaciones reales.
 3. Revisión del runbook por otra persona y aprobación final del dueño.
 4. No hacer push ni merge sin pedido explícito.

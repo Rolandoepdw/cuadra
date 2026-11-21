@@ -63,6 +63,7 @@ Fase 0 (medición). Las fases 0–5 ya están implementadas y commiteadas.
 | 14 | `13_BITACORA_OPERACION_REAL.md` | Pruebas end-to-end en vivo con Telegram y la BD de prueba: plan, resultados y hallazgos. |
 | 15 | `14_VISION_Y_CAPACIDADES_DEL_AGENTE.md` | Visión L3: contrato de capacidades, orquestador, TurnFrame, grounding, modos y decisiones D11–D22. |
 | 16 | `15_PLAN_FASE_L3.md` | Plan ejecutable de L3: cortes L3.0–L3.7, migración multi-categoría, ranking, pruebas y criterios de encendido. |
+| 17 | `16_GUIA_EVALUACION_L3.md` | Guía para evaluar L3 con cuentas reales de cliente/TCP, dashboard, seed de fixtures y evaluadores. |
 | — | `../10_contexto_agente_ia.md` | Brief original que alimentó la propuesta. |
 
 ---
