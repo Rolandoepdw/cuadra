@@ -34,6 +34,12 @@ NEGATIVE_PATTERNS = (
 )
 _NEGATIVE_RE = re.compile("|".join(NEGATIVE_PATTERNS), re.IGNORECASE)
 
+# "No hay problema" is politeness, not a claim about the catalog.
+_NEGATIVE_BENIGN = re.compile(
+    r"\b(?:problema|de\s+qu[eé]|compromiso|inconveniente|pena|pero)\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class Claim:
@@ -76,27 +82,41 @@ class GroundingReport:
 def negative_claims(reply: str) -> list[Claim]:
     claims = []
     for match in _NEGATIVE_RE.finditer(reply or ""):
-        start = max(0, match.start() - 40)
-        end = min(len(reply), match.end() + 40)
+        window_start = max(0, match.start() - 40)
+        window_end = min(len(reply), match.end() + 40)
+        fragment = reply[window_start:window_end]
+        after = reply[match.end(): match.end() + 25]
+        if match.group(0).lower().startswith("no hay") and _NEGATIVE_BENIGN.search(
+            after
+        ):
+            continue
         claims.append(
             Claim(
                 kind="negative",
-                text=reply[start:end].strip(),
+                text=fragment.strip(),
                 value=match.group(0).lower(),
             )
         )
     return claims
 
 
+def _field(item, key):
+    if isinstance(item, dict):
+        return item.get(key)
+    return getattr(item, key, None)
+
+
 def _has_empty_evidence(frame, claim: Claim) -> bool:
-    """A negative claim is grounded by an empty read with a reason."""
+    """A negative claim is grounded by an empty read or a zero-stock read."""
     for item in getattr(frame, "evidence", []) or []:
-        empty_reason = (
-            item.get("empty_reason")
-            if isinstance(item, dict)
-            else getattr(item, "empty_reason", None)
-        )
-        if empty_reason:
+        if _field(item, "empty_reason"):
+            return True
+        if _field(item, "availability") == "out_of_stock":
+            return True
+        if _field(item, "available") is False:
+            return True
+        stock = _field(item, "stock")
+        if stock is not None and int(stock) <= 0:
             return True
     return False
 

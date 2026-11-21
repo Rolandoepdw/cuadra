@@ -260,6 +260,7 @@ class ContextIsolationTests(HardeningTestCase):
                 "moneda",
                 "stock",
                 "estado",
+                "categorias",
                 "zona_entrega",
                 "zonas_entrega",
                 "especificaciones",

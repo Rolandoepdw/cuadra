@@ -36,6 +36,7 @@ from cuadra.ai.turn.policy import (
 from cuadra.ai.turn.render import (
     _available_stock,
     _format_product_list,
+    _remember_listing,
     _render_out_of_stock,
     _render_siblings,
 )
@@ -467,6 +468,9 @@ def _offered_alternatives_outcome(
         # misma familia (otras laptops), no un monitor o una tablet.
         alternatives = catalog.siblings(conn, product)
         if alternatives:
+            _remember_listing(
+                context, alternatives, query=product["name"], kind="alternatives"
+            )
             reply = f"Tengo {_format_product_list(alternatives)}. ¿Cuál te interesa?"
         else:
             reply = (

@@ -2,7 +2,7 @@
 tipo: plan_implementacion
 proyecto: Cuadra
 modulo: agente_ia
-estado: L3.0 implementado — L3.1 pendiente de aprobación del dueño
+estado: L3.0 implementado — L3.1 implementado en rama, pendiente de revisión del dueño
 revisado: 2026-11-19
 tags: [plan, L3, orquestador, tools, catalogo, grounding, evaluacion]
 ---
@@ -483,13 +483,79 @@ pero la tool de cobertura es de L3.2.
 
 ### 5.8 Criterios de aceptación
 
-- [ ] La prueba #8 y sus variantes pasan.
-- [ ] Hasta 10 coincidencias reales, sin duplicados, agotados incluidos y sin relleno.
-- [ ] «Esos», «el segundo» y «el de antes» resuelven contra el último listado.
-- [ ] «No hay X» solo con evidencia; 0 falsos negativos en el set.
-- [ ] Sin regresiones en la suite y en el replay de 20 conversaciones.
-- [ ] `agent.tools.catalog.mode=off` mantiene el comportamiento actual.
-- [ ] La migración se aplica en una BD de prueba y el rollback funciona.
+- [x] La prueba #8 y sus variantes pasan.
+- [x] Hasta 10 coincidencias reales, sin duplicados, agotados incluidos y sin relleno.
+- [x] «Esos», «el segundo» y «el de antes» resuelven contra el último listado.
+- [x] «No hay X» solo con evidencia; 0 falsos negativos en el set.
+- [x] Sin regresiones en la suite (553 tests) y replay sintético de 20 conversaciones.
+- [x] `agent.tools.catalog.mode=off` mantiene el comportamiento actual.
+- [x] La migración se aplica en una BD de prueba y la BD local; el rollback está documentado.
+
+### 5.9 Estado de implementación (2026-11-19)
+
+Implementado en la rama `feat/l3-0-orchestrator`, encima de `9bc5076`, sin
+commit ni push todavía.
+
+**Datos y dominio:**
+
+- `migrations/024_product_categories.sql`: tabla puente, backfill de la
+  categoría primaria, triggers de sincronización `products` → puente y triggers
+  FTS con `group_concat` de todas las categorías. Aplicada en la BD de pruebas
+  (cada `apply_migrations`) y en `data/cuadra.db` (13 filas en el puente).
+- `domain/catalog.py`: `product_category_ids`, `product_category_names`,
+  `_attach_product_categories`, `_sync_product_categories`; `list_products`,
+  `get_product` y `llm_product_json` incluyen `categories`/`categorias`.
+  `create_product`/`update_product` escriben el puente. Nuevos:
+  `search_catalog`, `check_stock`, `available_units`, `availability_of`,
+  `product_highlights`, `_pick_category`, `_products_in_categories`,
+  `_narrow_by_qualifiers`, `_score_and_sort`.
+
+**Tools y turno:**
+
+- `ai/tools/catalog.py`: `catalog.search`, `catalog.get`,
+  `catalog.list_category`, `catalog.check_stock`; `SearchArgs` con
+  `include_out_of_stock` y `category_hint`; salida `CatalogProduct` sin
+  economía interna.
+- `ai/tools/base.py`: `_result` extrae evidencia de `data["products"]` y
+  conserva `empty_reason`; una lectura vacía ya no se confunde con error.
+- `ai/turn/render.py`: `_remember_listing` guarda `last_listing` al responder
+  con tabla, hermanos, alternativas o el listado de categoría.
+- `ai/turn/policy.py`: `last_listing` resuelve «esos»; `resolve_reference`
+  enciende ordinales, demostrativos y foco; una referencia ambigua pregunta.
+  **Corrección de la prueba del dueño:** un listado explícito o una referencia
+  etiquetados por el NLU como `otro` ya no caen al compositor; se responden
+  desde el catálogo. Antes, «¿qué accesorios tienes?» con `otro` contestaba
+  «Cuadra no tiene accesorios».
+- `ai/orchestrator.py`: lectura única `catalog.search_catalog` por turno,
+  `frame.evidence` con `catalog.search`/`catalog.list_category`/`catalog.get`,
+  `pending_offer` con `product_ids` y `query`.
+- `ai/offers.py`: `detect` acepta `product_ids` y `query`.
+- `ai/grounding.py`: una negación se sustenta con `empty_reason`, con
+  `availability="out_of_stock"` o con stock 0; «no hay problema» no cuenta.
+- `config.py`: `AGENT_TOOLS_CATALOG_MODE=off` (solo gobierna las tools que
+  proponga el modelo en L3.6; la ruta determinista lee el dominio directamente).
+
+**Tests:**
+
+- `tests/test_catalog_tools.py` (20): migración y triggers, multi-categoría,
+  «accesorios para laptop», 4/6/12/10 sin relleno, agotados, `no_category`,
+  `category_empty`, orden por stock como desempate, contrato de las 4 tools.
+- `tests/test_turns.py`: recordar el listado, «el segundo», «esos», listado
+  durante una venta, y los dos casos nuevos con intención `otro`.
+- `tests/test_tools_contract.py` y `test_hardening.py` actualizados al contrato.
+- Suite completa: **553 tests OK**; `check_all.ps1 -SkipBuild` en verde.
+
+**Replay sintético (20 conversaciones / 30 turnos):** con la corrección, las
+conversaciones de catálogo listan productos reales y «el segundo»/«el de antes»
+resuelven contra el último listado. La comparación estricta contra `main`
+deja de aplicar en L3.1 porque el catálogo cambia a propósito.
+
+**Pendiente:**
+
+- Panel: selector múltiple de categorías con la primaria marcada aparte (§5.2).
+  La API ya acepta `category_ids`; la pantalla sigue con un solo `category_id`.
+- Revisión del dueño: casos concretos que encontró en su prueba.
+- Commit de L3.1 y decisión de merge (sin push ni merge sin pedido explícito).
 
 ---
 
@@ -846,15 +912,14 @@ Un corte está terminado cuando:
 
 ## 18. Próximo paso inmediato
 
-1. Replay opcional con tráfico real antes de encender L3.1.
-2. Revisión del dueño: commit de L3.0 y decisión de merge.
-3. Empezar L3.1 solo cuando L3.0 esté verde y el replay no tenga regresiones:
-   - migración `024_product_categories.sql` y backfill;
-   - ranking determinista y `empty_reason`;
-   - `catalog.search`, `catalog.get`, `catalog.list_category`,
-     `catalog.check_stock`;
-   - `last_listing` y `resolve_reference` encendidos en la política;
-   - grounding de negaciones en `shadow`.
+L3.0 y L3.1 están implementados y verdes (553 tests). El dueño todavía no ha
+hecho commit de L3.1 ni ha decidido el merge.
+
+1. Revisión del dueño de L3.1: casos concretos que vio en su prueba.
+2. Commit de L3.1 en `feat/l3-0-orchestrator` (o rama nueva) y decisión de merge.
+3. Con L3.1 cerrado, empezar L3.2 (ventas, ofertas, zonas y fechas):
+   - tools `sales.status`, `sales.quote`, `delivery.coverage`, `delivery.date`;
+   - grounding de estado de pedido, cobertura y fecha en `shadow` → `on`.
 4. No hacer push ni merge sin pedido explícito.
 
 ---

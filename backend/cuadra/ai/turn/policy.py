@@ -112,7 +112,9 @@ def _comparison_products(conn, text: str, intent, product: dict | None) -> list[
     return list(found.values())[:4]
 
 
-def _category_request(conn, intent, text: str) -> tuple[str, object] | None:
+def _category_request(
+    conn, intent, text: str, *, found: dict | None = None
+) -> tuple[str, object] | None:
     """Resolve a message that asks about a product family.
 
     Returns:
@@ -138,35 +140,23 @@ def _category_request(conn, intent, text: str) -> tuple[str, object] | None:
     content = [w for w in words if w not in _CATEGORY_FILLER]
     if not content:
         return None
-    terms = [t for t in catalog.category_terms(text) if len(t) >= 4]
-    terms += [
-        t
-        for t in catalog.category_terms(intent.producto or "")
-        if len(t) >= 4 and t not in terms
-    ]
-    for term in terms:
-        if term in _CATEGORY_FILLER:
-            continue
-        products = catalog.family_products(conn, term, limit=_TABLE_LIMIT)
-        if not products:
-            continue
-        singular = term[:-1] if term.endswith("s") else term
-        # Solo las palabras que `narrow_products` puede aplicar cuentan como
-        # calificador: "si" o "ok" no acotan la familia.
-        rest = [
-            w for w in content if w not in (term, singular) and len(w) >= 4
-        ]
-        if rest:
-            narrowed = catalog.narrow_products(
-                products, " ".join(rest), exclude=term, fallback=False
-            )
-            if len(narrowed) == 1:
-                return "product", narrowed[0]
-            return "list", (term, products)
-        if len(products) == 1:
-            return "product", products[0]
-        return "list", (term, products)
-    return None
+    query = (text or "").strip() or (intent.producto or "").strip()
+    if not query:
+        return None
+    # L3.1: one deterministic read decides the category, its siblings and the
+    # qualifiers. No LLM ranking and no product from another category.
+    found = found or catalog.search_catalog(conn, query, limit=_TABLE_LIMIT)
+    products = found.get("products") or []
+    if not products:
+        return None
+    term = found.get("match_term") or query
+    # A single product (a real category with one item, or a qualifier that names
+    # exactly one) is answered with its card, not with a one-row table.
+    if len(products) == 1:
+        return "product", products[0]
+    # "accesorios para laptop" keeps every accessory: "para laptop" is
+    # compatibility, not a filter that removes real matches.
+    return "list", (term, products)
 
 
 def _single_category_product(conn, intent, text: str) -> dict | None:
@@ -361,6 +351,7 @@ async def _decide(
     last_text: str | None = None,
     product_source: str = "",
     category_request: tuple[str, object] | None = None,
+    reference=None,
 ) -> tuple[str, bool, str, str | None]:
     """Returns (reply, escalate, generator, escalation_question)."""
     text = last_text if last_text is not None else (inbound["body"] or "")
@@ -386,11 +377,110 @@ async def _decide(
         )
         return reply, False, generator, None
 
+    # L3.1: a reference that cannot be resolved is a question, not a guess.
+    if reference is not None and reference.needs_clarification:
+        guard_context = _guard_context(None, None, context)
+        reply = prompts.template_variant("ask_which_product", context)
+        reply, generator = _safe_template(
+            conn, conversation, reply, guard_context, "template"
+        )
+        return reply, False, generator, None
+
+    # "esos" / "esas" points at the whole last listing. Re-showing the table
+    # answers "¿cuánto cuestan esos?" without inventing a product.
+    if (
+        reference is not None
+        and len(reference.product_ids) > 1
+        and product is None
+        and str(context.get("stage") or "").upper() not in _SALE_STAGES
+    ):
+        selected = []
+        for product_id in reference.product_ids:
+            try:
+                selected.append(catalog.get_product(conn, product_id))
+            except catalog.NotFound:
+                continue
+        if selected:
+            previous = context.get("last_listing") or {}
+            return _render_catalog_table(
+                conn,
+                conversation,
+                context,
+                previous.get("query") or "esos productos",
+                selected,
+                quantity=intent.cantidad,
+            )
+
+    # L3.1: un listado explícito se responde desde el catálogo aunque el NLU lo
+    # haya etiquetado como `otro`. Antes caía al compositor, que sin datos
+    # contestaba "no hay accesorios".
+    if category_request is not None and intent.intencion == "otro":
+        kind, payload = category_request
+        if kind == "list":
+            term, products = payload
+            return _render_catalog_table(
+                conn,
+                conversation,
+                context,
+                term,
+                products,
+                quantity=intent.cantidad,
+            )
+        guard_context = _guard_context(
+            payload, None, context, product_source="text"
+        )
+        reply = _render_product_card(
+            conn, payload, conversation, buy=False, context=context
+        )
+        reply, generator = _safe_template(
+            conn, conversation, reply, guard_context, "template", card=True
+        )
+        return reply, False, generator, None
+
+    # L3.1: "el segundo" / "el de antes" resuelven a un producto real y se
+    # responden con su ficha, sin pasar por generación libre.
+    if (
+        intent.intencion == "otro"
+        and product is not None
+        and product_source == "reference"
+    ):
+        if product["status"] != "ACTIVE" or _available_stock(product) <= 0:
+            alternatives = catalog.siblings(conn, product)
+            guard_context = _guard_context(
+                product,
+                None,
+                context,
+                extra_products=alternatives,
+                product_source=product_source,
+            )
+            reply, generator = _safe_template(
+                conn,
+                conversation,
+                _render_out_of_stock(product, alternatives),
+                guard_context,
+                "template",
+            )
+            return reply, False, generator, None
+        guard_context = _guard_context(
+            product, None, context, product_source=product_source
+        )
+        reply = _render_product_card(
+            conn, product, conversation, buy=False, context=context
+        )
+        reply, generator = _safe_template(
+            conn, conversation, reply, guard_context, "template", card=True
+        )
+        return reply, False, generator, None
+
     if intent.intencion in ("consulta_precio", "consulta_stock", "comprar"):
         # Una petición de familia ("laptop", "ando buscando una laptop") se lista
         # en tabla; nunca se cotiza ni se vende un producto al azar. Si un
         # calificador deja un solo producto, se responde directo con su ficha.
-        category = _category_request(conn, intent, text)
+        category = (
+            category_request
+            if category_request is not None
+            else _category_request(conn, intent, text)
+        )
         if category is not None:
             kind, payload = category
             if kind == "list":

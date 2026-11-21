@@ -1,9 +1,10 @@
-"""Catalog reads exposed as tools (L3.0: contract proof, not yet in the turn).
+"""Catalog reads exposed as tools (L3.1).
 
-These three reads already exist in `domain/catalog.py`; the tools only wrap them
-with stable arguments, an `empty_reason` and a source. In L3.0 nothing calls
-them from the conversation flow: `agent.tools.mode=off` keeps the deterministic
-route in charge.
+The deterministic ranking lives in `domain/catalog.search_catalog`; these
+tools only validate arguments and give the result a stable shape, source and
+`empty_reason`. In L3.1 the deterministic route calls the domain function
+directly; `agent.tools.catalog.mode` keeps the model from proposing tools until
+L3.6.
 """
 
 from __future__ import annotations
@@ -23,7 +24,9 @@ from cuadra.domain import catalog
 
 class SearchArgs(BaseModel):
     query: str = Field(min_length=1, max_length=200)
-    limit: int = Field(default=5, ge=1, le=10)
+    limit: int = Field(default=10, ge=1, le=10)
+    include_out_of_stock: bool = True
+    category_hint: str | None = Field(default=None, max_length=120)
 
 
 class GetArgs(BaseModel):
@@ -35,12 +38,55 @@ class ListCategoryArgs(BaseModel):
     limit: int = Field(default=10, ge=1, le=10)
 
 
-def search(conn, query: str, limit: int = 5) -> list[dict]:
-    return catalog.search_products(
-        conn,
-        query,
-        limit=limit,
-        statuses=("ACTIVE", "OUT_OF_STOCK"),
+class CheckStockArgs(BaseModel):
+    product_id: int = Field(ge=1)
+    quantity: int = Field(default=1, ge=1, le=999)
+
+
+def _product_row(product: dict) -> dict:
+    """The public `CatalogProduct` shape; internal economics never leave."""
+    return {
+        "id": int(product["id"]),
+        "name": product["name"],
+        "categories": list(product.get("categories") or []),
+        "price": float(product["price"]),
+        "currency": product["currency"],
+        "stock": int(product.get("available_stock", product.get("stock") or 0)),
+        "status": product["status"],
+        "availability": product.get("availability")
+        or catalog.availability_of(product),
+        "highlights": product.get("highlights")
+        or catalog.product_highlights(product),
+    }
+
+
+def _search_result(data: dict) -> dict:
+    return {
+        "query": data.get("query", ""),
+        "products": [_product_row(product) for product in data.get("products") or []],
+        "matched_categories": list(data.get("matched_categories") or []),
+        "empty_reason": data.get("empty_reason"),
+        "match_kind": data.get("match_kind", ""),
+        "match_term": data.get("match_term", ""),
+        "qualifiers": list(data.get("qualifiers") or []),
+    }
+
+
+def search(
+    conn,
+    query: str,
+    limit: int = 10,
+    include_out_of_stock: bool = True,
+    category_hint: str | None = None,
+) -> dict:
+    return _search_result(
+        catalog.search_catalog(
+            conn,
+            query,
+            limit=limit,
+            include_out_of_stock=include_out_of_stock,
+            category_hint=category_hint,
+        )
     )
 
 
@@ -50,14 +96,27 @@ def get(conn, product_id: int) -> dict:
     except catalog.NotFound as exc:
         raise ToolError(NOT_FOUND, f"product {product_id} not found") from exc
     # The prompt never sees commission, cost or margin.
-    return catalog.llm_product_json(conn, product)
+    data = catalog.llm_product_json(conn, product)
+    data["categories"] = list(product.get("categories") or [])
+    data["zones"] = list(data.get("zonas_entrega") or [])
+    data["availability"] = catalog.availability_of(product)
+    data["available_stock"] = catalog.available_units(product)
+    return data
 
 
-def list_category(conn, category: str, limit: int = 10) -> list[dict]:
-    products = catalog.family_products(conn, category, limit=limit)
-    if not products:
-        products = catalog.category_products(conn, category, limit=limit)
-    return products
+def list_category(conn, category: str, limit: int = 10) -> dict:
+    return _search_result(
+        catalog.search_catalog(
+            conn, category, limit=limit, category_hint=category
+        )
+    )
+
+
+def check_stock(conn, product_id: int, quantity: int = 1) -> dict:
+    try:
+        return catalog.check_stock(conn, product_id, quantity=quantity)
+    except catalog.NotFound as exc:
+        raise ToolError(NOT_FOUND, f"product {product_id} not found") from exc
 
 
 def register(registry: Registry) -> None:
@@ -96,4 +155,16 @@ def register(registry: Registry) -> None:
             timeout_s=timeout_seconds(),
         ),
         list_category,
+    )
+    registry.register(
+        ToolSpec(
+            name="catalog.check_stock",
+            domain="catalog",
+            owner="catalog",
+            description="Confirma si hay unidades suficientes de un producto.",
+            input_model=CheckStockArgs,
+            permission=READ,
+            timeout_s=timeout_seconds(),
+        ),
+        check_stock,
     )

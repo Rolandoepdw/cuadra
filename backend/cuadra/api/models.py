@@ -56,6 +56,7 @@ class SupplierPatch(BaseModel):
 class ProductIn(BaseModel):
     supplier_id: int
     category_id: int | None = None
+    category_ids: list[int] | None = None
     name: str = Field(min_length=1, max_length=120)
     description: str | None = None
     price: float = Field(ge=0)
@@ -73,6 +74,7 @@ class ProductIn(BaseModel):
 
 class ProductPatch(BaseModel):
     category_id: int | None = None
+    category_ids: list[int] | None = None
     name: str | None = Field(default=None, min_length=1, max_length=120)
     description: str | None = None
     price: float | None = Field(default=None, ge=0)

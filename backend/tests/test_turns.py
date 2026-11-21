@@ -3123,6 +3123,100 @@ class PruebaOchoTests(Phase1TestCase):
         self.assertNotIn("```", body)
         self.assertEqual(compose.await_count, 0)
 
+    # ------------------------------------------------ L3.1 referencias
+    def test_a_listing_is_remembered_for_the_next_turn(self):
+        self._turn(
+            "¿Qué accesorios tienes?",
+            llm.Intent(intencion="consulta_dato", confianza=0.95),
+        )
+        listing = self._context().get("last_listing")
+        self.assertIsNotNone(listing)
+        self.assertEqual(listing["product_ids"], [3, 4, 5])
+        self.assertEqual(listing["query"], "accesorios")
+
+    def test_el_segundo_uses_the_listing_over_the_nlu_product(self):
+        self._turn(
+            "¿Qué accesorios tienes?",
+            llm.Intent(intencion="consulta_dato", confianza=0.95),
+        )
+        self._turn(
+            "el segundo",
+            llm.Intent(
+                intencion="consulta_precio",
+                producto="Laptop Ultraligera",
+                confianza=0.95,
+            ),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("Teclado Mecánico", body)
+        self.assertNotIn("Laptop Ultraligera", body)
+
+    def test_esos_relists_the_same_products_without_inventing(self):
+        self._turn(
+            "¿Qué accesorios tienes?",
+            llm.Intent(intencion="consulta_dato", confianza=0.95),
+        )
+        self._turn(
+            "¿cuánto cuestan esos?",
+            llm.Intent(intencion="consulta_precio", confianza=0.95),
+        )
+        body = self._outbound()[-1]
+        for name in ("Mouse Inalámbrico", "Teclado Mecánico", "Audífonos Bluetooth"):
+            self.assertIn(name, body)
+        self.assertNotIn("Laptop Ultraligera", body)
+
+    def test_a_catalog_question_labelled_otro_still_lists(self):
+        # El NLU puede devolver `otro` para "¿qué accesorios tienes?". El
+        # catálogo es una lectura real: no debe caer al compositor.
+        compose = AsyncMock(return_value="Cuadra no tiene accesorios")
+        with patch("cuadra.ai.llm.compose", new=compose):
+            self._turn(
+                "¿Qué accesorios tienes?",
+                llm.Intent(intencion="otro", confianza=0.9),
+            )
+        body = self._outbound()[-1]
+        for name in ("Mouse Inalámbrico", "Teclado Mecánico", "Audífonos Bluetooth"):
+            self.assertIn(name, body)
+        self.assertNotIn("no tiene accesorios", body)
+        self.assertEqual(compose.await_count, 0)
+        self.assertEqual(self._context().get("last_listing")["product_ids"], [3, 4, 5])
+
+    def test_el_segundo_labelled_otro_uses_the_listing(self):
+        self._turn(
+            "¿Qué accesorios tienes?",
+            llm.Intent(intencion="otro", confianza=0.9),
+        )
+        compose = AsyncMock(return_value="inventado")
+        with patch("cuadra.ai.llm.compose", new=compose):
+            self._turn(
+                "El segundo me interesa",
+                llm.Intent(intencion="otro", confianza=0.9),
+            )
+        body = self._outbound()[-1]
+        self.assertIn("Teclado Mecánico", body)
+        self.assertNotIn("Mouse Inalámbrico", body)
+        self.assertEqual(compose.await_count, 0)
+
+    def test_a_catalog_request_during_a_sale_keeps_the_sale(self):
+        self._set_context(
+            {
+                "stage": "CAPTURE_DATA",
+                "product_id": 2,
+                "sale_qty": 1,
+                "sale_qty_product_id": 2,
+            }
+        )
+        self._turn(
+            "¿Qué accesorios tienes?",
+            llm.Intent(intencion="consulta_dato", confianza=0.95),
+        )
+        body = self._outbound()[-1]
+        self.assertIn("Mouse Inalámbrico", body)
+        context = self._context()
+        self.assertEqual(context.get("stage"), "CAPTURE_DATA")
+        self.assertEqual(context.get("product_id"), 2)
+        self.assertEqual(context.get("sale_qty"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

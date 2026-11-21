@@ -47,7 +47,13 @@ _FILLER = {
 }
 
 
-def detect(reply: str | None, product_id: int | None = None) -> dict | None:
+def detect(
+    reply: str | None,
+    product_id: int | None = None,
+    *,
+    product_ids: list[int] | None = None,
+    query: str = "",
+) -> dict | None:
     """Return the offer the bot just made, if any."""
     text = reply or ""
     for kind, pattern in (
@@ -56,7 +62,12 @@ def detect(reply: str | None, product_id: int | None = None) -> dict | None:
         (SIBLINGS, _SIBLINGS),
     ):
         if pattern.search(text):
-            return {"kind": kind, "product_id": product_id}
+            offer = {"kind": kind, "product_id": product_id}
+            if product_ids:
+                offer["product_ids"] = [int(value) for value in product_ids]
+            if query:
+                offer["query"] = query
+            return offer
     return None
 
 

@@ -327,6 +327,28 @@ def _format_product_table(products: list[dict]) -> str:
     return "```\n" + "\n".join(lines).rstrip() + "\n```"
 
 
+def _remember_listing(
+    context: dict,
+    products: list[dict],
+    *,
+    query: str,
+    kind: str,
+) -> None:
+    """Persist the listing so "esos" and "el segundo" survive the turn."""
+    from cuadra.ai.turn.frame import Listing
+
+    if not products:
+        return
+    listing = Listing(
+        product_ids=[int(product["id"]) for product in products],
+        labels=[str(product.get("name") or "") for product in products],
+        query=query or "",
+        kind=kind,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    context["last_listing"] = listing.as_dict()
+
+
 def _render_catalog_table(
     conn,
     conversation,
@@ -340,6 +362,7 @@ def _render_catalog_table(
         # "quiero 3 laptops": la cantidad se conserva para cuando elija una.
         context["sale_qty"] = int(quantity)
         context["sale_qty_product_id"] = None
+    _remember_listing(context, products, query=category, kind="table")
     guard_context = _guard_context(
         None, None, context, extra_products=products
     )
@@ -363,6 +386,9 @@ def _render_siblings(
         return prompts.template_variant(
             "siblings_none", context, producto=product["name"]
         )
+    _remember_listing(
+        context, alternatives, query=product["name"], kind="siblings"
+    )
     first = alternatives[0]
     segunda = ""
     if len(alternatives) > 1:
@@ -393,28 +419,22 @@ def _category_listing(
     """
     # El texto del cliente manda: el NLU puede repetir un producto concreto
     # ("Monitor LED 24") en una pregunta que en realidad pide la categoría
-    # ("¿qué laptops tienes?"). Sus términos se prueban primero y los del NLU
-    # solo cubren sinónimos que no aparezcan en el mensaje.
-    query = (intent.producto or "").strip()
-    terms = list(catalog.category_terms(text))
-    for word in catalog.category_terms(query) if query else []:
-        if word not in terms:
-            terms.append(word)
-    for word in terms:
-        if len(word) < 4:
-            continue
-        products = catalog.category_products(conn, word, limit=_TABLE_LIMIT)
-        if not products:
-            continue
-        return _render_catalog_table(
-            conn,
-            conversation,
-            context,
-            word,
-            products,
-            quantity=intent.cantidad,
-        )
-    return None
+    # ("¿qué laptops tienes?").
+    query = (text or "").strip() or (intent.producto or "").strip()
+    if not query:
+        return None
+    found = catalog.search_catalog(conn, query, limit=_TABLE_LIMIT)
+    products = found.get("products") or []
+    if not products:
+        return None
+    return _render_catalog_table(
+        conn,
+        conversation,
+        context,
+        found.get("match_term") or query,
+        products,
+        quantity=intent.cantidad,
+    )
 
 
 def _is_generic_detail_label(value: str) -> bool:

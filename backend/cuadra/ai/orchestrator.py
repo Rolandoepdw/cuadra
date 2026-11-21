@@ -9,13 +9,14 @@ from cuadra.ai import grounding, llm, memory, offers, prompts, tracing
 from cuadra.ai.context import build_nlu_messages
 from cuadra.ai.tools import base as tools_base
 from cuadra.ai.tools import catalog as catalog_tools
-from cuadra.domain import conversations, events, turns
+from cuadra.domain import catalog, conversations, events, turns
 
 log = logging.getLogger("cuadra.orchestrator")
 
 from cuadra.ai.turn.constants import (
     LOW_CONFIDENCE,
     _SALE_STAGES,
+    _TABLE_LIMIT,
 )
 
 from cuadra.ai.turn.composer import (
@@ -81,6 +82,71 @@ def _turn_text(messages: list[dict]) -> str:
         elif message["type"] == "audio":
             parts.append("[audio]")
     return "\n".join(parts).strip()
+
+
+def _evidence_availability(products: list[dict]) -> str | None:
+    """`out_of_stock` only when every product read is unavailable."""
+    if not products:
+        return None
+    if all(catalog.availability_of(product) != "in_stock" for product in products):
+        return "out_of_stock"
+    return None
+
+
+def _catalog_evidence(
+    conn,
+    *,
+    catalog_read: dict | None,
+    listing_before,
+    listing_after,
+    product: dict | None,
+) -> list[dict]:
+    """Reads that back this turn's reply (doc 14 §8.2).
+
+    Grounding only needs to know which reads happened and whether they were
+    empty; the reply is never rewritten from here.
+    """
+    evidence: list[dict] = []
+    if catalog_read is not None:
+        products = catalog_read.get("products") or []
+        evidence.append(
+            {
+                "tool": "catalog.search",
+                "query": catalog_read.get("query") or "",
+                "product_ids": [int(item["id"]) for item in products],
+                "empty_reason": catalog_read.get("empty_reason"),
+                "availability": _evidence_availability(products),
+            }
+        )
+    if listing_after and listing_after != listing_before:
+        ids = [int(value) for value in listing_after.get("product_ids") or []]
+        products = []
+        for product_id in ids:
+            try:
+                products.append(catalog.get_product(conn, product_id))
+            except catalog.NotFound:
+                continue
+        evidence.append(
+            {
+                "tool": "catalog.list_category",
+                "query": listing_after.get("query") or "",
+                "product_ids": [int(item["id"]) for item in products],
+                "empty_reason": None if products else "no_match",
+                "availability": _evidence_availability(products),
+            }
+        )
+    if product is not None:
+        evidence.append(
+            {
+                "tool": "catalog.get",
+                "product_id": int(product["id"]),
+                "product_ids": [int(product["id"])],
+                "empty_reason": None,
+                "availability": catalog.availability_of(product),
+                "stock": catalog.available_units(product),
+            }
+        )
+    return evidence
 
 
 async def _classify(conn, conversation, messages: list[dict], text: str, message_id):
@@ -401,8 +467,15 @@ async def run_turn(conn, conversation, turn: dict) -> dict:
     # Prueba #8: una petición de catálogo ("qué productos tienes de accesorios")
     # no es una pregunta sobre el producto del turno anterior ni sobre una venta
     # ya entregada. Se resuelve con la categoría real y no hereda el producto.
+    catalog_read = (
+        catalog.search_catalog(conn, text, limit=_TABLE_LIMIT)
+        if _catalog_request(text)
+        else None
+    )
     category_request = (
-        _category_request(conn, intent, text) if _catalog_request(text) else None
+        _category_request(conn, intent, text, found=catalog_read)
+        if catalog_read is not None
+        else None
     )
     if category_request is not None:
         kind, payload = category_request
@@ -459,6 +532,31 @@ async def run_turn(conn, conversation, turn: dict) -> dict:
     reference = resolve_reference(text, frame)
     if reference is not None:
         frame.references.append(reference)
+        # L3.1: "el segundo", "esos", "el mismo" and "el de antes" win over the
+        # product remembered from the previous turn. An explicit id or a named
+        # product still wins over the reference.
+        override = reference.kind == "ordinal" or product_source in ("", "context")
+        if (
+            reference.product_id
+            and override
+            and previous_stage not in _SALE_STAGES
+        ):
+            try:
+                referenced = catalog.get_product(conn, reference.product_id)
+            except catalog.NotFound:
+                referenced = None
+            if referenced is not None:
+                product = referenced
+                product_source = "reference"
+                frame.focus_product = product
+                frame.focus_source = product_source
+                memory.capture_facts(
+                    conn,
+                    conversation,
+                    text,
+                    product=product,
+                    source_message_id=last_message_id,
+                )
     tracing.trace_call(
         "orchestrator.resolve",
         {"text": text, "stage": previous_stage},
@@ -487,6 +585,7 @@ async def run_turn(conn, conversation, turn: dict) -> dict:
     )
 
     decide_started = time.perf_counter()
+    listing_before = context.get("last_listing")
     sale = None
     sale_qty = None
     clear_product = False
@@ -578,6 +677,7 @@ async def run_turn(conn, conversation, turn: dict) -> dict:
             last_text=text,
             product_source=product_source,
             category_request=category_request,
+            reference=reference,
         )
         stage = _stage_for(context, intent, product, escalate)
         # Prueba #8: tras una venta entregada, un listado de catálogo abre una
@@ -589,6 +689,14 @@ async def run_turn(conn, conversation, turn: dict) -> dict:
             if category_request[0] == "list" and previous_stage not in _SALE_STAGES:
                 clear_product = True
     compose_ms = int((time.perf_counter() - compose_started) * 1000)
+    listing_after = context.get("last_listing")
+    frame.evidence = _catalog_evidence(
+        conn,
+        catalog_read=catalog_read,
+        listing_before=listing_before,
+        listing_after=listing_after,
+        product=product,
+    )
 
     tracing.trace_call(
         "orchestrator.decide",
@@ -653,7 +761,15 @@ async def run_turn(conn, conversation, turn: dict) -> dict:
     supplier_id = product["supplier_id"] if (escalate and product) else None
 
     # La oferta de este turno queda disponible solo para el siguiente.
-    next_offer = offers.detect(reply, product["id"] if product else None)
+    turn_listing = (
+        listing_after if listing_after and listing_after != listing_before else {}
+    )
+    next_offer = offers.detect(
+        reply,
+        product["id"] if product else None,
+        product_ids=turn_listing.get("product_ids"),
+        query=turn_listing.get("query") or "",
+    )
     offers.save(context, next_offer)
     frame.pending_offer = next_offer
 

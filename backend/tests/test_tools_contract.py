@@ -210,7 +210,7 @@ class CatalogToolsTests(unittest.TestCase):
             conn.close()
         self.assertTrue(result.ok)
         self.assertEqual(result.source, "catalog.search")
-        ids = {row["id"] for row in result.data}
+        ids = {row["id"] for row in result.data["products"]}
         self.assertIn(1, ids)
         self.assertIn(2, ids)
         self.assertTrue(result.evidence)
@@ -222,8 +222,8 @@ class CatalogToolsTests(unittest.TestCase):
         finally:
             conn.close()
         self.assertTrue(result.ok)
-        self.assertEqual(result.data, [])
-        self.assertEqual(result.empty_reason, "no_match")
+        self.assertEqual(result.data["products"], [])
+        self.assertEqual(result.empty_reason, "no_category")
 
     def test_get_missing_product_is_not_found(self):
         conn = self._conn()
@@ -250,7 +250,13 @@ class CatalogToolsTests(unittest.TestCase):
         catalog_tools.register(registry)
         names = {spec.name for spec in registry.specs()}
         self.assertEqual(
-            names, {"catalog.search", "catalog.get", "catalog.list_category"}
+            names,
+            {
+                "catalog.search",
+                "catalog.get",
+                "catalog.list_category",
+                "catalog.check_stock",
+            },
         )
         self.assertTrue(all(spec.permission == base.READ for spec in registry.specs()))
 

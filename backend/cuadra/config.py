@@ -178,6 +178,11 @@ AGENT_TURN_WATCHDOG_S = float(
 )
 # Tool contract: `off` keeps the deterministic route in charge.
 AGENT_TOOLS_MODE = os.environ.get("CUADRA_AGENT_TOOLS_MODE", "off").strip().lower()
+# Per-domain gate (doc 15 §5): catalog reads are deterministic in L3.1; the
+# key only controls whether the model may propose them in L3.6.
+AGENT_TOOLS_CATALOG_MODE = os.environ.get(
+    "CUADRA_AGENT_TOOLS_CATALOG_MODE", "off"
+).strip().lower()
 AGENT_TOOLS_CACHE_TTL_S = float(
     os.environ.get("CUADRA_AGENT_TOOLS_CACHE_TTL_S", "0")
 )

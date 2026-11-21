@@ -238,6 +238,18 @@ class Registry:
             ]
             if not data:
                 empty_reason = empty_reason or "no_match"
+        elif isinstance(data, dict) and isinstance(data.get("products"), list):
+            evidence = [
+                {
+                    "id": row.get("id"),
+                    "availability": row.get("availability"),
+                    "stock": row.get("stock"),
+                }
+                for row in data["products"]
+                if isinstance(row, dict) and row.get("id")
+            ]
+            if not data["products"]:
+                empty_reason = empty_reason or data.get("empty_reason") or "no_match"
         elif isinstance(data, dict) and data.get("id"):
             evidence = [{"id": data["id"]}]
         return ToolResult(

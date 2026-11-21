@@ -835,9 +835,105 @@ def list_products(
         args += [f"%{q}%", f"%{q}%"]
     if where:
         sql += " WHERE " + " AND ".join(where)
-    return _attach_product_zones(
+    products = _attach_product_zones(
         conn, [dict(r) for r in conn.execute(sql + " ORDER BY p.id", args)]
     )
+    return _attach_product_categories(conn, products)
+
+
+def product_category_ids(conn, product_id: int) -> list[int]:
+    """Every category of a product, primary first (024 bridge table)."""
+    rows = conn.execute(
+        """SELECT category_id FROM product_categories
+           WHERE product_id = ?
+           ORDER BY is_primary DESC, category_id""",
+        (product_id,),
+    ).fetchall()
+    return [int(row["category_id"]) for row in rows]
+
+
+def product_category_names(conn, product_id: int) -> list[str]:
+    """Category names of a product, primary first."""
+    rows = conn.execute(
+        """SELECT c.name FROM product_categories pc
+           JOIN categories c ON c.id = pc.category_id
+           WHERE pc.product_id = ?
+           ORDER BY pc.is_primary DESC, c.name""",
+        (product_id,),
+    ).fetchall()
+    return [str(row["name"]) for row in rows]
+
+
+def _attach_product_categories(conn, products: list[dict]) -> list[dict]:
+    """Add `categories` to a batch of products with one query."""
+    if not products:
+        return products
+    ids = [int(product["id"]) for product in products]
+    marks = ", ".join("?" for _ in ids)
+    names: dict[int, list[str]] = {product_id: [] for product_id in ids}
+    for row in conn.execute(
+        f"""SELECT pc.product_id, c.name FROM product_categories pc
+            JOIN categories c ON c.id = pc.category_id
+            WHERE pc.product_id IN ({marks})
+            ORDER BY pc.is_primary DESC, c.name""",
+        ids,
+    ):
+        names[int(row["product_id"])].append(str(row["name"]))
+    for product in products:
+        product["categories"] = names[int(product["id"])]
+    return products
+
+
+def _sync_product_categories(
+    conn,
+    product_id: int,
+    *,
+    category_ids: list[int] | None = None,
+    category_id: int | None = None,
+) -> int | None:
+    """Write the bridge rows; returns the primary category id.
+
+    - `category_ids` replaces the whole set (the primary is `category_id` when
+      it belongs to the set, otherwise the first id).
+    - `category_id` alone only moves the primary flag and keeps the rest.
+    """
+    if category_ids is not None:
+        ids: list[int] = []
+        for value in category_ids:
+            cid = int(value)
+            if cid not in ids:
+                ids.append(cid)
+        for cid in ids:
+            _exists(conn, "categories", cid, "category")
+        primary = (
+            int(category_id)
+            if category_id is not None and int(category_id) in ids
+            else (ids[0] if ids else None)
+        )
+        conn.execute(
+            "DELETE FROM product_categories WHERE product_id = ?", (product_id,)
+        )
+        for cid in ids:
+            conn.execute(
+                """INSERT INTO product_categories
+                   (product_id, category_id, is_primary) VALUES (?, ?, ?)""",
+                (product_id, cid, 1 if cid == primary else 0),
+            )
+        return primary
+    if category_id is not None:
+        _exists(conn, "categories", category_id, "category")
+        conn.execute(
+            "UPDATE product_categories SET is_primary = 0 WHERE product_id = ?",
+            (product_id,),
+        )
+        conn.execute(
+            """INSERT INTO product_categories (product_id, category_id, is_primary)
+               VALUES (?, ?, 1)
+               ON CONFLICT(product_id, category_id) DO UPDATE SET is_primary = 1""",
+            (product_id, int(category_id)),
+        )
+        return int(category_id)
+    return None
 
 
 def _attach_product_zones(conn, products: list[dict]) -> list[dict]:
@@ -865,6 +961,7 @@ def get_product(conn, product_id: int) -> dict:
     product = dict(row)
     product["specifications"] = json.loads(product.get("specifications_json") or "{}")
     product["delivery_zone_ids"] = product_zone_ids(conn, product_id)
+    product["categories"] = product_category_names(conn, product_id)
     product["images"] = [
         dict(r)
         for r in conn.execute(
@@ -958,6 +1055,18 @@ def create_product(conn, data: dict) -> dict:
     cur = conn.execute(
         f"INSERT INTO products ({cols}) VALUES ({marks})", tuple(fields.values())
     )
+    primary = _sync_product_categories(
+        conn,
+        cur.lastrowid,
+        category_ids=data.get("category_ids"),
+        category_id=fields.get("category_id"),
+    )
+    if data.get("category_ids") is not None and fields.get("category_id") is None:
+        # The first category of the set becomes the product's primary one.
+        conn.execute(
+            "UPDATE products SET category_id = ? WHERE id = ?",
+            (primary, cur.lastrowid),
+        )
     if data.get("delivery_zone_ids") is not None:
         set_product_zones(conn, cur.lastrowid, data["delivery_zone_ids"])
     events.log(
@@ -976,13 +1085,30 @@ def update_product(conn, product_id: int, data: dict) -> dict:
     product = _get(conn, "products", product_id, "product")
     fields = _validate_product_fields(conn, data, partial=True)
     zone_ids = data["delivery_zone_ids"] if "delivery_zone_ids" in data else None
-    _require(bool(fields) or zone_ids is not None, "nothing to update")
+    categories_changed = "category_ids" in data or "category_id" in data
+    _require(
+        bool(fields) or zone_ids is not None or categories_changed,
+        "nothing to update",
+    )
     if fields:
         clause, values = _set_clause(fields)
         conn.execute(
             f"UPDATE products SET {clause}, updated_at = ? WHERE id = ?",
             (*values, _now(), product_id),
         )
+    if categories_changed:
+        primary = _sync_product_categories(
+            conn,
+            product_id,
+            category_ids=data.get("category_ids"),
+            category_id=data.get("category_id"),
+        )
+        if "category_ids" in data and "category_id" not in data:
+            # Keep `products.category_id` aligned with the new primary.
+            conn.execute(
+                "UPDATE products SET category_id = ?, updated_at = ? WHERE id = ?",
+                (primary, _now(), product_id),
+            )
     if zone_ids is not None:
         set_product_zones(conn, product_id, zone_ids)
     events.log(
@@ -1305,6 +1431,349 @@ def category_terms(text: str) -> list[str]:
     return _words(text)
 
 
+# ------------------------------------------------- deterministic catalog search
+# L3.1: the listing is a real read, multi-category and with provenance. The
+# model never ranks products; this function is the only judge.
+_SEARCH_STOPWORDS = _STOPWORDS | {
+    "tienes", "tiene", "tienen", "tenga", "tengas", "hay", "haber",
+    "producto", "productos", "dame", "lista", "listado", "listar",
+    "busco", "buscando", "buscar", "quiero", "quiere", "necesito",
+    "muestrame", "mostrar", "vende", "vendes", "venden", "maneja",
+    "manejan", "algo", "algun", "alguna", "algunos", "algunas",
+    "sobre", "tipo", "tipos", "modelo", "modelos", "cuanto", "cuanta",
+    "cuesta", "cuestan", "precio", "precios", "disponible",
+    "disponibles", "ver", "muestra", "ensenar", "ensename",
+}
+
+
+def _search_words(text: str) -> list[str]:
+    """Normalized content words, singular and in the customer's order."""
+    cleaned = "".join(c if c.isalnum() else " " for c in _fold(text))
+    words: list[str] = []
+    for word in cleaned.split():
+        if len(word) <= 2 or word in _SEARCH_STOPWORDS:
+            continue
+        word = _singular(word)
+        if word and word not in words:
+            words.append(word)
+    return words
+
+
+def _singular_tokens(text: str) -> set[str]:
+    return {_singular(token) for token in _tokens(text or "")}
+
+
+def _category_index(conn) -> list[dict]:
+    index = []
+    for row in conn.execute("SELECT id, name FROM categories ORDER BY id"):
+        words = {_singular(part) for part in _words(row["name"])}
+        words.add(_fold(row["name"]))
+        index.append(
+            {"id": int(row["id"]), "name": str(row["name"]), "words": words}
+        )
+    return index
+
+
+def available_units(product: dict) -> int:
+    return max(
+        0,
+        int(product.get("stock") or 0) - int(product.get("stock_reserved") or 0),
+    )
+
+
+def availability_of(product: dict) -> str:
+    if product.get("status") == "PAUSED":
+        return "paused"
+    if product.get("status") == "OUT_OF_STOCK" or available_units(product) <= 0:
+        return "out_of_stock"
+    return "in_stock"
+
+
+def product_highlights(product: dict, *, max_chars: int = 160) -> str:
+    """Short, mobile-friendly summary used by listings and tool output."""
+    parts: list[str] = []
+    available = available_units(product)
+    if available <= 0:
+        parts.append("agotado")
+    elif available == 1:
+        parts.append("última unidad")
+    description = (product.get("description") or "").strip()
+    if description:
+        first = description.splitlines()[0].strip()
+        if first:
+            parts.append(first)
+    for key, value in customer_specifications(product).items():
+        parts.append(f"{key}: {value}")
+    return ", ".join(parts)[:max_chars].rstrip()
+
+
+def _category_product_count(conn, category_id: int, statuses: tuple[str, ...]) -> int:
+    marks = ", ".join("?" for _ in statuses)
+    row = conn.execute(
+        f"""SELECT COUNT(*) AS total FROM products p
+            JOIN product_categories pc ON pc.product_id = p.id
+            WHERE pc.category_id = ? AND p.status IN ({marks})""",
+        (category_id, *statuses),
+    ).fetchone()
+    return int(row["total"] or 0)
+
+
+def _pick_category(
+    index: list[dict],
+    words: list[str],
+    hint_words: list[str],
+    conn,
+    statuses: tuple[str, ...],
+) -> dict | None:
+    """Most specific category covered by the query; ties by size and id."""
+    query = set(words)
+    candidates = index
+    if hint_words:
+        hinted = [cat for cat in candidates if cat["words"] & set(hint_words)]
+        if hinted:
+            candidates = hinted
+    scored = []
+    for category in candidates:
+        covered = category["words"] & query
+        if not covered:
+            continue
+        scored.append(
+            (
+                len(covered),
+                _category_product_count(conn, category["id"], statuses),
+                category,
+            )
+        )
+    if not scored:
+        return None
+    # More query words covered first; then the narrower category; then id.
+    scored.sort(key=lambda item: (-item[0], item[1], item[2]["id"]))
+    return scored[0][2]
+
+
+def _products_in_categories(
+    conn, category_ids: list[int], statuses: tuple[str, ...]
+) -> list[dict]:
+    marks = ", ".join("?" for _ in category_ids)
+    status_marks = ", ".join("?" for _ in statuses)
+    rows = conn.execute(
+        f"""SELECT DISTINCT p.* FROM products p
+            JOIN product_categories pc ON pc.product_id = p.id
+            WHERE pc.category_id IN ({marks}) AND p.status IN ({status_marks})""",
+        (*category_ids, *statuses),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _narrow_by_qualifiers(products: list[dict], qualifiers: list[str]) -> list[dict]:
+    """Apply the remaining words only when they match something real.
+
+    "accesorios para laptop" must not drop the accessories because their names
+    do not say "laptop": the qualifier describes compatibility, not a filter.
+    """
+    if not qualifiers:
+        return products
+    matched = []
+    for product in products:
+        corpus = " ".join(
+            [
+                str(product.get("name") or ""),
+                str(product.get("description") or ""),
+                " ".join(product.get("categories") or []),
+            ]
+        )
+        tokens = _tokens(corpus)
+        if any(_word_matches(qualifier, tokens) for qualifier in qualifiers):
+            matched.append(product)
+    return matched or products
+
+
+def _score_and_sort(
+    result: dict,
+    products: list[dict],
+    winner: dict | None,
+    words: list[str],
+    limit: int,
+) -> dict:
+    query = set(words)
+    folded_query = " ".join(words)
+    scored = []
+    for product in products:
+        corpus = " ".join(
+            [
+                str(product.get("name") or ""),
+                str(product.get("description") or ""),
+                " ".join(product.get("categories") or []),
+            ]
+        )
+        tokens = _singular_tokens(corpus)
+        relevance = len(query & tokens) / len(query) if query else 0.0
+        name_tokens = _singular_tokens(str(product.get("name") or ""))
+        union = query | name_tokens
+        name_overlap = len(query & name_tokens) / len(union) if union else 0.0
+        phrase = (
+            1.0
+            if folded_query and folded_query in _fold(str(product.get("name") or ""))
+            else 0.0
+        )
+        score = 0.60 * relevance + 0.25 * name_overlap + 0.10 * phrase
+        available = available_units(product)
+        categories = product.get("categories") or []
+        primary = (
+            0
+            if winner is not None
+            and categories
+            and _fold(categories[0]) == _fold(winner["name"])
+            else 1
+        )
+        product["match_score"] = round(score, 4)
+        product["availability"] = availability_of(product)
+        product["available_stock"] = available
+        product["highlights"] = product_highlights(product)
+        scored.append((score, available, primary, int(product["id"]), product))
+
+    # Relevance first; availability only breaks ties, it never adds a product.
+    scored.sort(
+        key=lambda item: (
+            -item[0],
+            0 if item[1] > 0 else 1,
+            item[2],
+            item[3],
+        )
+    )
+    result["products"] = [item[4] for item in scored[:limit]]
+    if not result["products"]:
+        result["empty_reason"] = "no_match"
+    return result
+
+
+def search_catalog(
+    conn,
+    query: str,
+    *,
+    limit: int = 10,
+    include_out_of_stock: bool = True,
+    category_hint: str | None = None,
+) -> dict:
+    """Deterministic, multi-category catalog search (L3.1).
+
+    Returns `{query, products, matched_categories, empty_reason, match_kind,
+    match_term, qualifiers}`. Products carry `categories`, `availability`,
+    `available_stock` and `highlights`. Never fills a listing with products
+    from another category: if four match, four are returned.
+    """
+    query = (query or "").strip()
+    limit = max(1, min(10, int(limit)))
+    statuses = (
+        ("ACTIVE", "OUT_OF_STOCK") if include_out_of_stock else ("ACTIVE",)
+    )
+    words = _search_words(query)
+    hint_words = _search_words(category_hint or "")
+    result = {
+        "query": query,
+        "products": [],
+        "matched_categories": [],
+        "empty_reason": None,
+        "match_kind": "",
+        "match_term": "",
+        "qualifiers": [],
+    }
+    if not words:
+        result["empty_reason"] = "no_match"
+        return result
+
+    index = _category_index(conn)
+    winner = _pick_category(index, words, hint_words, conn, statuses)
+    if winner is not None:
+        query_set = set(words)
+        siblings = []
+        for category in index:
+            if category["id"] == winner["id"]:
+                continue
+            if not (category["words"] & winner["words"]):
+                continue
+            # "motos eléctricas" must not pull the combustion bikes in.
+            if (winner["words"] - category["words"]) & query_set:
+                continue
+            siblings.append(category)
+        family = [winner, *siblings]
+        products = _products_in_categories(
+            conn,
+            [category["id"] for category in family],
+            ("ACTIVE", "OUT_OF_STOCK", "PAUSED"),
+        )
+        result["matched_categories"] = [category["name"] for category in family]
+        result["match_kind"] = "category"
+        result["match_term"] = winner["name"]
+        if not products:
+            result["empty_reason"] = "category_empty"
+            return result
+        products = [product for product in products if product["status"] in statuses]
+        if not include_out_of_stock:
+            products = [
+                product for product in products if available_units(product) > 0
+            ]
+        if not products:
+            result["empty_reason"] = "no_match"
+            return result
+        category_words: set[str] = set()
+        for category in family:
+            category_words |= category["words"]
+        qualifiers = [word for word in words if word not in category_words]
+        result["qualifiers"] = qualifiers
+        _attach_product_categories(conn, products)
+        products = _narrow_by_qualifiers(products, qualifiers)
+        return _score_and_sort(result, products, winner, words, limit)
+
+    # No real category: fall back to the product-name family ("laptops").
+    status_marks = ", ".join("?" for _ in statuses)
+    rows = conn.execute(
+        f"SELECT id, name FROM products WHERE status IN ({status_marks})",
+        statuses,
+    ).fetchall()
+    heads = []
+    for word in words:
+        if any(_name_head(row["name"]) == word for row in rows):
+            heads.append(word)
+    if not heads:
+        result["empty_reason"] = "no_category"
+        return result
+    ids = [int(row["id"]) for row in rows if _name_head(row["name"]) in heads]
+    marks = ", ".join("?" for _ in ids)
+    products = [
+        dict(row)
+        for row in conn.execute(
+            f"SELECT * FROM products WHERE id IN ({marks})", ids
+        )
+    ]
+    if not include_out_of_stock:
+        products = [product for product in products if available_units(product) > 0]
+    result["match_kind"] = "family"
+    result["match_term"] = heads[0]
+    qualifiers = [word for word in words if word not in heads]
+    result["qualifiers"] = qualifiers
+    _attach_product_categories(conn, products)
+    products = _narrow_by_qualifiers(products, qualifiers)
+    if not products:
+        result["empty_reason"] = "no_match"
+        return result
+    return _score_and_sort(result, products, None, words, limit)
+
+
+def check_stock(conn, product_id: int, quantity: int = 1) -> dict:
+    """Can the warehouse serve `quantity` units of this product right now?"""
+    product = get_product(conn, product_id)
+    available = available_units(product)
+    quantity = max(1, int(quantity))
+    return {
+        "product_id": product["id"],
+        "available": product["status"] == "ACTIVE" and available >= quantity,
+        "stock": available,
+        "status": product["status"],
+        "quantity": quantity,
+    }
+
+
 def narrow_products(
     products: list[dict], query: str, *, exclude: str = "", fallback: bool = True
 ) -> list[dict]:
@@ -1424,6 +1893,8 @@ def llm_product_json(conn, product: dict) -> dict:
         "moneda": product["currency"],
         "stock": product.get("stock"),
         "estado": product["status"],
+        "categorias": product.get("categories")
+        or product_category_names(conn, product["id"]),
         # Kept as text for the existing templates; the list is what the LLM uses.
         "zona_entrega": ", ".join(zonas) or supplier_zone,
         "zonas_entrega": zonas,
