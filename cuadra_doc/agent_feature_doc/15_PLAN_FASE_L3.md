@@ -2,7 +2,7 @@
 tipo: plan_implementacion
 proyecto: Cuadra
 modulo: agente_ia
-estado: L3.0 implementado — L3.1 implementado en rama, pendiente de revisión del dueño
+estado: L3.0 y L3.1 implementados y mergeados en main — sin push
 revisado: 2026-11-19
 tags: [plan, L3, orquestador, tools, catalogo, grounding, evaluacion]
 ---
@@ -493,8 +493,8 @@ pero la tool de cobertura es de L3.2.
 
 ### 5.9 Estado de implementación (2026-11-19)
 
-Implementado en la rama `feat/l3-0-orchestrator`, encima de `9bc5076`, sin
-commit ni push todavía.
+Implementado en `feat/l3-0-orchestrator` y mergeado a `main` (`8b52c14`),
+sin push todavía.
 
 **Datos y dominio:**
 
@@ -555,7 +555,7 @@ deja de aplicar en L3.1 porque el catálogo cambia a propósito.
 - Panel: selector múltiple de categorías con la primaria marcada aparte (§5.2).
   La API ya acepta `category_ids`; la pantalla sigue con un solo `category_id`.
 - Revisión del dueño: casos concretos que encontró en su prueba.
-- Commit de L3.1 y decisión de merge (sin push ni merge sin pedido explícito).
+- Push y decisión de hacer público el repositorio.
 
 ---
 
@@ -912,11 +912,11 @@ Un corte está terminado cuando:
 
 ## 18. Próximo paso inmediato
 
-L3.0 y L3.1 están implementados y verdes (553 tests). El dueño todavía no ha
-hecho commit de L3.1 ni ha decidido el merge.
+L3.0 y L3.1 están implementados, verdes (553 tests) y mergeados en `main`
+(`282ed4d`), sin push todavía.
 
 1. Revisión del dueño de L3.1: casos concretos que vio en su prueba.
-2. Commit de L3.1 en `feat/l3-0-orchestrator` (o rama nueva) y decisión de merge.
+2. Push de `main` y decisión sobre hacer público el repositorio.
 3. Con L3.1 cerrado, empezar L3.2 (ventas, ofertas, zonas y fechas):
    - tools `sales.status`, `sales.quote`, `delivery.coverage`, `delivery.date`;
    - grounding de estado de pedido, cobertura y fecha en `shadow` → `on`.

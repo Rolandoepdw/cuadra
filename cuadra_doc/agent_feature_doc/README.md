@@ -2,7 +2,7 @@
 tipo: indice
 proyecto: Cuadra
 modulo: agent_feature_doc
-estado: DISEÑO APROBADO — fases 0–5 implementadas; L3 en revisión
+estado: DISEÑO APROBADO — fases 0–5 implementadas; L3.0–L3.1 en main
 revisado: 2026-11-19
 aprobado: 2026-11-03
 tags: [indice, agente-ia, diseno-aprobado, revision, L3]
@@ -188,3 +188,7 @@ El plan está en `15_PLAN_FASE_L3.md` y la visión/decisiones en
 `14_VISION_Y_CAPACIDADES_DEL_AGENTE.md`. **L3.0 no cambia el comportamiento del
 bot**: extrae el orquestador y fija el contrato. Las capacidades nuevas empiezan en
 L3.1 (catálogo) y siguen ventas/zonas, memoria, escalaciones y conocimiento.
+
+**L3.1 ya está implementada y mergeada en `main`** (`8b52c14`): catálogo
+multi-categoría, ranking determinista, referencias («esos», «el segundo», «el de
+antes») y grounding de negaciones en `shadow`. La suite queda en **553 tests**.
