@@ -1,8 +1,8 @@
 -- =========================================================
 -- 005: conversation identity (which Telegram account replies)
 --
---   bot     = @CuadraHabanaBot (Bot API)
---   userbot = @REPDCuadra (Telethon)
+--   bot     = @cuadra_demo_bot (Bot API)
+--   userbot = @cuadra_demo_userbot (Telethon)
 --
 -- The identity that received the last inbound message is used to reply from
 -- the same account, so clients can talk to either one without duplicate or

@@ -1620,7 +1620,7 @@ class SaleFlowTests(Phase1TestCase):
                 (memory.FACT_ZONE, "San Miguel"),
                 (memory.FACT_ADDRESS, "Calle 10 numero 123"),
                 (memory.FACT_PHONE, "+5355500001"),
-                (memory.FACT_CUSTOMER_NAME, "Rolando"),
+                (memory.FACT_CUSTOMER_NAME, "Proveedor Tres"),
             ):
                 memory.upsert_fact(conn, 1, key, value)
         finally:
@@ -1766,7 +1766,7 @@ class SaleFlowTests(Phase1TestCase):
         data = llm.Intent(intencion="otro", confianza=0.1)
         with patch("cuadra.ai.llm.classify_light", new=AsyncMock(return_value=data)):
             self._ingest(
-                "soy de San Miguel, calle 10 numero 123, +5355500001, me llamo Rolando"
+                "soy de San Miguel, calle 10 numero 123, +5355500001, me llamo Proveedor Tres"
             )
             self._make_due()
             self._run_process()
@@ -2102,7 +2102,7 @@ class LogisticsZonePostSaleTests(Phase1TestCase):
                 customer_id=conversation["customer_id"],
                 product_id=1,
                 quantity=1,
-                recipient_name="Rolando",
+                recipient_name="Proveedor Tres",
                 delivery_zone="San Miguel",
                 delivery_address="Calle 10 numero 123",
                 customer_phone="+5355500001",
@@ -2315,7 +2315,7 @@ class ConversationPolishTests(Phase1TestCase):
                 (memory.FACT_ZONE, "San Miguel"),
                 (memory.FACT_ADDRESS, "Calle 10 numero 123"),
                 (memory.FACT_PHONE, "+5355500001"),
-                (memory.FACT_CUSTOMER_NAME, "Rolando"),
+                (memory.FACT_CUSTOMER_NAME, "Proveedor Tres"),
             ):
                 memory.upsert_fact(conn, conversation_id, key, value)
             return conversation_id
@@ -2342,7 +2342,7 @@ class ConversationPolishTests(Phase1TestCase):
                 customer_id=1,
                 product_id=1,
                 quantity=1,
-                recipient_name="Rolando",
+                recipient_name="Proveedor Tres",
                 delivery_zone="San Miguel",
                 delivery_address="Calle 10 numero 123",
                 customer_phone="+5355500001",
@@ -2588,7 +2588,7 @@ class ConversationPolishTests(Phase1TestCase):
 
     def test_soy_de_an_inactive_zone_is_rejected(self):
         self._turn(
-            "Perfecto, soy de la UCI, calle 45 entre 12 y Calixto, numero 1222, 56476666",
+            "Perfecto, soy de la UCI, calle 45 entre 12 y Calixto, numero 1222, 55500001",
             llm.Intent(
                 intencion="consulta_precio",
                 producto="Laptop Gamer",

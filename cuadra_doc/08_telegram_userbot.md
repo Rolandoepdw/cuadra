@@ -45,7 +45,7 @@ No pegues estos valores en `.env.example` ni en git.
 Con el core detenido:
 
 ```powershell
-cd C:\Rolando\AProjects\cuadra\backend
+cd C:\ruta\AProjects\cuadra\backend
 .\.venv\Scripts\python.exe scripts\telegram_login.py
 ```
 
@@ -61,7 +61,7 @@ Archivo: ...\backend\data\telegram_user.session
 ## 4. Arrancar y verificar
 
 ```powershell
-cd C:\Rolando\AProjects\cuadra
+cd C:\ruta\AProjects\cuadra
 .\start_cuadra.ps1 -Background
 ```
 
@@ -111,7 +111,7 @@ transcribe audio/imagen y responde por la misma cuenta:
 1. Detén el core:
 
    ```powershell
-   cd C:\Rolando\AProjects\cuadra
+   cd C:\ruta\AProjects\cuadra
    .\stop_cuadra.ps1 -CoreOnly
    ```
 

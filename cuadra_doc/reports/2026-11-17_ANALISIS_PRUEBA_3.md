@@ -29,7 +29,7 @@
 
 ## 2. Timeline real
 
-### 2.1 Conversación del cliente (`c1`, @rolandoepd)
+### 2.1 Conversación del cliente (`c1`, @cliente_demo)
 
 | # | Cliente | Bot | Veredicto |
 |---|---|---|---|
@@ -49,7 +49,7 @@
 | 33 | si | Vuelve a cotizar | **F8** |
 | — | — | «Entregado. ¡Gracias por confiar en Cuadra!» | Correcto (ya con el arreglo de acks) |
 
-### 2.2 Conversación del TCP (`c2`, @rolandopl)
+### 2.2 Conversación del TCP (`c2`, @proveedor_tres)
 
 | # | TCP | Efecto |
 |---|---|---|

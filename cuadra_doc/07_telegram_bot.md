@@ -47,7 +47,7 @@ Si el token se filtra: `/revoke`, copia el nuevo y actualiza `.env`.
 ## 4. Arrancar y verificar
 
 ```powershell
-cd C:\Rolando\AProjects\cuadra
+cd C:\ruta\AProjects\cuadra
 .\start_cuadra.ps1 -Background
 Invoke-RestMethod http://127.0.0.1:8321/api/health -Headers @{ "X-PIN" = "0000" }
 ```

@@ -1,19 +1,19 @@
-"""Seed reducido para test con TCP único: Rolando.
+"""Seed reducido para test con TCP único: Proveedor Tres.
 
 Crea en una BD fresca:
 - zonas activas de La Habana
-- un solo supplier/TCP: Rolando
-- productos de Rolando (catálogo reducido)
+- un solo supplier/TCP: Proveedor Tres
+- productos de Proveedor Tres (catálogo reducido)
 - (opcional) grupos de difusión con target real
 
 Los valores sensibles (telegram_id del supplier, target de grupos) se leen
-de `backend/data/seed_real_rolando.json`, que NO se sube a git. El script
+de `backend/data/seed_real_supplier.json`, que NO se sube a git. El script
 es idempotent: ejecutarlo dos veces solo reporta lo que ya existe.
 
 Usage:
-    .venv\\Scripts\\python.exe scripts/seed_rolando.py
-    .venv\\Scripts\\python.exe scripts/seed_rolando.py --dry-run
-    .venv\\Scripts\\python.exe scripts/seed_rolando.py --schedule now
+    .venv\\Scripts\\python.exe scripts/seed_single_supplier.py
+    .venv\\Scripts\\python.exe scripts/seed_single_supplier.py --dry-run
+    .venv\\Scripts\\python.exe scripts/seed_single_supplier.py --schedule now
 """
 
 import argparse
@@ -29,7 +29,7 @@ from cuadra import db
 # --------------------------------------------------------------------------
 # Ruta del archivo con datos sensibles (no versionado).
 # --------------------------------------------------------------------------
-REAL_DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "seed_real_rolando.json"
+REAL_DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "seed_real_supplier.json"
 
 # --------------------------------------------------------------------------
 # Zonas activas de La Habana (catalogo real, no inventado).
@@ -54,13 +54,13 @@ ZONES = [
 ]
 
 # --------------------------------------------------------------------------
-# Supplier unico: Rolando.
-# telegram_id se inyecta desde seed_real_rolando.json en tiempo de ejecucion.
+# Supplier unico: Proveedor Tres.
+# telegram_id se inyecta desde seed_real_supplier.json en tiempo de ejecucion.
 # --------------------------------------------------------------------------
 SUPPLIERS = [
     {
-        "name": "Rolando",
-        "business_alias": "El q no corre, se manda",
+        "name": "Proveedor Tres",
+        "business_alias": "Proveedor de prueba",
         "whatsapp_phone": "",
         "delivery_zone": "",
         "payment_terms": "",
@@ -111,18 +111,18 @@ GROUP_ZONES = {
 }
 
 SUPPLIER_DELIVERY_ZONES = [
-    ("Rolando", "Playa"),
-    ("Rolando", "La Lisa"),
-    ("Rolando", "Boyeros"),
-    ("Rolando", "San Miguel"),
-    ("Rolando", "Arroyo Naranjo"),
-    ("Rolando", "Cerro"),
-    ("Rolando", "Cotorro"),
-    ("Rolando", "Diez de Octubre"),
-    ("Rolando", "Guanabacoa"),
-    ("Rolando", "Marianao"),
-    ("Rolando", "Plaza de la Revolución"),
-    ("Rolando", "Regla"),
+    ("Proveedor Tres", "Playa"),
+    ("Proveedor Tres", "La Lisa"),
+    ("Proveedor Tres", "Boyeros"),
+    ("Proveedor Tres", "San Miguel"),
+    ("Proveedor Tres", "Arroyo Naranjo"),
+    ("Proveedor Tres", "Cerro"),
+    ("Proveedor Tres", "Cotorro"),
+    ("Proveedor Tres", "Diez de Octubre"),
+    ("Proveedor Tres", "Guanabacoa"),
+    ("Proveedor Tres", "Marianao"),
+    ("Proveedor Tres", "Plaza de la Revolución"),
+    ("Proveedor Tres", "Regla"),
 ]
 
 # --------------------------------------------------------------------------
@@ -138,12 +138,12 @@ CATEGORIES = [
 ]
 
 # --------------------------------------------------------------------------
-# Productos: solo de Rolando.
+# Productos: solo de Proveedor Tres.
 # --------------------------------------------------------------------------
 DEMO_PRODUCTS = [
     {
         "name": "Laptop Empresarial",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "tecnología",
         "description": "Lenovo ThinkPad\ni5 11va gen\n16GB RAM\n512GB SSD",
         "price": 350.0,
@@ -154,7 +154,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Laptop Ultraligera",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "tecnología",
         "description": "ASUS ZenBook\nRyzen 7\n16GB RAM\n1TB SSD",
         "price": 720.0,
@@ -165,7 +165,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Monitor LED 24",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "tecnología",
         "description": 'Monitor LED 24"\nFull HD 75Hz\nHDMI + VGA',
         "price": 180.0,
@@ -176,7 +176,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Tablet Android 10",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "tecnología",
         "description": "Tablet 10 pulgadas\n4GB RAM\n64GB almacenamiento",
         "price": 220.0,
@@ -187,7 +187,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Aspiradora Portátil",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "hogar",
         "description": "Aspiradora portátil\n1200W\nfiltro HEPA",
         "price": 95.0,
@@ -198,7 +198,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Freidora de Aire",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "hogar",
         "description": "Freidora de aire 5L\n1500W",
         "price": 130.0,
@@ -209,7 +209,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "PC de Escritorio Ryzen 5",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "computación",
         "description": "Ryzen 5 5600G\n16GB RAM\n512GB SSD",
         "price": 480.0,
@@ -220,7 +220,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Impresora Multifuncional",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "computación",
         "description": "Impresora multifuncional\nWiFi + USB",
         "price": 210.0,
@@ -231,7 +231,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Mouse Inalámbrico",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "accesorios",
         "description": "Mouse inalámbrico 2.4GHz\nreceptor USB",
         "price": 15.0,
@@ -242,7 +242,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Teclado Mecánico",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "accesorios",
         "description": "Teclado mecánico RGB\nswitch azul",
         "price": 45.0,
@@ -253,7 +253,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Audífonos Bluetooth",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "accesorios",
         "description": "Audífonos Bluetooth 5.3",
         "price": 35.0,
@@ -264,7 +264,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Combo Personalizado",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": None,
         "description": "Combo armado a pedido\ncliente elige los productos",
         "price": 60.0,
@@ -275,7 +275,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Laptop Gamer RTX 4060",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "tecnología",
         "description": "Laptop gaming\nRTX 4060\n16GB RAM\n1TB SSD",
         "price": 1100.0,
@@ -286,7 +286,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Router WiFi 6",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "tecnología",
         "description": "Router WiFi 6\ndual band\n4 antenas",
         "price": 90.0,
@@ -654,7 +654,7 @@ def compute_schedule_mode(requested: str, existing_broadcasts: int) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Seed reducido: solo TCP Rolando para test individual"
+        description="Seed reducido: solo TCP Proveedor Tres para test individual"
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would be created without writing"

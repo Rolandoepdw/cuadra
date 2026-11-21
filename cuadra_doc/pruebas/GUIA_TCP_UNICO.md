@@ -1,9 +1,9 @@
-# Guía del TCP (Rolando) — Test con cliente único
+# Guía del TCP (Proveedor Tres) — Test con cliente único
 
 ## Cuenta
 | Rol | Cuenta | Peer ID |
 |-----|--------|---------|
-| TCP / Proveedor | `@rolandopl` (Rolando Pérez) | `8905117076` |
+| TCP / Proveedor | `@proveedor_tres` (Proveedor Tres) | `1000000001` |
 
 ## Tu misión
 El agente de Cuadra te enviará órdenes de venta por mensaje privado. Debes responder con una de estas palabras:

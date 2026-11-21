@@ -97,7 +97,7 @@ _ADDRESS_STREET = re.compile(
 )
 # Dirección sin etiqueta explícita: texto con número y palabras de entrecalles,
 # o patrón "número, entre X y Y", o "calle X #N". Captura casos como
-# "Domingo mujica 110, entre Insolación y Luisa la Osa, número 110".
+# "Calle Prueba 110, entre Calle B y Calle A, número 110".
 _ADDRESS_FLEXIBLE = re.compile(
     r"(?:"
     r"(?:calle|avenida|av\.?|carrera|transversal|camino)\s+[^\n,;.]{2,60}"
@@ -231,7 +231,7 @@ def _set_profile_pref(conn, customer_id: int, key: str, value: str) -> None:
 
 
 def _extract_name(text: str) -> str | None:
-    # Prueba #2: "soy de San Miguel, me llamo Rolando" devolvía None porque solo
+    # Prueba #2: "soy de San Miguel, me llamo Proveedor Tres" devolvía None porque solo
     # se miraba la primera coincidencia y "de" es stopword. Se prueban todas.
     for match in _NAME_RE.finditer(text or ""):
         candidate = _clean(match.group(1), 60)

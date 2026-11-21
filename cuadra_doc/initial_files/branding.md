@@ -13,7 +13,7 @@ Aquí tienes la propuesta completa de **Naming, Branding y Concepto Visual**.
 #### 🏆 Opción Ganadora: **CUADRA** (o **Cuadra.ia**)
 * **Por qué funciona:** En el argot cubano, *"cuadrar"* es el verbo universal de los negocios informales y formales (*"ya cuadré con el socio"*, *"eso está cuadrado"*, *"vamos a cuadrar la entrega"*).
 * **Sensación:** Suena a fintech moderna (como *Square* o *Block* en EE.UU.), es corto (6 letras), fácil de recordar, contundente y 100% nuestro.
-* **Dominio / Redes:** `cuadracuba`, `@cuadrabot`, `cuadra_ventas`.
+* **Dominio / Redes:** `cuadracuba`, `@cuadra_demo`, `cuadra_ventas`.
 
 #### Otras dos opciones sólidas:
 * **ResuelvIA:** Enfatiza la solución inmediata (*"El que te resuelve"*). Muy popular, aunque un poco más informal.
@@ -71,7 +71,7 @@ El agente debe tener una personalidad definida en los prompts del LLM:
   > 🕒 *Atención automática 24/7 | Pagos en USD/CUP"*.
 
 #### En Telegram:
-* **Bot de Atención:** `@CuadraVentasBot`
+* **Bot de Atención:** `@cuadra_ventas_demo`
 * **Canal/Catálogo de Difusión:** `t.me/cuadracatalogo`
 * **Mensaje fijado en el canal:** Formato limpio con links de contacto directo al bot para consultar disponibilidad con un solo clic.
 

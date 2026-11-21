@@ -2,7 +2,7 @@
 
 **Fecha:** 2026-11-17
 **Entorno:** servicio en marcha, BD real, trazado en `ALL`.
-**Alcance:** conversación repetida de la prueba #4 (cliente @rolandoepd, TCP @rolandopl), con foco en detalles de producto, listado en tabla y zonas.
+**Alcance:** conversación repetida de la prueba #4 (cliente @cliente_demo, TCP @proveedor_tres), con foco en detalles de producto, listado en tabla y zonas.
 
 ---
 

@@ -41,7 +41,7 @@ from cuadra.domain import conversations, turns
 # ---------------------------------------------------------------------------
 
 SCRIPTS = {
-    "Roger": [
+    "Proveedor Dos": [
         ("Hola", False),
         ("Me interesa la pizza personal", False),
         ("Ok quiero 5", False),
@@ -50,7 +50,7 @@ SCRIPTS = {
         ("Mi telefono es 55545678", False),
         ("Si, quiero confirmar el pedido", True),
     ],
-    "Yoan": [
+    "Proveedor Cuatro": [
         ("Hola", False),
         ("Tienes cascos para moto?", False),
         ("Cuanto valen?", False),
@@ -60,7 +60,7 @@ SCRIPTS = {
         ("Telefono 71234567", False),
         ("Si confirmo", True),
     ],
-    "Rolando": [
+    "Proveedor Tres": [
         ("Buenas", False),
         ("Necesito una tablet android", False),
         ("Cual es el precio?", False),
@@ -70,7 +70,7 @@ SCRIPTS = {
         ("Telefono 55523456", False),
         ("Confirmo", True),
     ],
-    "Claudia": [
+    "Proveedor Uno": [
         ("Hola", False),
         ("Tienen microondas?", False),
         ("Cuanto cuesta el de 20 litros?", False),

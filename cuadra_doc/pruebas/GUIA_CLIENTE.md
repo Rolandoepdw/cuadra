@@ -13,18 +13,18 @@ productos de ese mismo proveedor.
 
 | Código | Nombre           | Zona                   | Dirección              | Teléfono | Producto asignado           | Proveedor |
 | ------ | ---------------- | ---------------------- | ---------------------- | -------- | --------------------------- | --------- |
-| C1     | Juan Pérez       | Playa                  | Calle 23 #456, apto 3  | 55512345 | Microondas 20L              | Claudia   |
-| C2     | Carlos Rodríguez | Marianao               | Calle 114 #2210        | 55567890 | Ventilador de Torre         | Claudia   |
-| C3     | Miguel Torres    | Centro Habana          | Calle Águila #312      | 55523456 | Cafetera Express            | Claudia   |
-| C4     | Ana López        | La Lisa                | Calle 190 #8812        | 55534567 | Combo Desayuno              | Roger     |
-| C5     | Laura Fernández  | Marianao               | Calle 51 #4410         | 55545678 | Pizza Personal              | Roger     |
-| C6     | Pedro Sánchez    | Playa                  | Avenida 5ta #7802      | 55556789 | Monitor LED 24              | Rolando   |
-| C7     | Luis Ramírez     | Diez de Octubre        | Calle 10 #123          | 55567801 | PC de Escritorio Ryzen 5    | Rolando   |
-| C8     | Marta Díaz       | Cerro                  | Calle 24 #3305         | 55578901 | Aspiradora Portátil         | Rolando   |
-| C9     | José Martínez    | Habana del Este        | Calle 1ra #220         | 55589012 | Casco para Moto             | Yoan      |
-| C10    | Elena Ruiz       | Guanabacoa             | Calle 12 #145          | 55590123 | Moto Eléctrica City         | Yoan      |
-| C11    | Daniel Moreno    | Regla                  | Calle Máximo Gómez #88 | 55501234 | Batería para Moto Eléctrica | Yoan      |
-| C12    | Sofía Romero     | Plaza de la Revolución | Calle 2 #5510          | 55513579 | Teclado Mecánico            | Rolando   |
+| C1     | Juan Pérez       | Playa                  | Calle 23 #456, apto 3  | 55512345 | Microondas 20L              | Proveedor Uno   |
+| C2     | Carlos Rodríguez | Marianao               | Calle 114 #2210        | 55567890 | Ventilador de Torre         | Proveedor Uno   |
+| C3     | Miguel Torres    | Centro Habana          | Calle Águila #312      | 55523456 | Cafetera Express            | Proveedor Uno   |
+| C4     | Ana López        | La Lisa                | Calle 190 #8812        | 55534567 | Combo Desayuno              | Proveedor Dos     |
+| C5     | Laura Fernández  | Marianao               | Calle 51 #4410         | 55545678 | Pizza Personal              | Proveedor Dos     |
+| C6     | Pedro Sánchez    | Playa                  | Avenida 5ta #7802      | 55556789 | Monitor LED 24              | Proveedor Tres   |
+| C7     | Luis Ramírez     | Diez de Octubre        | Calle 10 #123          | 55567801 | PC de Escritorio Ryzen 5    | Proveedor Tres   |
+| C8     | Marta Díaz       | Cerro                  | Calle 24 #3305         | 55578901 | Aspiradora Portátil         | Proveedor Tres   |
+| C9     | José Martínez    | Habana del Este        | Calle 1ra #220         | 55589012 | Casco para Moto             | Proveedor Cuatro      |
+| C10    | Elena Ruiz       | Guanabacoa             | Calle 12 #145          | 55590123 | Moto Eléctrica City         | Proveedor Cuatro      |
+| C11    | Daniel Moreno    | Regla                  | Calle Máximo Gómez #88 | 55501234 | Batería para Moto Eléctrica | Proveedor Cuatro      |
+| C12    | Sofía Romero     | Plaza de la Revolución | Calle 2 #5510          | 55513579 | Teclado Mecánico            | Proveedor Tres   |
 
 ## 2. Casos a realizar
 

@@ -15,8 +15,8 @@ tags: [operacion, pruebas, end-to-end, telegram, ventas, tcp]
 > valida contra la BD (`conversations`, `messages`, `turns`, `jobs`, `escalations`,
 > `sales`, `catalog_mutation_log`, `events`, `llm_calls`).
 >
-> Cuentas: **@REPDCuadra** = agente (userbot), **@Roladoepd** = cliente y
-> **@rolandopl** = TCP (proveedor `Rolando`, id 3).
+> Cuentas: **@cuadra_demo_userbot** = agente (userbot), **@cliente_demo** = cliente y
+> **@proveedor_tres** = TCP (proveedor `Proveedor Tres`, id 3).
 >
 > La BD es de prueba: se puede inspeccionar y restaurar sin riesgo. Aun así, las
 > acciones destructivas (cancelar ventas, revertir mutaciones, borrar filas) se
@@ -34,7 +34,7 @@ tags: [operacion, pruebas, end-to-end, telegram, ventas, tcp]
 |---|---|
 | Core | `http://127.0.0.1:8321`, `database.integrity = ok` |
 | Migraciones | 15/15 aplicadas (001–015) |
-| Userbot | `@REPDCuadra`, `connected: true` |
+| Userbot | `@cuadra_demo_userbot`, `connected: true` |
 | Modelo | `NVIDIA-Nemotron-3-Nano-4B-Q4_K_M.gguf`, ctx 8 192, GPU ok |
 | Cola | 0 jobs pendientes al arrancar |
 | Modo de venta | `sales.mode = assisted` (el operador aprueba y cobra) |
@@ -43,15 +43,15 @@ tags: [operacion, pruebas, end-to-end, telegram, ventas, tcp]
 
 ### 1.1 Seed cargado
 
-32 productos, 4 proveedores (Claudia, Roger, Rolando, Yoan), 16 zonas, 9 grupos
+32 productos, 4 proveedores (Proveedor Uno, Proveedor Dos, Proveedor Tres, Proveedor Cuatro), 16 zonas, 9 grupos
 (7 activos, 2 pausados). Productos de referencia:
 
 | ID | Producto | Precio | Stock | Estado | Proveedor |
 |---|---|---|---|---|---|
-| 3 | Monitor LED 24 | 180 USD | 6 | ACTIVE | Rolando (@rolandopl) |
-| 19 | Mouse Inalámbrico | 15 USD | 25 | ACTIVE | Rolando |
-| 28 | Power Bank 20000 | 40 USD | 0 | OUT_OF_STOCK | Claudia |
-| 12 | Pan con Croqueta | 300 CUP | 150 | ACTIVE | Roger |
+| 3 | Monitor LED 24 | 180 USD | 6 | ACTIVE | Proveedor Tres (@proveedor_tres) |
+| 19 | Mouse Inalámbrico | 15 USD | 25 | ACTIVE | Proveedor Tres |
+| 28 | Power Bank 20000 | 40 USD | 0 | OUT_OF_STOCK | Proveedor Uno |
+| 12 | Pan con Croqueta | 300 CUP | 150 | ACTIVE | Proveedor Dos |
 
 ### 1.2 Hallazgo del seed
 
@@ -112,7 +112,7 @@ Leyenda: ✅ OK · ⚠️ OK con observación · ❌ falla · ⏳ pendiente · �
 
 ### E2E-01 — Consulta de precio · ⚠️ OK (2026-11-07 20:04–20:05 UTC)
 
-**Entrada del cliente (@Roladoepd → DM @REPDCuadra):**
+**Entrada del cliente (@cliente_demo → DM @cuadra_demo_userbot):**
 
 > Hola, ¿cuánto cuesta el Monitor LED 24?
 
@@ -129,7 +129,7 @@ Leyenda: ✅ OK · ⚠️ OK con observación · ❌ falla · ⏳ pendiente · �
 | Conversación creada | `identity = userbot` | conv 1, `telegram/userbot` | ✅ |
 | Producto resuelto | Monitor LED 24 (id 3) | `context.product_id = 3`, hecho `product_name` | ✅ |
 | Precio exacto | 180 USD | 180 USD | ✅ |
-| Zona de entrega | zonas del TCP Rolando | 12 zonas de Rolando | ✅ |
+| Zona de entrega | zonas del TCP Proveedor Tres | 12 zonas de Proveedor Tres | ✅ |
 | Sin datos internos | 0 menciones | 0 (`internal_terms` no disparó) | ✅ |
 | Turno | `DONE` | turn 1 `DONE` | ✅ |
 | Mensaje realmente enviado | evento `message_sent` | `identity=userbot`, `provider_message_id=650`, `delay_s=1.01` | ✅ |
@@ -148,11 +148,11 @@ la cuenta correcta, con precio exacto y sin filtrar economía interna.
 
 ### E2E-02 — Stock y producto agotado · ✅ OK (2026-11-07 20:16 UTC)
 
-**Entrada del cliente (@Roladoepd → DM @REPDCuadra):**
+**Entrada del cliente (@cliente_demo → DM @cuadra_demo_userbot):**
 
 > ¿Tienes disponible el Power Bank 20000?
 
-Producto en BD: `id = 28`, **stock 0**, `status = OUT_OF_STOCK`, proveedor Claudia.
+Producto en BD: `id = 28`, **stock 0**, `status = OUT_OF_STOCK`, proveedor Proveedor Uno.
 
 **Respuesta enviada (texto exacto de `messages.id = 4`):**
 
@@ -187,7 +187,7 @@ cliente.
 ### E2E-02b — Stock con existencias · ✅ OK (2026-11-07 21:50 UTC)
 
 **Entrada:** `¿Tienes disponible el Mouse Inalámbrico?`
-Producto: `id = 19`, stock 25, **15 USD**, proveedor Rolando.
+Producto: `id = 19`, stock 25, **15 USD**, proveedor Proveedor Tres.
 
 **Respuesta (`messages.id = 6`):**
 
@@ -198,7 +198,7 @@ Producto: `id = 19`, stock 25, **15 USD**, proveedor Rolando.
 | Comprobación | Esperado | Obtenido | Veredicto |
 |---|---|---|---|
 | Producto y precio | Mouse 15 USD | 15 USD | ✅ |
-| Zonas | las 12 de Rolando | 12, ya con **Arroyo Naranjo** | ✅ |
+| Zonas | las 12 de Proveedor Tres | 12, ya con **Arroyo Naranjo** | ✅ |
 | No revela stock interno | no dar la cantidad | no la dio | ✅ |
 | Turno / envío | `DONE` / `message_sent` | turn 3, id 654, delay 2.88 | ✅ |
 | Latencia | < 10 s | **28 s** (clasificación 21 092 ms) | ⚠️ **H-06** |
@@ -348,7 +348,7 @@ reintento (~4 s) en una respuesta que era segura.
 ### E2E-16 — Precio en CUP · ✅ OK (2026-11-07 21:54 UTC)
 
 **Entrada:** `¿Cuánto cuesta el pan con croqueta?`
-Producto: `id = 12`, **300 CUP**, proveedor Roger.
+Producto: `id = 12`, **300 CUP**, proveedor Proveedor Dos.
 
 **Respuesta (`messages.id = 14`):**
 
@@ -464,7 +464,7 @@ mató los dos procesos del core y lo relanzó.
 | 06:56:26 | el vigilante ve `turns` 25 en `PROCESSING` |
 | 06:56:29 | se matan los pids 35120 (lanzador del venv) y 42720 (intérprete real) |
 | 06:56:33 | el nuevo core reclama el lock huérfano; evento `jobs_requeued` (`count: 1`) |
-| 06:56:49 | core listo; userbot reconectado como `@REPDCuadra` |
+| 06:56:49 | core listo; userbot reconectado como `@cuadra_demo_userbot` |
 | 06:57:06 | el primer `compose` del reintento falla con `httpx.ReadError`; el job 125 vuelve a la cola |
 | 06:57:39 | segundo intento: `intent` 2.6 s + `compose` 9.0 s; `turns` 25 `DONE` |
 | 06:57:45 | `messages` 62 entregado por el userbot (`provider_message_id` 719, demora 5.8 s) |
@@ -543,8 +543,8 @@ completa; el coste fue un reintento (~25 s).
 ## 5. Lote 2 (ejecutado el 2026-11-07 21:50–21:56 UTC)
 
 Se envía **un caso a la vez** y se espera la respuesta antes del siguiente, salvo
-el caso 6, que es una ráfaga deliberada. Todos desde **@Roladoepd** al DM de
-**@REPDCuadra**, en la misma conversación.
+el caso 6, que es una ráfaga deliberada. Todos desde **@cliente_demo** al DM de
+**@cuadra_demo_userbot**, en la misma conversación.
 
 | # | Caso | Mensaje exacto | Resultado |
 |---|---|---|---|
@@ -566,7 +566,7 @@ el caso 6, que es una ráfaga deliberada. Todos desde **@Roladoepd** al DM de
 
 Objetivo: recorrer la venta completa con datos ficticios (no usar datos reales):
 **Monitor LED 24**, 1 unidad, **180 USD**, comisión fija **15 USD** (proveedor
-Rolando, id 3). Datos de entrega de prueba: `calle 10 número 123`, zona
+Proveedor Tres, id 3). Datos de entrega de prueba: `calle 10 número 123`, zona
 **Arroyo Naranjo**, teléfono `55512345`.
 
 | # | Quién | Mensaje / acción | Resultado |
@@ -575,7 +575,7 @@ Rolando, id 3). Datos de entrega de prueba: `calle 10 número 123`, zona
 | 2 | cliente | `Mi dirección es calle 10 número 123, reparto Arroyo Naranjo` *(salto de línea)* `Mi teléfono es 55512345` | ✅ guardó los 3 hechos y resumió 180 USD (`stage = CONFIRM`, `messages` 23–24) |
 | 3 | cliente | `Sí, dale, confírmalo` | ✅ creó `V-000001` **PENDING_APPROVAL**; `stock_reserved = 1`; ledger **PENDING** 15 USD (`messages` 25–26) |
 | 4 | operador | `POST /api/finance/approve/1` | ⚠️ aprobó a **PENDING_DISPATCH**, pero el despacho falló: `dispatch failed: Telegram server says - Bad Request: chat not found` → **NEEDS_OPERATOR** (job 77 `COMPLETED`). Causa **H-15**. |
-| 4b | operador | corregir H-15/H-16 y `POST /api/finance/dispatch/1` | ✅ **DISPATCHED** (`tcp_message_id = 675`), peer `8905117076` persistido, job 79 `COMPLETED` |
+| 4b | operador | corregir H-15/H-16 y `POST /api/finance/dispatch/1` | ✅ **DISPATCHED** (`tcp_message_id = 675`), peer `1000000001` persistido, job 79 `COMPLETED` |
 | 5 | TCP | `RECIBIDO V-000001` | ✅ `CONFIRMED` a las 02:24:21 (`messages` 27, job 80). Aviso al cliente **no enviado**: **H-17**. |
 | 6 | TCP | `ENTREGADO V-000001` | ✅ `DELIVERED` a las 02:26:04; stock `6 → 5`, reserva `1 → 0` (`messages` 28, job 81). Aviso al cliente **no enviado**: **H-17**. |
 | 7 | operador | botón **Cobrar** (`POST /api/finance/settle/1`) | ✅ `SETTLED` a las 02:26:46; ledger `COLLECTED` 15 USD |
@@ -592,7 +592,7 @@ Rolando, id 3). Datos de entrega de prueba: `calle 10 número 123`, zona
 | Aviso al cliente | plantilla `sale_created` con `V-000001` | `messages.id = 26` |
 
 **Fallo del paso 4:** el adaptador del bot no puede iniciar un chat con
-`@rolandopl` (`getChat` devuelve `chat not found` para los tres usernames). El
+`@proveedor_tres` (`getChat` devuelve `chat not found` para los tres usernames). El
 userbot sí lo resuelve. Se corrigió en el código y se re-despachó la misma venta
 sin recrearla.
 
@@ -608,8 +608,8 @@ sin recrearla.
 | `tests/test_sales_finance.py` | 4 pruebas nuevas (peer, handle, desconocido, despacho completo con adaptador falso) |
 
 Resultado: **162 tests OK**. La venta pasó de `NEEDS_OPERATOR` a **DISPATCHED**,
-con `tcp_message_id = 675` y `suppliers.telegram_peer_id = 8905117076` para
-Rolando. El mensaje de la orden ya está en el chat de **@rolandopl**.
+con `tcp_message_id = 675` y `suppliers.telegram_peer_id = 1000000001` para
+Proveedor Tres. El mensaje de la orden ya está en el chat de **@proveedor_tres**.
 
 **Resultado final del flujo (2026-11-08 02:24–02:26 UTC):**
 
@@ -644,8 +644,8 @@ superiores quedaron en 0 mientras “Totales por moneda” sí se actualizaba.
 
 ## 7. Lote 4 — escalaciones TCP y mutaciones de catálogo (2026-11-08 02:41–03:04 UTC)
 
-Cuatro consultas de `consulta_dato` desde **@Roladoepd** (una por producto) generaron
-cuatro escalaciones al mismo TCP (**@rolandopl**). El TCP respondió cada una citando
+Cuatro consultas de `consulta_dato` desde **@cliente_demo** (una por producto) generaron
+cuatro escalaciones al mismo TCP (**@proveedor_tres**). El TCP respondió cada una citando
 su `[E-####]`. Todas las correlaciones fueron `method = case_id`, `ambiguous = false`.
 
 | # | Producto | Mensaje del cliente | Escalación | Respuesta del TCP | Resultado |

@@ -1,13 +1,13 @@
-# Guía del Cliente — Test con Rolando (TCP único)
+# Guía del Cliente — Test con Proveedor Tres (TCP único)
 
 ## Cuentas involucradas
 | Rol | Cuenta | Propósito |
 |-----|--------|-----------|
-| TCP / Proveedor | `@rolandopl` (Rolando Pérez) | Recibe órdenes y responde RECIBIDO/AGOTADO/ENTREGADO |
+| TCP / Proveedor | `@proveedor_tres` (Proveedor Tres) | Recibe órdenes y responde RECIBIDO/AGOTADO/ENTREGADO |
 | Cliente | Tu cuenta personal | Escribe al agente (userbot `@repdcuadra`) |
 | Agente / Bot | `@repdcuadra` (userbot de Cuadra) | Responde precios, stock, zonas, crea pedidos |
 
-## Productos disponibles (solo Rolando)
+## Productos disponibles (solo Proveedor Tres)
 Puedes preguntar al agente por cualquiera de estos. No necesitas entrar a ningún grupo: esta tabla es lo que verías en el canal de difusión.
 
 | #   | Producto                 | Precio   | Stock | Zona de entrega |

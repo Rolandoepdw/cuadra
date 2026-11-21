@@ -1,10 +1,10 @@
-# Analisis de prueba — Test individual con Rolando (TCP unico)
+# Analisis de prueba — Test individual con Proveedor Tres (TCP unico)
 
 **Fecha:** 2026-11-15, 06:29–06:47 UTC
 **Canal:** Telegram userbot (`@repdcuadra`)
 **Configuración:** `sales.mode = autonomous`, `sales.followup.mode = shadow`
-**Base de datos:** `backend/data/cuadra.db` (sembrada con `seed_rolando.py` + `seed_real_rolando.json`)
-**Cuentas:** Cuadra (userbot), Rolando Pérez (TCP/@rolandopl), Usuario personal (cliente)
+**Base de datos:** `backend/data/cuadra.db` (sembrada con `seed_single_supplier.py` + `seed_real_supplier.json`)
+**Cuentas:** Cuadra (userbot), Proveedor Tres (TCP/@proveedor_tres), Usuario personal (cliente)
 
 ---
 
@@ -47,21 +47,21 @@ El sistema **no se cayó**; hizo exactamente lo que el código dice. Los problem
 | m15 | 06:35:27 | TCP | "Si es si hacemos domicilio, fijate en mis datos..." | TCP confuso |
 | m16 | 06:36:16 | CLI | "Vale, quiero dos tablet" | Cliente pide cantidad 2 |
 | m17 | 06:36:20 | BOT | "Para dejarte el pedido listo me falta la zona de entrega..." | **Olvida que ya pidió precio** |
-| m18 | 06:38:15 | CLI | "Domingo mujica 110, entre Insolación y Luisa la Osa, número 110" | — |
+| m18 | 06:38:15 | CLI | "Calle Prueba 110, entre Calle B y Calle A, número 110" | — |
 | m19 | 06:38:20 | BOT | "¡Buenas! Dime cuál producto te interesa..." | **Resetea contexto, ignora dirección** |
 | m20 | 06:38:40 | CLI | "Quiero comprar dos tablet" | Reitera cantidad 2 |
 | m21 | 06:38:44 | BOT | "Para dejarte el pedido listo me falta la zona de entrega..." | **Pide dirección otra vez** |
-| m22 | 06:39:02 | CLI | "Domingo mujica 110..., 56470062" | Dirección + teléfono |
+| m22 | 06:39:02 | CLI | "Calle Prueba 110..., 55500000" | Dirección + teléfono |
 | m23 | 06:39:06 | BOT | "¡Buenas! Dime cuál producto te interesa..." | **Resetea contexto otra vez** |
 | m24 | 06:40:00 | CLI | "Tablet Android 10" | — |
 | m25 | 06:40:05 | BOT | "¡Buenas! Sí, tenemos Tablet Android 10..." | — |
 | m26 | 06:40:33 | CLI | "Sí, quiero dos tablets" | Reitera cantidad 2 |
 | m27 | 06:40:37 | BOT | "Para dejarte el pedido listo me falta la zona de entrega..." | **Pide dirección otra vez** |
-| m28 | 06:41:24 | CLI | "Mariano, Domingo mujica 11, entre Luisa la Osa e Insolación, 56470062" | — |
+| m28 | 06:41:24 | CLI | "Mariano, Calle Prueba 11, entre Calle A e Calle B, 55500000" | — |
 | m29 | 06:41:27 | BOT | "Para dejarte el pedido listo me falta la dirección..." | **Ya la dio en m28** |
 | m30 | 06:41:46 | CLI | "...es mi teléfono" | — |
 | m31 | 06:41:51 | BOT | "Para dejarte el pedido listo me falta la dirección..." | **Ya la dio en m28/m30** |
-| m32 | 06:44:47 | CLI | "la zona: Marianao, la dirección: Calle domingo mujica, número 110 entre Luisa la Osa e Ins..." | Por fin da zona explícita |
+| m32 | 06:44:47 | CLI | "la zona: Marianao, la dirección: Calle Calle Prueba, número 110 entre Calle A e Ins..." | Por fin da zona explícita |
 | m33 | 06:44:51 | BOT | "Te confirmo: Tablet Android 10 x1 en 220 USD..." | **quantity=1 a pesar de pedir 2** |
 | m34 | 06:45:42 | CLI | "Sí, pero que sean 2 tablets, quiero dos" | Corrige cantidad |
 | m35 | 06:45:45 | BOT | "Tu pedido V-000001 quedó registrado." | **No crea venta nueva ni modifica qty** |

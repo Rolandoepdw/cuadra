@@ -9,8 +9,8 @@ convierte los diarios en números. Los documentos de cliente y TCP son
 | Comprobación | Resultado |
 |---|---|
 | Core | En línea, 18 migraciones aplicadas, integridad `ok` |
-| TCP | 4 (Claudia, Roger, Rolando, Yoan), todos con `telegram_peer_id` |
-| Catálogo | 41 productos: Claudia 7, Roger 15, Rolando 14, Yoan 5 |
+| TCP | 4 (Proveedor Uno, Proveedor Dos, Proveedor Tres, Proveedor Cuatro), todos con `telegram_peer_id` |
+| Catálogo | 41 productos: Proveedor Uno 7, Proveedor Dos 15, Proveedor Tres 14, Proveedor Cuatro 5 |
 | Difusiones | 34 campañas (33 activas, 1 desactivada), **37 posts enviados, 0 fallos** |
 | Estrategia | `repeat_passes = 1` verificado: ninguna campaña publicó dos veces en el mismo grupo |
 | LLM | **Caído** al escribir esto (`Salud` → `unreachable`). Arráncalo antes de la sesión |
@@ -52,18 +52,18 @@ cubierta por ese TCP.
 
 | Código | Nombre | Zona | Producto asignado | TCP | Amigo | Cuenta de Telegram |
 |---|---|---|---|---|---|---|
-| C1 | Juan Pérez | Playa | Microondas 20L | Claudia | | |
-| C2 | Carlos Rodríguez | Marianao | Ventilador de Torre | Claudia | | |
-| C3 | Miguel Torres | Centro Habana | Cafetera Express | Claudia | | |
-| C4 | Ana López | La Lisa | Combo Desayuno | Roger | | |
-| C5 | Laura Fernández | Marianao | Pizza Personal | Roger | | |
-| C6 | Pedro Sánchez | Playa | Monitor LED 24 | Rolando | | |
-| C7 | Luis Ramírez | Diez de Octubre | PC de Escritorio Ryzen 5 | Rolando | | |
-| C8 | Marta Díaz | Cerro | Aspiradora Portátil | Rolando | | |
-| C9 | José Martínez | Habana del Este | Casco para Moto | Yoan | | |
-| C10 | Elena Ruiz | Guanabacoa | Moto Eléctrica City | Yoan | | |
-| C11 | Daniel Moreno | Regla | Batería para Moto Eléctrica | Yoan | | |
-| C12 | Sofía Romero | Plaza de la Revolución | Teclado Mecánico | Rolando | | |
+| C1 | Juan Pérez | Playa | Microondas 20L | Proveedor Uno | | |
+| C2 | Carlos Rodríguez | Marianao | Ventilador de Torre | Proveedor Uno | | |
+| C3 | Miguel Torres | Centro Habana | Cafetera Express | Proveedor Uno | | |
+| C4 | Ana López | La Lisa | Combo Desayuno | Proveedor Dos | | |
+| C5 | Laura Fernández | Marianao | Pizza Personal | Proveedor Dos | | |
+| C6 | Pedro Sánchez | Playa | Monitor LED 24 | Proveedor Tres | | |
+| C7 | Luis Ramírez | Diez de Octubre | PC de Escritorio Ryzen 5 | Proveedor Tres | | |
+| C8 | Marta Díaz | Cerro | Aspiradora Portátil | Proveedor Tres | | |
+| C9 | José Martínez | Habana del Este | Casco para Moto | Proveedor Cuatro | | |
+| C10 | Elena Ruiz | Guanabacoa | Moto Eléctrica City | Proveedor Cuatro | | |
+| C11 | Daniel Moreno | Regla | Batería para Moto Eléctrica | Proveedor Cuatro | | |
+| C12 | Sofía Romero | Plaza de la Revolución | Teclado Mecánico | Proveedor Tres | | |
 
 ## 4. Grupos y cobertura
 
@@ -73,16 +73,16 @@ los clientes solo tienen que ver los mensajes.
 | Grupo | Zonas del grupo | Categorías | Qué se publica ahí |
 |---|---|---|---|
 | Canal Ventas Electrodomésticos | Todas | tecnología, hogar | Tecnología y hogar de los 4 TCP |
-| Venta Electrodomésticos | Todas | tecnología | Tecnología + manuales (accesorios, motos de Yoan) |
-| Canal Ventas Alimentos | Todas | alimentos | Comida de Roger |
-| Venta Motos E | La Lisa, Marianao | motos_eléctricas | Motos de Roger |
-| Venta Motos E Playa | Playa | motos_eléctricas | Motos de Roger (ojo: Roger no entrega en Playa) |
+| Venta Electrodomésticos | Todas | tecnología | Tecnología + manuales (accesorios, motos de Proveedor Cuatro) |
+| Canal Ventas Alimentos | Todas | alimentos | Comida de Proveedor Dos |
+| Venta Motos E | La Lisa, Marianao | motos_eléctricas | Motos de Proveedor Dos |
+| Venta Motos E Playa | Playa | motos_eléctricas | Motos de Proveedor Dos (ojo: Proveedor Dos no entrega en Playa) |
 | Venta Motos C | Todas | motos_combustión | Motos de combustión |
-| Venta Snacks | Cerro, Marianao, Diez de Octubre | snacks | Snacks de Roger |
+| Venta Snacks | Cerro, Marianao, Diez de Octubre | snacks | Snacks de Proveedor Dos |
 
 Dos avisos para la evaluación:
 
-- **Roger publica en Playa pero no entrega allí.** Es el comportamiento del
+- **Proveedor Dos publica en Playa pero no entrega allí.** Es el comportamiento del
   targeting automático (filtra por categoría, no por zona del TCP). Si un cliente
   de Playa pide esa moto, el bot debe rechazar la venta por zona no cubierta.
 - **Habana Vieja no la cubre ningún TCP.** Es el caso de zona sin cobertura de la
@@ -152,7 +152,7 @@ Para R-4 necesitas dos archivos en la carpeta del set:
   La clave `product` debe existir en `products.json`.
 
 El set y los diarios viven **fuera del repositorio** (por ejemplo
-`C:\Rolando\AProjects\cuadra_eval\`). No los subas a git: llevan conversaciones
+`C:\ruta\AProjects\cuadra_eval\`). No los subas a git: llevan conversaciones
 reales. El exportador anonimizado todavía no existe; para esta sesión la etiqueta
 es el diario y la medición es manual con estas consultas y scripts.
 
@@ -161,7 +161,7 @@ es el diario y la medición es manual con estas consultas y scripts.
 | Riesgo | Qué significa |
 |---|---|
 | Consulta ambigua | El bot elige la candidata con más puntuación y la marca como ambigua; **no la deja en revisión**. Si el criterio de R-1 exige revisión, esos casos cuentan como fallo. |
-| Publicación sin cobertura | Roger publica la moto en Playa pero no entrega allí; el rechazo correcto es por zona. |
+| Publicación sin cobertura | Proveedor Dos publica la moto en Playa pero no entrega allí; el rechazo correcto es por zona. |
 | Campañas sin publicar | Cable HDMI, Combo Personalizado y Moto Delivery no salen por diseño. |
 | LLM caído | Sin modelo no hay respuestas 1:1; revisar `Salud` antes de empezar. |
 

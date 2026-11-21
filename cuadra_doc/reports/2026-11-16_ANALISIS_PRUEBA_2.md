@@ -34,8 +34,8 @@
 | m5 | Ando en busca de laptops, que ofertas tienes | **la misma frase** | Falla: no lista laptops |
 | m7 | Que laptops tienes a la venta | **la misma frase** | Falla: 3ª vez |
 | m9 | Quiero 3 Laptop Empresarial, que precio tienen | pide zona/dirección/teléfono | Falla: **no dice el precio** |
-| m11 | Soy de Playa, mi dirección es Domingo Mujica 110… | pide teléfono | Correcto |
-| m13 | 56470062 | "Te confirmo: … **x1** en 350 USD…" | Falla: **ignora cantidad 3** |
+| m11 | Soy de Playa, mi dirección es Calle Prueba 110… | pide teléfono | Correcto |
+| m13 | 55500000 | "Te confirmo: … **x1** en 350 USD…" | Falla: **ignora cantidad 3** |
 | m15 | Si, pero quiero 3 no 1 | **"Dime cuál producto te interesa"** | **Falla crítica: se pierde la venta** |
 | m17 | Dame un listado de laptops que tengas en venta | "Sí, tenemos Laptop Empresarial, 350 USD" | Correcto (a la 4ª) |
 | m19 | y no tiene otro tipo de laptop? | **"Dime cuál producto te interesa"** | Falla: incoherente |
@@ -134,7 +134,7 @@ conversation_facts.delivery_address = "pero quiero 3 no 1"   (source m15)
 customers.preferences_json = {"usual_address": "pero quiero 3 no 1", ...}
 ```
 
-La dirección real («Domingo Mujica numero 110, entre Luisa la Osa e Insolacion») se capturó bien en m11 y se **sobrescribió** en m15.
+La dirección real («Calle Prueba numero 110, entre Calle A e Calle B») se capturó bien en m11 y se **sobrescribió** en m15.
 
 **Causa:** `_extract_address` (`memory.py:278-280`) acepta el fallback `_ADDRESS_FLEXIBLE`, y `_looks_like_address` (`memory.py:263-267`) solo exige **un dígito** o una palabra de calle → cualquier frase con número pasa.
 
@@ -181,7 +181,7 @@ El 90 % del archivo es ruido de APScheduler: `Running job "tick"` / `executed su
 
 ### F11 — BAJO: nombre del destinatario = usuario de Telegram
 
-La confirmación dice «para RolandoEPD» (username). Conviene pedir/confirmar el nombre de quien recibe.
+La confirmación dice «para Proveedor TresEPD» (username). Conviene pedir/confirmar el nombre de quien recibe.
 
 ---
 

@@ -171,7 +171,7 @@ Router nuevo `api/routes_conversations.py`, prefijo `/api`, PIN obligatorio.
   "identity": "userbot",
   "status": "ACTIVE",
   "stage": "QUOTE",
-  "customer": {"id": 1, "name": "Rolando", "handle": "@rolandoepd", "phone_masked": "***-***-45"},
+  "customer": {"id": 1, "name": "Proveedor Tres", "handle": "@cliente_demo", "phone_masked": "***-***-45"},
   "last_message": {"body": "¿y garantía?", "direction": "INBOUND", "author": "customer", "created_at": "..."},
   "messages_count": 42,
   "turns_count": 21,

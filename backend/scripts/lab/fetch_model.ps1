@@ -15,7 +15,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$SourceDir = "C:\Users\Rolando\.lmstudio\models",
+    [string]$SourceDir = "C:\Users\<usuario>\.lmstudio\models",
     [string]$Fetch,
     [switch]$List,
     [switch]$Clean,

@@ -25,7 +25,7 @@
 
 ---
 
-## 2. Timeline real (cliente, @rolandoepd)
+## 2. Timeline real (cliente, @cliente_demo)
 
 | # | Cliente | Bot | Veredicto |
 |---|---|---|---|
@@ -37,7 +37,7 @@
 | 13 | me interesa la gamer, que propiedades tiene | «pantalla gaming, RTX 4060, **16 GB de RAM y 1 TB de SSD**» | **F16**: inventa specs (solo había «i5 1250 H») |
 | 15 | Que microprocesador tieen | Escala al almacén | Correcto, pero con tema duplicado (**F15**) |
 | 19 | Vale, quiero 5 de esas | «Son 5500 USD por 5…» pide datos | Correcto |
-| 21 | soy de la UCI, calle 45…, 56476666 | «Me falta la zona de entrega» | **F9**: no resuelve «soy de la UCI» |
+| 21 | soy de la UCI, calle 45…, 55500001 | «Me falta la zona de entrega» | **F9**: no resuelve «soy de la UCI» |
 | 23 | La zona de entrega es la UCI | Rechaza la zona (no cubierta) | Correcto |
 | 25 | puedo recibirla en la Lisa tambien | Re-cotiza y **pierde las 5 unidades** | **F14**: la cantidad no sobrevive |
 | 27 | que sean 15 entonces | Confirma 15 × 1100 USD | Correcto |
@@ -50,7 +50,7 @@
 | 41-43 | Dame una laptop gaming / Si, quiero una | `V-000001` registrado | Correcto |
 | 47 | gracias | **Repite** «Tu pedido V-000001 quedó registrado» | **F12**: un banal no es una compra |
 
-### TCP (@rolandopl)
+### TCP (@proveedor_tres)
 
 | # | TCP | Efecto |
 |---|---|---|

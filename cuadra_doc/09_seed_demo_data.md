@@ -38,16 +38,16 @@ Es un JSON con dos objetos. Las claves son los nombres exactos que aparecen en e
 ```json
 {
   "suppliers": {
-    "Claudia": {
+    "Proveedor Uno": {
       "telegram_id": "@xxxxxxxxxxxx"
     },
-    "Roger": {
+    "Proveedor Dos": {
       "telegram_id": "@xxxxxxxxxxxx"
     },
-    "Rolando": {
+    "Proveedor Tres": {
       "telegram_id": "@xxxxxxxxxxxx"
     },
-    "Yoan": {
+    "Proveedor Cuatro": {
       "telegram_id": "@xxxxxxxxxxxx"
     }
   },
@@ -167,7 +167,7 @@ Una segunda ejecución reporta `0` filas creadas en todas las tablas. Se puede c
 Las zonas de los grupos se asignaron a propósito con combinaciones distintas:
 
 - Los grupos “Todas” tienen los 15 municipios activos.
-- `Venta Motos E` → La Lisa y Marianao (zonas de Roger).
+- `Venta Motos E` → La Lisa y Marianao (zonas de Proveedor Dos).
 - `Venta Motos E Playa` → solo Playa.
 - `Venta Snacks` → Cerro, Marianao y Diez de Octubre.
 

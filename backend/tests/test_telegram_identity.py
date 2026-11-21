@@ -33,11 +33,11 @@ class TelegramIdentityTests(unittest.TestCase):
             db.apply_migrations(conn)
             conn.execute(
                 """INSERT INTO suppliers (id, name, telegram_id)
-                   VALUES (1, 'Claudia', 'claudia_tcp')"""
+                   VALUES (1, 'Proveedor Uno', 'proveedor_uno')"""
             )
             conn.execute(
                 """INSERT INTO suppliers (id, name, telegram_id, telegram_peer_id)
-                   VALUES (2, 'Roger', '@roger_tcp', '222333444')"""
+                   VALUES (2, 'Proveedor Dos', '@proveedor_dos', '222333444')"""
             )
             conn.commit()
         finally:
@@ -69,10 +69,10 @@ class TelegramIdentityTests(unittest.TestCase):
     # ------------------------------------------------------------ normalizing
 
     def test_handle_accepts_bare_handle_at_handle_and_links(self):
-        self.assertEqual(catalog.normalize_telegram_handle("claudia_tcp"), "@claudia_tcp")
-        self.assertEqual(catalog.normalize_telegram_handle("@claudia_tcp"), "@claudia_tcp")
+        self.assertEqual(catalog.normalize_telegram_handle("proveedor_uno"), "@proveedor_uno")
+        self.assertEqual(catalog.normalize_telegram_handle("@proveedor_uno"), "@proveedor_uno")
         self.assertEqual(
-            catalog.normalize_telegram_handle("https://t.me/claudia_tcp"), "@claudia_tcp"
+            catalog.normalize_telegram_handle("https://t.me/proveedor_uno"), "@proveedor_uno"
         )
         self.assertIsNone(catalog.normalize_telegram_handle("   "))
         self.assertEqual(catalog.normalize_telegram_handle("123456789"), "123456789")
@@ -81,7 +81,7 @@ class TelegramIdentityTests(unittest.TestCase):
         conn = db.connect()
         try:
             with self.assertRaises(catalog.Invalid):
-                catalog.update_supplier(conn, 1, {"telegram_peer_id": "@claudia_tcp"})
+                catalog.update_supplier(conn, 1, {"telegram_peer_id": "@proveedor_uno"})
         finally:
             conn.close()
         self.assertIsNone(self._supplier(1)["telegram_peer_id"])
@@ -93,13 +93,13 @@ class TelegramIdentityTests(unittest.TestCase):
                 conn,
                 {
                     "name": "Nuevo",
-                    "telegram_id": "https://t.me/Nuevo_TCP",
+                    "telegram_id": "https://t.me/proveedor_nuevo",
                     "telegram_peer_id": "999888777",
                 },
             )
         finally:
             conn.close()
-        self.assertEqual(supplier["telegram_id"], "@Nuevo_TCP")
+        self.assertEqual(supplier["telegram_id"], "@proveedor_nuevo")
         self.assertEqual(supplier["telegram_peer_id"], "999888777")
 
     # ------------------------------------------------------- passive learning
@@ -108,7 +108,7 @@ class TelegramIdentityTests(unittest.TestCase):
         result = ingest.ingest_incoming(
             channel="telegram",
             identifier="555666777",
-            handle="claudia_tcp",
+            handle="proveedor_uno",
             body="hola, tengo el pedido",
             external_id="tg-learn-1",
         )
@@ -124,7 +124,7 @@ class TelegramIdentityTests(unittest.TestCase):
         ingest.ingest_incoming(
             channel="telegram",
             identifier="555666777",
-            handle="claudia_tcp",
+            handle="proveedor_uno",
             body="primero",
             external_id="tg-learn-2",
         )
@@ -145,7 +145,7 @@ class TelegramIdentityTests(unittest.TestCase):
         result = ingest.ingest_incoming(
             channel="telegram",
             identifier="222333444",
-            handle="roger_renamed",
+            handle="proveedor_renamed",
             body="sigo siendo yo",
             external_id="tg-rename-1",
         )
@@ -157,7 +157,7 @@ class TelegramIdentityTests(unittest.TestCase):
         result = ingest.ingest_incoming(
             channel="telegram",
             identifier="999000111",
-            handle="roger_tcp",
+            handle="proveedor_dos",
             body="hola, soy nuevo aqui",
             external_id="tg-takeover-1",
         )
@@ -173,7 +173,7 @@ class TelegramIdentityTests(unittest.TestCase):
             ingest.ingest_incoming(
                 channel="telegram",
                 identifier="999000111",
-                handle="roger_tcp",
+                handle="proveedor_dos",
                 body=f"spam {index}",
                 external_id=f"tg-takeover-{index}",
             )
@@ -198,7 +198,7 @@ class TelegramIdentityTests(unittest.TestCase):
         result = ingest.ingest_incoming(
             channel="telegram",
             identifier="-1001234567890",
-            handle="claudia_tcp",
+            handle="proveedor_uno",
             body="hola desde el grupo",
             external_id="tg-group-1",
         )
@@ -221,7 +221,7 @@ class TelegramIdentityTests(unittest.TestCase):
         ingest.ingest_incoming(
             channel="telegram",
             identifier="555666777",
-            handle="claudia_tcp",
+            handle="proveedor_uno",
             body="hola",
             external_id="tg-missing-1",
         )

@@ -7,7 +7,7 @@ compra o pregunta, y tú respondes **por ese mismo chat**.
 
 Busca tu nombre y usa solo esa tabla. Las zonas son donde entregas.
 
-### Claudia — zonas: Playa, Marianao, Centro Habana
+### Proveedor Uno — zonas: Playa, Marianao, Centro Habana
 
 | Producto | Precio | Moneda | Stock | Categoría |
 |---|---|---|---|---|
@@ -19,7 +19,7 @@ Busca tu nombre y usa solo esa tabla. Las zonas son donde entregas.
 | Ventilador de Torre | 55 | USD | 6 | hogar |
 | Cargador Rápido 20W | 18 | USD | 30 | accesorios |
 
-### Roger — zonas: La Lisa, Marianao
+### Proveedor Dos — zonas: La Lisa, Marianao
 
 | Producto | Precio | Moneda | Stock | Categoría |
 |---|---|---|---|---|
@@ -39,7 +39,7 @@ Busca tu nombre y usa solo esa tabla. Las zonas son donde entregas.
 | Chocolate con Leche | 260 | CUP | 120 | snacks |
 | Maní Salado | 150 | CUP | 150 | snacks |
 
-### Rolando — zonas: Playa, La Lisa, Boyeros, San Miguel, Arroyo Naranjo, Cerro, Cotorro, Diez de Octubre, Guanabacoa, Marianao, Plaza de la Revolución, Regla
+### Proveedor Tres — zonas: Playa, La Lisa, Boyeros, San Miguel, Arroyo Naranjo, Cerro, Cotorro, Diez de Octubre, Guanabacoa, Marianao, Plaza de la Revolución, Regla
 
 | Producto | Precio | Moneda | Stock | Categoría |
 |---|---|---|---|---|
@@ -58,7 +58,7 @@ Busca tu nombre y usa solo esa tabla. Las zonas son donde entregas.
 | Audífonos Bluetooth | 35 | USD | 20 | accesorios |
 | Combo Personalizado | 60 | USD | 10 | sin categoría |
 
-### Yoan — zonas: Habana del Este, Guanabacoa, Regla
+### Proveedor Cuatro — zonas: Habana del Este, Guanabacoa, Regla
 
 | Producto | Precio | Moneda | Stock | Categoría |
 |---|---|---|---|---|

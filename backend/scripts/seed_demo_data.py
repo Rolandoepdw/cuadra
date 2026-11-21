@@ -75,7 +75,7 @@ ZONES = [
 
 SUPPLIERS = [
     {
-        "name": "Claudia",
+        "name": "Proveedor Uno",
         "business_alias": "",
         "whatsapp_phone": "",
         "delivery_zone": "",
@@ -85,8 +85,8 @@ SUPPLIERS = [
         "active": 1,
     },
     {
-        "name": "Roger",
-        "business_alias": "El negro manoplero",
+        "name": "Proveedor Dos",
+        "business_alias": "Proveedor de prueba",
         "whatsapp_phone": "",
         "delivery_zone": "",
         "payment_terms": "",
@@ -95,8 +95,8 @@ SUPPLIERS = [
         "active": 1,
     },
     {
-        "name": "Rolando",
-        "business_alias": "El q no corre, se manda",
+        "name": "Proveedor Tres",
+        "business_alias": "Proveedor de prueba",
         "whatsapp_phone": "",
         "delivery_zone": "",
         "payment_terms": "",
@@ -105,7 +105,7 @@ SUPPLIERS = [
         "active": 1,
     },
     {
-        "name": "Yoan",
+        "name": "Proveedor Cuatro",
         "business_alias": "",
         "whatsapp_phone": "",
         "delivery_zone": "",
@@ -126,7 +126,7 @@ GROUPS = [
         "max_interval_s": 8,
         "notes": "",
         "sender": "userbot",
-        "peer_id": -1004306069907,
+        "peer_id": -1000000021,
     },
     {
         "channel": "telegram",
@@ -137,7 +137,7 @@ GROUPS = [
         "max_interval_s": 8,
         "notes": "",
         "sender": "userbot",
-        "peer_id": -1003929132787,
+        "peer_id": -1000000022,
     },
     {
         "channel": "telegram",
@@ -148,7 +148,7 @@ GROUPS = [
         "max_interval_s": 8,
         "notes": "",
         "sender": "userbot",
-        "peer_id": -5195658801,
+        "peer_id": -1000000011,
     },
     {
         "channel": "telegram",
@@ -159,7 +159,7 @@ GROUPS = [
         "max_interval_s": 8,
         "notes": "",
         "sender": "userbot",
-        "peer_id": -5477392336,
+        "peer_id": -1000000012,
     },
     {
         "channel": "telegram",
@@ -170,7 +170,7 @@ GROUPS = [
         "max_interval_s": 8,
         "notes": "",
         "sender": "userbot",
-        "peer_id": -5354386462,
+        "peer_id": -1000000013,
     },
     {
         "channel": "telegram",
@@ -222,8 +222,8 @@ GROUPS = [
 # Group configuration.
 #
 # `ALL_ACTIVE_ZONES` means "Todas" (every active municipality). The rest are
-# intentionally varied so the zone behavior can be tested: for example, Roger
-# delivers in La Lisa / Marianao, so a Roger product should not be published in
+# intentionally varied so the zone behavior can be tested: for example, Proveedor Dos
+# delivers in La Lisa / Marianao, so a Proveedor Dos product should not be published in
 # "Venta Motos E Playa" (which is Playa only).
 # --------------------------------------------------------------------------
 
@@ -253,26 +253,26 @@ GROUP_ZONES = {
 }
 
 SUPPLIER_DELIVERY_ZONES = [
-    ("Claudia", "Playa"),
-    ("Claudia", "Marianao"),
-    ("Claudia", "Centro Habana"),
-    ("Roger", "La Lisa"),
-    ("Roger", "Marianao"),
-    ("Rolando", "Playa"),
-    ("Rolando", "La Lisa"),
-    ("Rolando", "Boyeros"),
-    ("Rolando", "San Miguel"),
-    ("Rolando", "Arroyo Naranjo"),
-    ("Rolando", "Cerro"),
-    ("Rolando", "Cotorro"),
-    ("Rolando", "Diez de Octubre"),
-    ("Rolando", "Guanabacoa"),
-    ("Rolando", "Marianao"),
-    ("Rolando", "Plaza de la Revolución"),
-    ("Rolando", "Regla"),
-    ("Yoan", "Habana del Este"),
-    ("Yoan", "Guanabacoa"),
-    ("Yoan", "Regla"),
+    ("Proveedor Uno", "Playa"),
+    ("Proveedor Uno", "Marianao"),
+    ("Proveedor Uno", "Centro Habana"),
+    ("Proveedor Dos", "La Lisa"),
+    ("Proveedor Dos", "Marianao"),
+    ("Proveedor Tres", "Playa"),
+    ("Proveedor Tres", "La Lisa"),
+    ("Proveedor Tres", "Boyeros"),
+    ("Proveedor Tres", "San Miguel"),
+    ("Proveedor Tres", "Arroyo Naranjo"),
+    ("Proveedor Tres", "Cerro"),
+    ("Proveedor Tres", "Cotorro"),
+    ("Proveedor Tres", "Diez de Octubre"),
+    ("Proveedor Tres", "Guanabacoa"),
+    ("Proveedor Tres", "Marianao"),
+    ("Proveedor Tres", "Plaza de la Revolución"),
+    ("Proveedor Tres", "Regla"),
+    ("Proveedor Cuatro", "Habana del Este"),
+    ("Proveedor Cuatro", "Guanabacoa"),
+    ("Proveedor Cuatro", "Regla"),
 ]
 
 # --------------------------------------------------------------------------
@@ -300,7 +300,7 @@ CATEGORIES = [
 DEMO_PRODUCTS = [
     {
         "name": "Laptop Empresarial",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "tecnología",
         "description": "Lenovo ThinkPad\ni5 11va gen\n16GB RAM\n512GB SSD",
         "price": 350.0,
@@ -311,7 +311,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Laptop Ultraligera",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "tecnología",
         "description": "ASUS ZenBook\nRyzen 7\n16GB RAM\n1TB SSD",
         "price": 720.0,
@@ -322,7 +322,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Monitor LED 24",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "tecnología",
         "description": 'Monitor LED 24"\nFull HD 75Hz\nHDMI + VGA',
         "price": 180.0,
@@ -333,7 +333,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Tablet Android 10",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "tecnología",
         "description": "Tablet 10 pulgadas\n4GB RAM\n64GB almacenamiento",
         "price": 220.0,
@@ -344,7 +344,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Aspiradora Portátil",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "hogar",
         "description": "Aspiradora portátil\n1200W\nfiltro HEPA",
         "price": 95.0,
@@ -355,7 +355,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Freidora de Aire",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "hogar",
         "description": "Freidora de aire 5L\n1500W",
         "price": 130.0,
@@ -366,7 +366,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Moto Eléctrica Urban",
-        "supplier": "Roger",
+        "supplier": "Proveedor Dos",
         "category": "motos_eléctricas",
         "description": "Motorina Urban\n72V x 32A\nautonomía 80 km",
         "price": 1350.0,
@@ -377,7 +377,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Moto Eléctrica Cargo",
-        "supplier": "Roger",
+        "supplier": "Proveedor Dos",
         "category": "motos_eléctricas",
         "description": "Motorina Cargo\n72V x 50A\ncaja trasera 200 kg",
         "price": 2500.0,
@@ -388,7 +388,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Moto Eléctrica Sport",
-        "supplier": "Roger",
+        "supplier": "Proveedor Dos",
         "category": "motos_eléctricas",
         "description": "Motorina Sport\n72V x 40A",
         "price": 1800.0,
@@ -399,7 +399,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Moto Combustión Yamaha 150",
-        "supplier": "Roger",
+        "supplier": "Proveedor Dos",
         "category": "motos_combustión",
         "description": "Yamaha YBR 150\n4 tiempos\narranque eléctrico",
         "price": 2100.0,
@@ -410,7 +410,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Moto Combustión Haojue 200",
-        "supplier": "Roger",
+        "supplier": "Proveedor Dos",
         "category": "motos_combustión",
         "description": "Haojue 200CC\n4 tiempos",
         "price": 2300.0,
@@ -421,7 +421,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Pan con Croqueta",
-        "supplier": "Roger",
+        "supplier": "Proveedor Dos",
         "category": "alimentos",
         "description": "Pan con croqueta de jamón\nhecho al momento",
         "price": 300.0,
@@ -432,7 +432,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Café con Leche",
-        "supplier": "Roger",
+        "supplier": "Proveedor Dos",
         "category": "alimentos",
         "description": "Café con leche\nvaso 8 oz",
         "price": 150.0,
@@ -443,7 +443,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Combo Desayuno",
-        "supplier": "Roger",
+        "supplier": "Proveedor Dos",
         "category": "alimentos",
         "description": "Café con leche + pan con tortilla",
         "price": 450.0,
@@ -454,7 +454,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Pizza Personal",
-        "supplier": "Roger",
+        "supplier": "Proveedor Dos",
         "category": "alimentos",
         "description": "Pizza personal\nextra queso",
         "price": 350.0,
@@ -465,7 +465,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Jugo Natural",
-        "supplier": "Roger",
+        "supplier": "Proveedor Dos",
         "category": "alimentos",
         "description": "Jugo natural 12 oz",
         "price": 200.0,
@@ -476,7 +476,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "PC de Escritorio Ryzen 5",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "computación",
         "description": "Ryzen 5 5600G\n16GB RAM\n512GB SSD",
         "price": 480.0,
@@ -487,7 +487,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Impresora Multifuncional",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "computación",
         "description": "Impresora multifuncional\nWiFi + USB",
         "price": 210.0,
@@ -498,7 +498,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Mouse Inalámbrico",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "accesorios",
         "description": "Mouse inalámbrico 2.4GHz\nreceptor USB",
         "price": 15.0,
@@ -509,7 +509,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Teclado Mecánico",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "accesorios",
         "description": "Teclado mecánico RGB\nswitch azul",
         "price": 45.0,
@@ -520,7 +520,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Audífonos Bluetooth",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "accesorios",
         "description": "Audífonos Bluetooth 5.3",
         "price": 35.0,
@@ -531,7 +531,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Papas Fritas",
-        "supplier": "Roger",
+        "supplier": "Proveedor Dos",
         "category": "snacks",
         "description": "Papas fritas\nbolsa 150 g",
         "price": 180.0,
@@ -542,7 +542,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Refresco Cola",
-        "supplier": "Roger",
+        "supplier": "Proveedor Dos",
         "category": "snacks",
         "description": "Refresco de cola\nlata 355 ml",
         "price": 220.0,
@@ -553,7 +553,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Chocolate con Leche",
-        "supplier": "Roger",
+        "supplier": "Proveedor Dos",
         "category": "snacks",
         "description": "Chocolate con leche\nbarra 90 g",
         "price": 260.0,
@@ -564,7 +564,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Maní Salado",
-        "supplier": "Roger",
+        "supplier": "Proveedor Dos",
         "category": "snacks",
         "description": "Maní salado\nbolsa 100 g",
         "price": 150.0,
@@ -576,7 +576,7 @@ DEMO_PRODUCTS = [
     # --- Scenario data: new suppliers -------------------------------------
     {
         "name": "Laptop Gamer RTX 3050",
-        "supplier": "Claudia",
+        "supplier": "Proveedor Uno",
         "category": "tecnología",
         "description": "Laptop gaming\nRTX 3050\n16GB RAM\n512GB SSD",
         "price": 850.0,
@@ -587,7 +587,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Cafetera Express",
-        "supplier": "Claudia",
+        "supplier": "Proveedor Uno",
         "category": "hogar",
         "description": "Cafetera express\n15 bares\napagado automático",
         "price": 160.0,
@@ -598,7 +598,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Power Bank 20000",
-        "supplier": "Claudia",
+        "supplier": "Proveedor Uno",
         "category": "accesorios",
         "description": "Power bank 20000 mAh\ncarga rápida 22.5W",
         "price": 40.0,
@@ -610,7 +610,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Cable HDMI 2 m",
-        "supplier": "Claudia",
+        "supplier": "Proveedor Uno",
         "category": "accesorios",
         "description": "Cable HDMI 2.1\n2 metros\n4K 120Hz",
         "price": 8.0,
@@ -621,7 +621,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Moto Eléctrica Delivery",
-        "supplier": "Yoan",
+        "supplier": "Proveedor Cuatro",
         "category": "motos_eléctricas",
         "description": "Motorina Delivery\n72V x 40A\ncaja térmica",
         "price": 1600.0,
@@ -632,7 +632,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Moto Combustión Zontes 250",
-        "supplier": "Yoan",
+        "supplier": "Proveedor Cuatro",
         "category": "motos_combustión",
         "description": "Zontes 250CC\ninyección electrónica",
         "price": 2600.0,
@@ -643,7 +643,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Combo Personalizado",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": None,
         "description": "Combo armado a pedido\ncliente elige los productos",
         "price": 60.0,
@@ -653,12 +653,12 @@ DEMO_PRODUCTS = [
         "stock": 10,
     },
     # --- Real test 2026-11-12: widen the thin catalogs ---------------------
-    # Claudia and Yoan had only 4 and 2 products. These additions also cover
+    # Proveedor Uno and Proveedor Cuatro had only 4 and 2 products. These additions also cover
     # cases the seed did not: low stock (1), a PAUSED product and two names
     # that are easy to confuse ("Urban" vs "Urban Plus").
     {
         "name": "Microondas 20L",
-        "supplier": "Claudia",
+        "supplier": "Proveedor Uno",
         "category": "hogar",
         "description": "Microondas 20 litros\n700W\n5 niveles de potencia",
         "price": 140.0,
@@ -669,7 +669,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Ventilador de Torre",
-        "supplier": "Claudia",
+        "supplier": "Proveedor Uno",
         "category": "hogar",
         "description": "Ventilador de torre\noscilante\n3 velocidades",
         "price": 55.0,
@@ -680,7 +680,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Cargador Rápido 20W",
-        "supplier": "Claudia",
+        "supplier": "Proveedor Uno",
         "category": "accesorios",
         "description": "Cargador rápido 20W\nUSB-C\ncompatible con iPhone y Android",
         "price": 18.0,
@@ -691,7 +691,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Moto Eléctrica City",
-        "supplier": "Yoan",
+        "supplier": "Proveedor Cuatro",
         "category": "motos_eléctricas",
         "description": "Motorina City\n60V x 20A\nautonomía 45 km",
         "price": 1200.0,
@@ -702,7 +702,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Batería para Moto Eléctrica",
-        "supplier": "Yoan",
+        "supplier": "Proveedor Cuatro",
         "category": "accesorios",
         "description": "Batería 60V x 20A\npara moto eléctrica",
         "price": 250.0,
@@ -713,7 +713,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Casco para Moto",
-        "supplier": "Yoan",
+        "supplier": "Proveedor Cuatro",
         "category": "accesorios",
         "description": "Casco certificado\ntalla ajustable",
         "price": 40.0,
@@ -724,7 +724,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Laptop Gamer RTX 4060",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "tecnología",
         "description": "Laptop gaming\nRTX 4060\n16GB RAM\n1TB SSD",
         "price": 1100.0,
@@ -735,7 +735,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Router WiFi 6",
-        "supplier": "Rolando",
+        "supplier": "Proveedor Tres",
         "category": "tecnología",
         "description": "Router WiFi 6\ndual band\n4 antenas",
         "price": 90.0,
@@ -747,7 +747,7 @@ DEMO_PRODUCTS = [
     },
     {
         "name": "Moto Eléctrica Urban Plus",
-        "supplier": "Roger",
+        "supplier": "Proveedor Dos",
         "category": "motos_eléctricas",
         "description": "Motorina Urban Plus\n72V x 35A\nautonomía 95 km",
         "price": 1500.0,
@@ -849,14 +849,14 @@ DEMO_BROADCASTS = [
         "groups": ["Canal Ventas Electrodomésticos", "Venta Electrodomésticos"],
     },
     {"product": "Casco para Moto", "groups": ["Venta Electrodomésticos"]},
-    # Yoan delivers in Habana del Este / Guanabacoa / Regla, so the moto
+    # Proveedor Cuatro delivers in Habana del Este / Guanabacoa / Regla, so the moto
     # groups (La Lisa / Marianao) would not match; manual all-zone group.
     {"product": "Moto Eléctrica City", "groups": ["Venta Electrodomésticos"]},
     {
         "product": "Batería para Moto Eléctrica",
         "groups": ["Venta Electrodomésticos"],
     },
-    # Roger delivers in La Lisa / Marianao, same zones as "Venta Motos E".
+    # Proveedor Dos delivers in La Lisa / Marianao, same zones as "Venta Motos E".
     {"product": "Moto Eléctrica Urban Plus", "groups": ["Venta Motos E"]},
 ]
 

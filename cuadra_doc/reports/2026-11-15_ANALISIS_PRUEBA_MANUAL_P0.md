@@ -1,8 +1,8 @@
-# Analisis de prueba manual — Test P0 con Rolando (TCP unico)
+# Analisis de prueba manual — Test P0 con Proveedor Tres (TCP unico)
 
 **Fecha:** 2026-11-15, 17:52–17:58 UTC
 **Canal:** Telegram userbot (`@repdcuadra`)
-**Base de datos:** `backend/data/cuadra.db` (sembrada con `seed_rolando.py`)
+**Base de datos:** `backend/data/cuadra.db` (sembrada con `seed_single_supplier.py`)
 **Resultado:** 0 ventas creadas, cliente se fue frustrado
 
 ---
@@ -32,12 +32,12 @@ El sistema no falló técnicamente, pero **no retuvo ningún dato entre turnos**
 | m2 | 17:52:16 | CLI | "Buenas tarde3s" | m4: **"¿Dime cuál producto te interesa..."** | C1: Repetición idéntica a m3 |
 | m5 | 17:53:06 | CLI | "Tienes laptops" | m6: **"¿Dime cuál producto te interesa..."** | C1: No responde sobre laptops, repite plantilla |
 | m7 | 17:53:37 | CLI | "Me interesa comprar una laptop, que tienes disponible" | m8: "Para dejarte el pedido listo me falta la zona..." | C3: Salta a captura sin mostrar catálogo |
-| m9 | 17:55:16 | CLI | "Domingo mujica 110..., 56470062" | m10: **"Para dejarte el pedido listo me falta la zona..."** | C2: Ya dio dirección+teléfono, ignorados |
+| m9 | 17:55:16 | CLI | "Calle Prueba 110..., 55500000" | m10: **"Para dejarte el pedido listo me falta la zona..."** | C2: Ya dio dirección+teléfono, ignorados |
 | m11 | 17:55:31 | CLI | "Playa" | m12: **"¿Dime cuál producto te interesa..."** | C2: Ya dio zona, bot resetea |
 | m13 | 17:56:10 | CLI | "Me interesa comprar tres laptops, que tipo de laptop tienes..." | m14: **"¿Dime cuál producto te interesa..."** | C2+C3: No responde tipos, resetea |
 | m15 | 17:56:37 | CLI | "Laptop Ultraligera" | m16: "Sí, tenemos Laptop Ultraligera. Está en 720 USD..." | Primera vez que da precio |
 | m17 | 17:57:01 | CLI | "quiero 3" | m18: "Para dejarte el pedido listo me falta la dirección..." | C4: No interpreta cantidad, pide dirección ya dada |
-| m19 | 17:57:22 | CLI | "Domingo mujica 110..., 56470062" | m20: **"¿Dime cuál producto te interesa..."** | C2: Repite dirección, bot la ignora |
+| m19 | 17:57:22 | CLI | "Calle Prueba 110..., 55500000" | m20: **"¿Dime cuál producto te interesa..."** | C2: Repite dirección, bot la ignora |
 | m21 | 17:57:53 | CLI | "Ya te dije lo que quería" | m22: **"¿Dime cuál producto te interesa..."** | C5: No maneja enfado |
 
 ---

@@ -1,7 +1,7 @@
 # Análisis del test real — 2026-11-13
 
 **Fecha del test:** 2026-11-13, 20:51–21:46 local (01:51–02:46 UTC)
-**Canal:** Telegram userbot (`@repdcuadra`, id `7516390666`)
+**Canal:** Telegram userbot (`@repdcuadra`, id `1000000002`)
 **Configuración:** `sales.mode = autonomous`, `sales.followup.mode = shadow`
 **Base de datos:** `backend/data/cuadra.db` (sembrada de cero antes del test)
 **Estado:** análisis cerrado. Sin cambios de código aplicados todavía.
@@ -43,7 +43,7 @@ Ninguna queja de los clientes se explica por caída de servicio. Se explica por 
 
 - **Jobs:** 260/260 `COMPLETED`. 0 `FAILED`, 0 reintentos agotados.
 - **LLM:** 115/115 llamadas OK. Sin timeouts, sin JSON inválido, sin caídas del servidor.
-- **Envíos:** 0 fallos. Los peers de los 4 TCP eran correctos (`1267804486`, `1866057617`, `8905117076`, `971580959`).
+- **Envíos:** 0 fallos. Los peers de los 4 TCP eran correctos (`1000000003`, `1000000004`, `1000000001`, `1000000005`).
 - **Turns:** 83/83 `DONE`. No hubo turnos colgados.
 - **Ruido irrelevante:** 6 `Bad Gateway` de aiogram (Bot API) y 15 ticks del scheduler perdidos. El tráfico del test fue 100 % userbot, así que el Bot API no participó.
 
@@ -64,7 +64,7 @@ Es decir: **el sistema no se rompió; hizo exactamente lo que el código dice, y
 
 Si no, devuelve `None`.
 
-Evidencia (c4, Pizza Personal / Roger):
+Evidencia (c4, Pizza Personal / Proveedor Dos):
 
 ```
 m66 CLI 02:01:03  Calle 51 #4410 55545678
@@ -73,7 +73,7 @@ m74 CLI 02:02:01  Esto es Marianao        ← rechazado: no hay hint
 m76 BOT 02:02:22  ...me falta la zona de entrega...
 ```
 
-La conversación murió en `CAPTURE_DATA`, nunca se creó la venta y **Roger no recibió nada**.
+La conversación murió en `CAPTURE_DATA`, nunca se creó la venta y **Proveedor Dos no recibió nada**.
 Mismo patrón en c5 con `"soy de Mariano"` (sin hint válido y con errata).
 
 #### B2. Bucle post-venta: cualquier intención de compra devuelve la venta vieja
@@ -99,7 +99,7 @@ Dos defectos encadenados:
 1. `_ACK_CONFIRM = \b(RECIBID[OA]|CONFIRMAD[OA]|PREPARAD[OA]|LISTO)\b` → **`"RECIVIDO V-000003"` no hace match**, así que ni siquiera se llega a leer el código de orden.
 2. `_ack_sale` sin código elige `ORDER BY id LIMIT 1` entre `DISPATCHED` **y** `CONFIRMED`: la venta más antigua, no la que toca.
 
-Resultado: el `RECIBIDO` de Rolando confirmó la V-000001 (ya confirmada) y las ventas 3, 4 y 5 quedaron en `DISPATCHED` para siempre.
+Resultado: el `RECIBIDO` de Proveedor Tres confirmó la V-000001 (ya confirmada) y las ventas 3, 4 y 5 quedaron en `DISPATCHED` para siempre.
 El triage marcó `ambiguous=true` y **se descartó en silencio**.
 
 #### B4. La pregunta de escalación es el nombre crudo del slot
@@ -118,7 +118,7 @@ El intent de c3 fue `{"intencion": "consulta_dato", "datos_faltantes": ["municip
 > Producto: PC de Escritorio Ryzen 5
 > **"municipio"**
 
-Rolando contestó "Es Marianao" y el bot se lo devolvió al cliente como **su** zona, cuando la real era Diez de Octubre.
+Proveedor Tres contestó "Es Marianao" y el bot se lo devolvió al cliente como **su** zona, cuando la real era Diez de Octubre.
 
 Timeline: escalación creada 02:01:01 → enviada 02:04:33 → respondida 02:10:26 → cliente notificado 02:10:33. **9,5 minutos para empeorar el dato.**
 
@@ -160,7 +160,7 @@ c4 m53/m55: el cliente dijo "No" y el bot repitió la misma pregunta de slots, i
 
 `backend/cuadra/ai/handlers.py:1180-1198`
 
-Yoan escribió "j" y "/start": `OTHER` + `ambiguous=true` → evento, nada más. **El TCP nunca recibe respuesta.** Un proveedor que escribe y no obtiene nada concluye que el sistema está roto.
+Proveedor Cuatro escribió "j" y "/start": `OTHER` + `ambiguous=true` → evento, nada más. **El TCP nunca recibe respuesta.** Un proveedor que escribe y no obtiene nada concluye que el sistema está roto.
 
 #### B11. Prioridad invertida para TCP
 
@@ -191,12 +191,12 @@ El modelo **no falló ninguna llamada** y la redacción es correcta. Lo que se p
 
 ---
 
-## 6. Por qué Roger y Yoan no recibieron nada
+## 6. Por qué Proveedor Dos y Proveedor Cuatro no recibieron nada
 
 No hubo fallo de envío: peers correctos, 0 jobs fallidos.
 
-- **Roger**: su única conversación (c4, Pizza) murió en `CAPTURE_DATA` por B1. Nunca existió venta que despachar.
-- **Yoan**: ningún cliente preguntó por sus productos (0 menciones en 185 mensajes) y sus dos mensajes entrantes se ignoraron por B10.
+- **Proveedor Dos**: su única conversación (c4, Pizza) murió en `CAPTURE_DATA` por B1. Nunca existió venta que despachar.
+- **Proveedor Cuatro**: ningún cliente preguntó por sus productos (0 menciones en 185 mensajes) y sus dos mensajes entrantes se ignoraron por B10.
 
 Uno es un bug; el otro es un problema de guion del test.
 
