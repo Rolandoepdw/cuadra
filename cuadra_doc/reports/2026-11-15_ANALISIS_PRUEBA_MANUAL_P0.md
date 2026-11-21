@@ -1,7 +1,7 @@
 # Analisis de prueba manual — Test P0 con Proveedor Tres (TCP unico)
 
 **Fecha:** 2026-11-15, 17:52–17:58 UTC
-**Canal:** Telegram userbot (`@repdcuadra`)
+**Canal:** Telegram userbot (`@cuadra_demo_userbot`)
 **Base de datos:** `backend/data/cuadra.db` (sembrada con `seed_single_supplier.py`)
 **Resultado:** 0 ventas creadas, cliente se fue frustrado
 

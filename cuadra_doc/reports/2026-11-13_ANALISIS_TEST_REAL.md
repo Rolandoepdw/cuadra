@@ -1,7 +1,7 @@
 # Análisis del test real — 2026-11-13
 
 **Fecha del test:** 2026-11-13, 20:51–21:46 local (01:51–02:46 UTC)
-**Canal:** Telegram userbot (`@repdcuadra`, id `1000000002`)
+**Canal:** Telegram userbot (`@cuadra_demo_userbot`, id `1000000002`)
 **Configuración:** `sales.mode = autonomous`, `sales.followup.mode = shadow`
 **Base de datos:** `backend/data/cuadra.db` (sembrada de cero antes del test)
 **Estado:** análisis cerrado. Sin cambios de código aplicados todavía.

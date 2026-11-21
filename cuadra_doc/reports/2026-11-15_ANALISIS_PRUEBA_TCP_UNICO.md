@@ -1,7 +1,7 @@
 # Analisis de prueba — Test individual con Proveedor Tres (TCP unico)
 
 **Fecha:** 2026-11-15, 06:29–06:47 UTC
-**Canal:** Telegram userbot (`@repdcuadra`)
+**Canal:** Telegram userbot (`@cuadra_demo_userbot`)
 **Configuración:** `sales.mode = autonomous`, `sales.followup.mode = shadow`
 **Base de datos:** `backend/data/cuadra.db` (sembrada con `seed_single_supplier.py` + `seed_real_supplier.json`)
 **Cuentas:** Cuadra (userbot), Proveedor Tres (TCP/@proveedor_tres), Usuario personal (cliente)
