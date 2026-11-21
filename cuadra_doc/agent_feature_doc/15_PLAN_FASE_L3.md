@@ -724,6 +724,13 @@ nunca convierte eso en una fecha estimada por el modelo.
 Solo si existe un corpus curado de políticas (garantía, transporte, pago,
 devoluciones). Sin corpus, se difiere y se documenta.
 
+> **Estado (2026-11-21): diferido.** Cuadra no tiene todavía un corpus curado y
+> versionado de políticas. Se pospone hasta que el dueño reúna esos documentos;
+> mientras tanto, el bot responde con los datos estructurados que ya tiene
+> (catálogo, ventas, zonas, memoria, escalaciones) y deriva al operador las
+> preguntas de política que no pueda respaldar. No se monta RAG sin corpus
+> (decisión §19).
+
 ### 9.2 Tool
 
 | Tool | Entrada | Salida |
@@ -776,12 +783,41 @@ mide en `shadow`; solo después se enciende.
 
 ### 10.4 Criterios de aceptación
 
-- [ ] `tool_selection_accuracy` ≥ 90 % en el golden set.
-- [ ] `tool_args_accuracy` ≥ 90 % en el golden set.
-- [ ] 0 escrituras ejecutadas por el modelo.
-- [ ] 0 regresiones en la suite.
-- [ ] El modo se puede volver a `off` sin reiniciar el flujo (setting).
-- [ ] Si no se cumple, se queda en `shadow` y se documenta.
+- [x] `tool_selection_accuracy` ≥ 90 % en el golden set (100 % el 2026-11-21).
+- [x] `tool_args_accuracy` ≥ 90 % en el golden set (100 % el 2026-11-21).
+- [x] 0 escrituras ejecutadas por el modelo.
+- [x] 0 regresiones en la suite.
+- [x] El modo se puede volver a `off` sin reiniciar el flujo (se lee por turno).
+- [x] Si no se cumple, se queda en `shadow` y se documenta.
+
+### 10.5 Estado de implementación (2026-11-21)
+
+- `llm.plan_tools(messages, allowed_tools)` pide al modelo una lista de
+  `ToolCall` con JSON Schema; recibe nombre, descripción y esquema de entrada de
+  cada tool, nunca SQL ni el catálogo.
+- El orquestador llama al planner solo si `AGENT_TOOLS_MODE` y el modo del
+  dominio están en `shadow`/`on`. `off` no llama al modelo.
+- `shadow`: registra `orchestrator.tool_plan` y compara la propuesta con las
+  lecturas deterministas (`orchestrator.tool_plan_shadow`); la respuesta no
+  cambia.
+- `on`: ejecuta las lecturas válidas con el registry (solo `read`) y las suma a
+  la evidencia; la política determinista sigue siendo el fallback y el
+  validador. Las tools de escritura no están en `allowed_tools`.
+- Golden set: `tests/golden/tools.jsonl` (6 casos) y `scripts/eval_tools.py`
+  para medir `tool_selection_accuracy` y `tool_args_accuracy`.
+- Tests: `tests/test_tool_planning.py` (5) y dos casos de turno que verifican
+  `shadow` (no ejecuta) y `on` (ejecuta solo lecturas).
+- Suite completa: **621 tests OK**; `check_all.ps1 -SkipBuild` en verde.
+- **Medido el 2026-11-21 con el modelo local:** `tool_selection_accuracy=100 %`
+  y `tool_args_accuracy=100 %` en los 6 casos de `tests/golden/tools.jsonl`
+  (`scripts/eval_tools.py`). El planner recibe un contexto compacto con los ids
+  del turno (conversación, producto, pedido, último listado) y el código rellena
+  los ids omitidos; el modelo solo elige la tool y el argumento de texto.
+- El default sigue en `off` para no añadir una llamada al modelo a cada turno.
+  Para encenderlo: `AGENT_TOOLS_MODE=shadow` (o `on`) y el modo del dominio
+  (`AGENT_TOOLS_CATALOG_MODE`, `..._SALES_MODE`, `..._MEMORY_MODE`,
+  `..._ESCALATIONS_MODE`). Se puede volver a `off` por turno sin reiniciar el
+  flujo.
 
 ---
 
@@ -972,12 +1008,12 @@ Un corte está terminado cuando:
 
 ## 18. Próximo paso inmediato
 
-L3.0–L3.3 están mergeados en `main`. **L3.4 está implementado en el árbol de
-trabajo** y la suite queda en **614 tests** verdes, pendiente de commit.
+L3.0–L3.4 están mergeados en `main`. **L3.6 está implementado y medido**
+(`tool_selection_accuracy=100 %`, `tool_args_accuracy=100 %` en el golden set);
+**L3.5 queda diferido** hasta que exista un corpus curado de políticas.
 
-1. Revisar y commitear L3.4.
-2. L3.5 (conocimiento) es opcional; si no hay corpus, el siguiente corte es
-   **L3.6**: tool calling del modelo en `shadow` → `on`.
+1. Commit de L3.6.
+2. Pasar a L3.7 (endurecimiento, evaluación y runbook).
 3. No hacer push ni merge sin pedido explícito.
 
 ---

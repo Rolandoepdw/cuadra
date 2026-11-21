@@ -85,6 +85,29 @@ if not tools_base.registry.has("memory.facts"):
 if not tools_base.registry.has("escalations.status"):
     escalations_tools.register(tools_base.registry)
 
+# L3.6: the global mode enables the planner; each domain must also be enabled.
+_TOOL_DOMAIN_KEYS = {
+    "catalog": "AGENT_TOOLS_CATALOG_MODE",
+    "memory": "AGENT_TOOLS_MEMORY_MODE",
+    "escalations": "AGENT_TOOLS_ESCALATIONS_MODE",
+}
+_DEFAULT_TOOL_DOMAIN_KEY = "AGENT_TOOLS_SALES_MODE"
+
+
+def _tool_domain_mode(domain: str) -> str:
+    key = _TOOL_DOMAIN_KEYS.get(domain, _DEFAULT_TOOL_DOMAIN_KEY)
+    return str(getattr(config, key, "off")).lower()
+
+
+def _allowed_tools(mode: str) -> list:
+    if mode not in ("shadow", "on"):
+        return []
+    return [
+        spec
+        for spec in tools_base.registry.allowed(mode)
+        if _tool_domain_mode(spec.domain) in ("shadow", "on")
+    ]
+
 
 def _turn_messages(conn, turn: dict) -> list[dict]:
     return conversations.get_messages(conn, turns.message_ids(turn))
@@ -637,6 +660,65 @@ async def run_turn(conn, conversation, turn: dict) -> dict:
         turn_id=turn.get("id"),
     )
 
+    # L3.6: the model may propose read tools. `off` never calls it; `shadow`
+    # records the proposal and compares it with the deterministic reads; `on`
+    # executes the valid reads before the deterministic route (never writes).
+    tool_mode = str(getattr(config, "AGENT_TOOLS_MODE", "off")).lower()
+    allowed_tools = _allowed_tools(tool_mode)
+    proposed_calls: list = []
+    tool_results: list = []
+    if allowed_tools:
+        planner_context = {
+            "conversation_id": conversation["id"],
+            "customer_id": conversation.get("customer_id"),
+        }
+        if frame.focus_product is not None:
+            planner_context["product_id"] = frame.focus_product["id"]
+        if context.get("sale_id"):
+            planner_context["sale_id"] = context["sale_id"]
+        if context.get("order_code"):
+            planner_context["order_code"] = context["order_code"]
+        if frame.last_listing is not None:
+            planner_context["last_listing_ids"] = list(
+                frame.last_listing.product_ids
+            )
+        plan_started = time.perf_counter()
+        plan_error = None
+        try:
+            proposed_calls = await llm.plan_tools(
+                nlu_messages,
+                allowed_tools,
+                context=planner_context,
+                conversation_id=conversation["id"],
+            )
+        except (llm.LLMUnavailable, llm.LLMInvalidOutput) as exc:
+            proposed_calls = []
+            plan_error = f"{type(exc).__name__}: {exc}"
+        tracing.trace_call(
+            "orchestrator.tool_plan",
+            {
+                "mode": tool_mode,
+                "allowed": [spec.name for spec in allowed_tools],
+            },
+            {
+                "calls": [
+                    {"name": call.name, "args": call.args}
+                    for call in proposed_calls
+                ],
+                "error": plan_error,
+            },
+            ok=plan_error is None,
+            error=plan_error,
+            duration_ms=(time.perf_counter() - plan_started) * 1000,
+            conversation_id=conversation["id"],
+            turn_id=turn.get("id"),
+        )
+        if tool_mode == "on":
+            for call in proposed_calls:
+                result = tools_base.registry.run(call.name, call.args, frame)
+                if result.ok:
+                    tool_results.append(result)
+
     resolve_started = time.perf_counter()
     product, product_source = _resolve_product(conn, intent, context, text)
     previous_stage = str(context.get("stage") or "").upper()
@@ -882,6 +964,34 @@ async def run_turn(conn, conversation, turn: dict) -> dict:
     ) + _memory_evidence(conn, conversation) + _escalation_evidence(
         conn, conversation, product
     )
+    # L3.6: reads executed from the model's proposal join the same evidence.
+    for result in tool_results:
+        for item in result.evidence:
+            if isinstance(item, dict):
+                frame.evidence.append({"tool": result.source, **item})
+    if tool_mode == "shadow" and proposed_calls:
+        evidence_tools = {
+            item.get("tool")
+            for item in frame.evidence
+            if isinstance(item, dict) and item.get("tool")
+        }
+        tracing.trace_call(
+            "orchestrator.tool_plan_shadow",
+            {
+                "proposed": [call.name for call in proposed_calls],
+                "evidence": sorted(evidence_tools),
+            },
+            {
+                "matched": [
+                    call.name
+                    for call in proposed_calls
+                    if call.name in evidence_tools
+                ]
+            },
+            ok=True,
+            conversation_id=conversation["id"],
+            turn_id=turn.get("id"),
+        )
 
     tracing.trace_call(
         "orchestrator.decide",

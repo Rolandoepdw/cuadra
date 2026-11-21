@@ -2,7 +2,7 @@
 tipo: indice
 proyecto: Cuadra
 modulo: agent_feature_doc
-estado: DISEÑO APROBADO — fases 0–5 y L3.0–L3.3 en main; L3.4 en el árbol
+estado: DISEÑO APROBADO — fases 0–5 y L3.0–L3.4 en main; L3.6 en el árbol; L3.5 diferido
 revisado: 2026-11-19
 aprobado: 2026-11-03
 tags: [indice, agente-ia, diseno-aprobado, revision, L3]
@@ -202,6 +202,15 @@ fecha.
 `memory.profile` y `memory.summary`, grounding de hechos («ya me dijiste» / «no
 me has dicho») y redacción de PII en las trazas de tools.
 
-**L3.4 está implementada en el árbol de trabajo**: `escalations.status` y
-`escalations.pending`, y grounding de «ya consulté», «el proveedor confirmó» y
-«sigo esperando». La suite queda en **614 tests**.
+**L3.4 ya está implementada y mergeada en `main`** (`86f24fd`):
+`escalations.status` y `escalations.pending`, y grounding de «ya consulté», «el
+proveedor confirmó» y «sigo esperando».
+
+**L3.6 está implementada y medida**: `llm.plan_tools`, planner en `shadow`/`on`,
+golden set `tests/golden/tools.jsonl` y `scripts/eval_tools.py`. Medición con el
+modelo local: **100 % de selección y 100 % de argumentos** en 6 casos. El default
+sigue en `off` para no añadir una llamada al modelo a cada turno; se enciende con
+`AGENT_TOOLS_MODE` + el modo del dominio. La suite queda en **621 tests**.
+
+**L3.5 (conocimiento) queda diferido** hasta que exista un corpus curado de
+políticas; sin corpus no se monta RAG.

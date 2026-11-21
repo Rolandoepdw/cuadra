@@ -3245,6 +3245,55 @@ class PruebaOchoTests(Phase1TestCase):
         self.assertEqual(context.get("product_id"), 2)
         self.assertEqual(context.get("sale_qty"), 1)
 
+    # --------------------------------------------- L3.6 tool planning
+    def test_shadow_mode_records_the_proposal_without_changing_the_reply(self):
+        from cuadra.ai.tools.base import ToolCall
+
+        proposal = [ToolCall(name="catalog.search", args={"query": "accesorios"})]
+        with patch(
+            "cuadra.ai.llm.plan_tools", new=AsyncMock(return_value=proposal)
+        ), patch.object(config, "AGENT_TOOLS_MODE", "shadow"), patch.object(
+            config, "AGENT_TOOLS_CATALOG_MODE", "shadow"
+        ):
+            self._turn(
+                "¿Qué accesorios tienes?",
+                llm.Intent(intencion="otro", confianza=0.9),
+            )
+        body = self._outbound()[-1]
+        for name in ("Mouse Inalámbrico", "Teclado Mecánico", "Audífonos Bluetooth"):
+            self.assertIn(name, body)
+        rows = self._rows(
+            "SELECT * FROM traces WHERE method = 'orchestrator.tool_plan'"
+        )
+        self.assertTrue(rows)
+        self.assertIn("catalog.search", rows[0]["output_json"])
+        self.assertEqual(
+            self._rows(
+                "SELECT * FROM traces WHERE method = 'tool.catalog.search'"
+            ),
+            [],
+        )
+
+    def test_on_mode_executes_the_proposed_read(self):
+        from cuadra.ai.tools.base import ToolCall
+
+        proposal = [ToolCall(name="catalog.search", args={"query": "accesorios"})]
+        with patch(
+            "cuadra.ai.llm.plan_tools", new=AsyncMock(return_value=proposal)
+        ), patch.object(config, "AGENT_TOOLS_MODE", "on"), patch.object(
+            config, "AGENT_TOOLS_CATALOG_MODE", "on"
+        ):
+            self._turn(
+                "¿Qué accesorios tienes?",
+                llm.Intent(intencion="otro", confianza=0.9),
+            )
+        body = self._outbound()[-1]
+        self.assertIn("Mouse Inalámbrico", body)
+        rows = self._rows(
+            "SELECT * FROM traces WHERE method = 'tool.catalog.search'"
+        )
+        self.assertTrue(rows)
+
 
 if __name__ == "__main__":
     unittest.main()

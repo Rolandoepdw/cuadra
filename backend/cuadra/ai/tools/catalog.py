@@ -125,7 +125,7 @@ def register(registry: Registry) -> None:
             name="catalog.search",
             domain="catalog",
             owner="catalog",
-            description="Busca productos del catálogo por texto libre.",
+            description="Busca productos del catálogo por texto libre. Úsala para «qué X tienes» o «busco X».",
             input_model=SearchArgs,
             permission=READ,
             timeout_s=timeout_seconds(),

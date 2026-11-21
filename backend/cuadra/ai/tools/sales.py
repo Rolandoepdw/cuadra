@@ -202,7 +202,7 @@ def register(registry: Registry) -> None:
         (
             "sales.status",
             "sales",
-            "Estado real de una venta por id, código o conversación.",
+            "Estado real de una venta por id, código o conversación. Úsala para «¿ya llegó mi pedido?».",
             StatusArgs,
             status,
         ),
@@ -223,7 +223,7 @@ def register(registry: Registry) -> None:
         (
             "zones.check",
             "zones",
-            "Confirma si un producto entrega en una zona.",
+            "Confirma si un producto entrega en una zona. Úsala para «¿llega a <zona>?».",
             ZoneCheckArgs,
             zones_check,
         ),

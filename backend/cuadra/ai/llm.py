@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from cuadra import config, db
 from cuadra.ai import prompts, tracing
+from cuadra.ai.tools.base import ToolCall
 from cuadra.domain import settings
 
 log = logging.getLogger("cuadra.llm")
@@ -399,6 +400,147 @@ async def classify_light(
             return Intent.model_validate_json(raw_retry)
         except ValidationError as second_error:
             raise LLMInvalidOutput(str(second_error)) from second_error
+
+
+# --------------------------------------------------------------- tool planning
+def _tool_plan_schema(allowed: list) -> dict:
+    names = [spec.name for spec in allowed]
+    return {
+        "type": "object",
+        "properties": {
+            "calls": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "enum": names},
+                        "args": {"type": "object"},
+                    },
+                    "required": ["name", "args"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["calls"],
+        "additionalProperties": False,
+    }
+
+
+def _tool_plan_prompt(allowed: list, context: dict | None = None) -> str:
+    lines = [
+        "Elige solo las lecturas necesarias para responder al último mensaje.",
+        "No inventes tools ni argumentos. Si no hace falta ninguna, devuelve "
+        '{"calls": []}.',
+        "Usa los ids del contexto del turno; no inventes ids.",
+        "Ejemplos:",
+        '- "¿tienen mouse inalámbrico?" -> {"calls":[{"name":"catalog.search",'
+        '"args":{"query":"mouse inalámbrico"}}]}',
+        '- "¿entregan en Playa?" (product_id=8) -> {"calls":[{"name":'
+        '"zones.check","args":{"product_id":8,"zone":"Playa"}}]}',
+        '- "¿mi pedido ya salió?" (order_code=V-000009) -> {"calls":[{"name":'
+        '"sales.status","args":{"order_code":"V-000009"}}]}',
+        '- "¿qué datos míos tienes?" (conversation_id=3) -> {"calls":[{"name":'
+        '"memory.facts","args":{"conversation_id":3}}]}',
+        '- "¿el almacén ya contestó?" (product_id=8) -> {"calls":[{"name":'
+        '"escalations.status","args":{"product_id":8}}]}',
+        '- "gracias" -> {"calls":[]}',
+    ]
+    if context:
+        lines.append(
+            "Contexto del turno: "
+            + json.dumps(context, ensure_ascii=False, sort_keys=True)
+        )
+    lines.append("Tools disponibles:")
+    for spec in allowed:
+        schema = spec.input_model.model_json_schema() if spec.input_model else {}
+        lines.append(
+            f"- {spec.name}: {spec.description}\n"
+            f"  args_schema={json.dumps(schema, ensure_ascii=False)}"
+        )
+    return "\n".join(lines)
+
+
+# When the model omits an id, the deterministic layer fills it from the turn
+# context. The model still chooses the tool and the free-text argument (zone,
+# query); ids are never invented.
+_CONTEXT_FILL = {
+    "catalog.get": ("product_id",),
+    "catalog.check_stock": ("product_id",),
+    "zones.check": ("product_id",),
+    "zones.list": ("product_id",),
+    "logistics.eta": ("product_id",),
+    "memory.facts": ("conversation_id",),
+    "memory.summary": ("conversation_id",),
+    "memory.profile": ("customer_id",),
+    "sales.history": ("conversation_id",),
+    "offers.pending": ("conversation_id",),
+    "escalations.pending": ("conversation_id",),
+    "escalations.status": ("product_id", "escalation_id"),
+    "sales.status": ("order_code", "sale_id", "conversation_id"),
+}
+
+
+def _fill_from_context(name: str, args: dict, context: dict | None) -> dict:
+    context = context or {}
+    filled = dict(args or {})
+    for key in _CONTEXT_FILL.get(name, ()):
+        if filled.get(key) in (None, ""):
+            value = context.get(key)
+            if value is not None:
+                filled[key] = value
+    return filled
+
+
+async def plan_tools(
+    messages: list[dict],
+    allowed: list,
+    *,
+    context: dict | None = None,
+    conversation_id: int | None = None,
+) -> list[ToolCall]:
+    """Ask the model which read tools it would use (never executes them).
+
+    The model sees only names, descriptions, input schemas and the compact turn
+    context (ids); it never sees SQL or the catalog. Unknown names and invalid
+    args are dropped so the deterministic policy stays the validator and the
+    fallback.
+    """
+    reads = [spec for spec in allowed if spec.permission == "read"]
+    if not reads:
+        return []
+    by_name = {spec.name: spec for spec in reads}
+    system = {"role": "system", "content": _tool_plan_prompt(reads, context)}
+    raw = await chat(
+        [system, *messages],
+        schema=_tool_plan_schema(reads),
+        schema_name="tool_plan",
+        temperature=0.0,
+        purpose="tool_plan",
+        conversation_id=conversation_id,
+    )
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise LLMInvalidOutput(f"tool plan is not JSON: {exc}") from exc
+    calls: list[ToolCall] = []
+    for item in payload.get("calls") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        spec = by_name.get(name)
+        if spec is None:
+            continue
+        args = item.get("args") or {}
+        if not isinstance(args, dict):
+            continue
+        args = _fill_from_context(name, args, context)
+        if spec.input_model is not None:
+            try:
+                args = spec.input_model.model_validate(args).model_dump()
+            except ValidationError:
+                continue
+        calls.append(ToolCall(name=name, args=args))
+    return calls
 
 
 async def compose(

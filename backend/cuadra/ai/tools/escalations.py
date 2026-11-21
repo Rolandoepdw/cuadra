@@ -93,7 +93,7 @@ def register(registry: Registry) -> None:
     specs = (
         (
             "escalations.status",
-            "Estado real de una consulta al TCP por id o producto.",
+            "Estado real de una consulta al TCP por id o producto. Úsala para «¿el proveedor respondió?».",
             StatusArgs,
             status,
         ),

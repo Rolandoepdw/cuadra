@@ -71,7 +71,7 @@ def register(registry: Registry) -> None:
     specs = (
         (
             "memory.facts",
-            "Hechos vigentes de la conversación (nombre, zona, dirección, etc.).",
+            "Hechos vigentes de la conversación (nombre, zona, dirección, etc.). Úsala para «¿ya me dijiste...?».",
             FactsArgs,
             facts,
         ),
