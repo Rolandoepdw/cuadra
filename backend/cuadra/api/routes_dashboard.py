@@ -344,6 +344,57 @@ async def metrics_summary() -> dict:
             conn,
             "SELECT COUNT(*) FROM conversations WHERE status IN ('ACTIVE', 'WAITING_TCP')",
         )
+
+        # L3.7: lecturas del agente (tools) y señales de grounding/watchdog.
+        tool_calls = _scalar(
+            conn,
+            """SELECT COUNT(*) FROM traces
+               WHERE created_at >= ? AND created_at < ? AND method LIKE 'tool.%'""",
+            (day_start, day_end),
+        )
+        tool_errors = _scalar(
+            conn,
+            """SELECT COUNT(*) FROM traces
+               WHERE created_at >= ? AND created_at < ? AND method LIKE 'tool.%'
+                 AND ok = 0""",
+            (day_start, day_end),
+        )
+        tool_turns = _scalar(
+            conn,
+            """SELECT COUNT(DISTINCT turn_id) FROM traces
+               WHERE created_at >= ? AND created_at < ? AND method LIKE 'tool.%'
+                 AND turn_id IS NOT NULL""",
+            (day_start, day_end),
+        )
+        tool_cache_hits = _scalar(
+            conn,
+            """SELECT COUNT(*) FROM traces
+               WHERE created_at >= ? AND created_at < ? AND method LIKE 'tool.%'
+                 AND output_json LIKE '%"cache_hit": true%'""",
+            (day_start, day_end),
+        )
+        grounding_violations = _scalar(
+            conn,
+            """SELECT COUNT(*) FROM events
+               WHERE created_at >= ? AND created_at < ?
+                 AND type = 'grounding_violation'""",
+            (day_start, day_end),
+        )
+        watchdog_timeouts = _scalar(
+            conn,
+            """SELECT COUNT(*) FROM events
+               WHERE created_at >= ? AND created_at < ? AND type = 'turn_timeout'""",
+            (day_start, day_end),
+        )
+        top_tools = [
+            {"method": row["method"], "calls": row["calls"]}
+            for row in conn.execute(
+                """SELECT method, COUNT(*) AS calls FROM traces
+                   WHERE created_at >= ? AND created_at < ? AND method LIKE 'tool.%'
+                   GROUP BY method ORDER BY calls DESC, method LIMIT 5""",
+                (day_start, day_end),
+            ).fetchall()
+        ]
     finally:
         conn.close()
 
@@ -357,6 +408,13 @@ async def metrics_summary() -> dict:
         "open_escalations": open_escalations or 0,
         "ambiguous_acks_today": ambiguous_acks or 0,
         "active_conversations": active_conversations or 0,
+        "tool_calls_today": tool_calls or 0,
+        "tool_errors_today": tool_errors or 0,
+        "tool_calls_per_turn": round(tool_calls / tool_turns, 1) if tool_turns else 0,
+        "tool_cache_hits_today": tool_cache_hits or 0,
+        "grounding_violations_today": grounding_violations or 0,
+        "watchdog_timeouts_today": watchdog_timeouts or 0,
+        "top_tools": top_tools,
     }
 
 

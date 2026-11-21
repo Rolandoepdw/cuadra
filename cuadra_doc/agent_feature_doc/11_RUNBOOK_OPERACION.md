@@ -263,7 +263,65 @@ archivo con un editor hexadecimal.
 
 ---
 
-## 10. Prohibiciones
+## 10. Agente L3: tools, grounding y watchdog
+
+### 10.1 Ver el modo actual
+
+- `AGENT_TOOLS_MODE`: `off` (default), `shadow` u `on`.
+- Modo por dominio: `AGENT_TOOLS_CATALOG_MODE`, `..._SALES_MODE`,
+  `..._MEMORY_MODE`, `..._ESCALATIONS_MODE`.
+- El planner solo corre si el global y el dominio están en `shadow`/`on`.
+- `off`: ruta determinista, sin llamada al planner.
+- `shadow`: el modelo propone; se registra y compara; la respuesta no cambia.
+- `on`: se ejecutan las lecturas válidas (solo `read`); la política
+  determinista sigue siendo el fallback y el validador.
+
+### 10.2 Apagar una tool o volver a `off`
+
+- Apagar un dominio: `CUADRA_AGENT_TOOLS_CATALOG_MODE=off` (o el dominio que
+  corresponda) y reiniciar el core.
+- Apagar todo el planner: `CUADRA_AGENT_TOOLS_MODE=off`.
+- Sin reiniciar el flujo: `config.AGENT_TOOLS_MODE` y
+  `config.AGENT_TOOLS_<DOMINIO>_MODE` se leen en cada turno; cambiarlos en
+  caliente vuelve a `off` en el siguiente turno.
+
+### 10.3 Leer una traza de tool
+
+- Panel **Trazas** o SQL:
+
+  ```sql
+  SELECT id, created_at, method, ok, duration_ms, output_json
+  FROM traces
+  WHERE method LIKE 'tool.%'
+  ORDER BY id DESC LIMIT 20;
+  ```
+
+- `output_json.cache_hit` indica que la lectura vino del cache del turno.
+- `orchestrator.tool_plan` guarda la propuesta del modelo;
+  `orchestrator.tool_plan_shadow` compara la propuesta con la evidencia
+  determinista.
+
+### 10.4 Grounding y watchdog
+
+- Violaciones de grounding: `events` con `type='grounding_violation'`.
+  En `shadow` se registran y la respuesta no cambia.
+- Watchdog: `events` con `type='turn_timeout'`; `AGENT_TURN_WATCHDOG_S=180`
+  (0 lo apaga).
+- El panel **Métricas** muestra llamadas a tools, errores, cache hit,
+  violaciones de grounding y watchdogs.
+
+### 10.5 Reproducir un fallo
+
+1. `scripts/replay_turns.py` para la conversación sintética (sin Telegram).
+2. `scripts/eval_tools.py` para el golden set del planner.
+3. `scripts/eval_agent.py --suite offline` para grounding y referencias
+   (no necesita modelo).
+4. `scripts/eval_agent.py --suite all` para NLU/compose con el modelo local.
+5. Añadir el caso al golden set antes de corregir.
+
+---
+
+## 11. Prohibiciones
 
 - No borrar grupos de difusión: se desactivan.
 - No borrar zonas ni proveedores: se desactivan (`active = 0`).

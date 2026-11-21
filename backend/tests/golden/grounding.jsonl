@@ -1,0 +1,15 @@
+{"id":"g01","reply":"No hay laptops en este momento.","evidence":[{"tool":"memory.facts","present":[]}],"expect_violation":"negative"}
+{"id":"g02","reply":"No hay laptops en este momento.","evidence":[{"tool":"catalog.search","empty_reason":"no_category"}],"expect_violation":null}
+{"id":"g03","reply":"Ese modelo está agotado.","evidence":[{"tool":"catalog.search","availability":"out_of_stock"}],"expect_violation":null}
+{"id":"g04","reply":"Tu pedido V-000001 ya fue entregado.","evidence":[],"expect_violation":"status"}
+{"id":"g05","reply":"Tu pedido V-000001 ya fue entregado.","evidence":[{"tool":"sales.status","sale_id":1,"status":"DELIVERED"}],"expect_violation":null}
+{"id":"g06","reply":"Sí entregamos en Marianao.","evidence":[],"expect_violation":"coverage"}
+{"id":"g07","reply":"Sí entregamos en Marianao.","evidence":[{"tool":"zones.check","zone_id":2,"covered":true}],"expect_violation":null}
+{"id":"g08","reply":"Te llega mañana.","evidence":[],"expect_violation":"date"}
+{"id":"g09","reply":"Te llega mañana.","evidence":[{"tool":"logistics.eta","source":"tcp","eta":"mañana"}],"expect_violation":null}
+{"id":"g10","reply":"Ya me dijiste tu dirección.","evidence":[{"tool":"memory.facts","present":[]}],"expect_violation":"memory"}
+{"id":"g11","reply":"Ya me dijiste tu dirección.","evidence":[{"tool":"memory.facts","present":["delivery_address"]}],"expect_violation":null}
+{"id":"g12","reply":"Ya me confirmó el almacén que sí está disponible.","evidence":[],"expect_violation":"escalation_answer"}
+{"id":"g13","reply":"Ya me confirmó el almacén que sí está disponible.","evidence":[{"tool":"escalations.status","status":"ANSWERED","answered":true}],"expect_violation":null}
+{"id":"g14","reply":"No hay problema, seguimos.","evidence":[],"expect_violation":null}
+{"id":"g15","reply":"La fecha de entrega se coordina al confirmar el pedido.","evidence":[],"expect_violation":null}

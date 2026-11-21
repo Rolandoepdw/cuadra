@@ -535,6 +535,13 @@ export interface MetricsSummary {
   open_escalations: number;
   ambiguous_acks_today: number;
   active_conversations: number;
+  tool_calls_today: number;
+  tool_errors_today: number;
+  tool_calls_per_turn: number;
+  tool_cache_hits_today: number;
+  grounding_violations_today: number;
+  watchdog_timeouts_today: number;
+  top_tools: { method: string; calls: number }[];
 }
 
 export interface MetricsTimelinePoint {

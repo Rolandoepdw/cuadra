@@ -102,6 +102,22 @@ class PlanToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("select ", system)
         self.assertNotIn("create table", system)
 
+    async def test_the_prompt_has_no_internal_economics(self):
+        registry = _registry()
+        captured = {}
+
+        async def fake_chat(messages, **kwargs):
+            captured["messages"] = messages
+            return json.dumps({"calls": []})
+
+        with patch("cuadra.ai.llm.chat", new=fake_chat):
+            await llm.plan_tools(
+                [{"role": "user", "content": "hola"}], registry.allowed("on")
+            )
+        system = captured["messages"][0]["content"].lower()
+        for key in ("commission", "supplier_payout", "payment_terms", "margin", "costo"):
+            self.assertNotIn(key, system)
+
 
 class GoldenToolsTests(unittest.TestCase):
     def test_golden_tools_exist_and_args_validate(self):

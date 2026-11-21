@@ -2,7 +2,7 @@
 tipo: indice
 proyecto: Cuadra
 modulo: agent_feature_doc
-estado: DISEÑO APROBADO — fases 0–5 y L3.0–L3.4 en main; L3.6 en el árbol; L3.5 diferido
+estado: DISEÑO APROBADO — fases 0–5 y L3.0–L3.6 en main; L3.7 en el árbol; L3.5 diferido
 revisado: 2026-11-19
 aprobado: 2026-11-03
 tags: [indice, agente-ia, diseno-aprobado, revision, L3]
@@ -210,7 +210,14 @@ proveedor confirmó» y «sigo esperando».
 golden set `tests/golden/tools.jsonl` y `scripts/eval_tools.py`. Medición con el
 modelo local: **100 % de selección y 100 % de argumentos** en 6 casos. El default
 sigue en `off` para no añadir una llamada al modelo a cada turno; se enciende con
-`AGENT_TOOLS_MODE` + el modo del dominio. La suite queda en **621 tests**.
+`AGENT_TOOLS_MODE` + el modo del dominio.
+
+**L3.7 está implementada en el árbol de trabajo**: golden sets de tools,
+grounding y referencias, `scripts/eval_agent.py` (`offline`/`all`), tarjeta
+«Herramientas» en Métricas y runbook §10. Medición: tools 100/100, grounding
+15/15, referencias 8/8, NLU 60/61 (98.4 %) y composición sin fugas. La suite
+queda en **624 tests**. Pendiente: prueba de carga con el modelo, replay de 20
+conversaciones reales y revisión del runbook por otra persona.
 
 **L3.5 (conocimiento) queda diferido** hasta que exista un corpus curado de
 políticas; sin corpus no se monta RAG.

@@ -56,3 +56,6 @@
 {"id": "n01", "text": "¿Tienes neveras?", "product": null, "expect": "consulta_stock"}
 {"id": "n02", "text": "venden lavadoras?", "product": null, "expect": "consulta_stock"}
 {"id": "n03", "text": "tienen refrigeradores", "product": null, "expect": "consulta_stock"}
+{"id": "cat01", "text": "¿qué laptops tienes?", "product": null, "expect": "consulta_stock"}
+{"id": "cat02", "text": "muéstrame los accesorios para laptop", "product": null, "expect": "consulta_stock", "accept": ["consulta_stock", "consulta_dato"]}
+{"id": "cat03", "text": "dame un listado de motos eléctricas", "product": null, "expect": "consulta_stock"}

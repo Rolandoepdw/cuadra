@@ -1,0 +1,8 @@
+{"id":"r01","text":"el segundo","listing_ids":[3,4,5],"expect_kind":"ordinal","expect_product_id":4}
+{"id":"r02","text":"esos","listing_ids":[3,4,5],"expect_kind":"demonstrative","expect_product_ids":[3,4,5],"expect_product_id":null}
+{"id":"r03","text":"el de antes","listing_ids":[],"focus_id":2,"expect_kind":"focus","expect_product_id":2}
+{"id":"r04","text":"el mismo","listing_ids":[],"focus_id":2,"expect_kind":"focus","expect_product_id":2}
+{"id":"r05","text":"el segundo","listing_ids":[],"expect_kind":"ordinal","expect_clarification":true}
+{"id":"r06","text":"esos","listing_ids":[],"expect_kind":"demonstrative","expect_clarification":true}
+{"id":"r07","text":"la última","listing_ids":[3,4,5],"expect_kind":"ordinal","expect_product_id":5}
+{"id":"r08","text":"hola","listing_ids":[],"expect_kind":null}

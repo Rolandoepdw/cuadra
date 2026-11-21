@@ -7,6 +7,8 @@ import {
   LayoutDashboard,
   ShieldAlert,
   Users,
+  Wrench,
+  Zap,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getMetricsSummary, getMetricsTimeline } from "@/lib/api";
@@ -103,6 +105,55 @@ export function MetricsPanel() {
           icon={LayoutDashboard}
           subtitle="ACTIVE o WAITING_TCP"
         />
+      </div>
+
+      <div className="mt-6">
+        <h2 className="text-lg font-semibold">Herramientas</h2>
+        <p className="text-sm text-muted-foreground">
+          Lecturas que el agente ejecutó hoy: catálogo, ventas, zonas, memoria y
+          escalaciones.
+        </p>
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <MetricCard
+            title="Llamadas a tools"
+            value={summary?.tool_calls_today ?? 0}
+            icon={Wrench}
+            subtitle={`${summary?.tool_calls_per_turn ?? 0} por turno`}
+          />
+          <MetricCard
+            title="Errores de tools"
+            value={summary?.tool_errors_today ?? 0}
+            icon={Bug}
+            subtitle="Ejecuciones fallidas"
+          />
+          <MetricCard
+            title="Cache hit"
+            value={summary?.tool_cache_hits_today ?? 0}
+            icon={Zap}
+            subtitle="Lecturas repetidas en el turno"
+          />
+          <MetricCard
+            title="Grounding"
+            value={summary?.grounding_violations_today ?? 0}
+            icon={ShieldAlert}
+            subtitle={`${summary?.watchdog_timeouts_today ?? 0} watchdogs`}
+          />
+        </div>
+        {(summary?.top_tools?.length ?? 0) > 0 && (
+          <div className="mt-4 rounded-lg border p-4">
+            <h3 className="text-sm font-semibold text-muted-foreground mb-2">
+              Top tools
+            </h3>
+            <ul className="space-y-1 text-sm">
+              {summary?.top_tools?.map((tool) => (
+                <li key={tool.method} className="flex justify-between gap-4">
+                  <span className="font-mono text-xs">{tool.method}</span>
+                  <span className="text-muted-foreground">{tool.calls}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
       <div className="mt-6">
@@ -207,6 +258,19 @@ export function MetricsPanel() {
             <span className="font-medium">Acks ambiguos:</span> mensajes de TCP donde el sistema
             no pudo determinar a qué venta aplicar el acuse (múltiples ventas DISPATCHED sin
             código de orden).
+          </li>
+          <li>
+            <span className="font-medium">Llamadas a tools:</span> lecturas ejecutadas por el
+            agente (catálogo, ventas, zonas, memoria y escalaciones). «Por turno» es el promedio
+            de lecturas por turno con tools.
+          </li>
+          <li>
+            <span className="font-medium">Cache hit:</span> lecturas repetidas en el mismo turno
+            que se resolvieron desde el cache del TurnFrame.
+          </li>
+          <li>
+            <span className="font-medium">Grounding / watchdogs:</span> afirmaciones sin
+            evidencia detectadas en `shadow` y turnos que superaron el watchdog.
           </li>
         </ul>
       </div>

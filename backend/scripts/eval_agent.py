@@ -21,14 +21,17 @@ import re
 import statistics
 import sys
 import time
+from types import SimpleNamespace
 
 import httpx
 
 BACKEND = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
 
-from cuadra.ai import prompts  # noqa: E402
+from cuadra.ai import grounding, prompts  # noqa: E402
 from cuadra.ai.llm import INTENT_SCHEMA, Intent  # noqa: E402
+from cuadra.ai.turn.frame import Listing  # noqa: E402
+from cuadra.ai.turn.references import resolve_reference  # noqa: E402
 from cuadra import config  # noqa: E402
 
 GOLDEN_DIR = BACKEND / "tests" / "golden"
@@ -178,8 +181,13 @@ def evaluate_nlu(
                 "id": case["id"],
                 "text": case["text"],
                 "expect": case["expect"],
+                "accept": case.get("accept"),
                 "got": intent.intencion if intent else None,
-                "intent_ok": bool(intent and intent.intencion == case["expect"]),
+                "intent_ok": bool(
+                    intent
+                    and intent.intencion
+                    in (case.get("accept") or [case["expect"]])
+                ),
                 "json_ok": json_ok,
                 "schema_ok": schema_ok,
                 "producto": intent.producto if intent else None,
@@ -246,6 +254,82 @@ def evaluate_compose(
     return results
 
 
+def evaluate_grounding(cases: list[dict]) -> list[dict]:
+    """Deterministic: validate replies against the evidence in each case."""
+    results = []
+    for case in cases:
+        frame = SimpleNamespace(
+            context=case.get("context") or {},
+            evidence=case.get("evidence") or [],
+        )
+        report = grounding.validate_claims(case["reply"], frame)
+        kinds = sorted({violation.kind for violation in report.violations})
+        expected = case.get("expect_violation")
+        ok = (not kinds) if expected is None else expected in kinds
+        results.append(
+            {
+                "id": case["id"],
+                "ok": ok,
+                "expected": expected,
+                "violations": kinds,
+                "reply": case["reply"],
+            }
+        )
+    return results
+
+
+def evaluate_references(cases: list[dict]) -> list[dict]:
+    """Deterministic: resolve ordinals, demonstratives and focus."""
+    results = []
+    for case in cases:
+        frame = SimpleNamespace(
+            last_listing=Listing(product_ids=list(case.get("listing_ids") or [])),
+            focus_product=(
+                {"id": case["focus_id"]}
+                if case.get("focus_id") is not None
+                else None
+            ),
+            context={"product_id": case.get("context_id")},
+        )
+        reference = resolve_reference(case["text"], frame)
+        expected_kind = case.get("expect_kind")
+        if expected_kind is None:
+            ok = reference is None
+        elif reference is None:
+            ok = False
+        else:
+            ok = reference.kind == expected_kind
+            if "expect_product_id" in case:
+                ok = ok and reference.product_id == case["expect_product_id"]
+            if "expect_product_ids" in case:
+                ok = ok and list(reference.product_ids) == case[
+                    "expect_product_ids"
+                ]
+            if "expect_clarification" in case:
+                ok = (
+                    ok
+                    and reference.needs_clarification
+                    == case["expect_clarification"]
+                )
+        results.append(
+            {
+                "id": case["id"],
+                "ok": ok,
+                "expected_kind": expected_kind,
+                "got_kind": reference.kind if reference else None,
+                "got_product_id": reference.product_id if reference else None,
+                "got_product_ids": list(reference.product_ids)
+                if reference
+                else [],
+                "needs_clarification": reference.needs_clarification
+                if reference
+                else None,
+                "text": case["text"],
+            }
+        )
+    return results
+
+
 def percentile(values: list[int], pct: float) -> int | None:
     if not values:
         return None
@@ -254,7 +338,12 @@ def percentile(values: list[int], pct: float) -> int | None:
     return ordered[index]
 
 
-def summarize(nlu: list[dict], compose: list[dict]) -> dict:
+def summarize(
+    nlu: list[dict],
+    compose: list[dict],
+    grounding_rows: list[dict] | None = None,
+    reference_rows: list[dict] | None = None,
+) -> dict:
     ok_nlu = [r for r in nlu if "error" not in r]
     ok_compose = [r for r in compose if "error" not in r]
     latencies = [r["elapsed_ms"] for r in ok_nlu + ok_compose]
@@ -263,6 +352,8 @@ def summarize(nlu: list[dict], compose: list[dict]) -> dict:
         for r in ok_nlu
         if isinstance(r.get("confianza"), (int, float))
     ]
+    grounding_rows = grounding_rows or []
+    reference_rows = reference_rows or []
     return {
         "nlu_total": len(nlu),
         "nlu_errors": len(nlu) - len(ok_nlu),
@@ -279,6 +370,10 @@ def summarize(nlu: list[dict], compose: list[dict]) -> dict:
         "bot_word_hits": sum(1 for r in ok_compose if r["bot_words"]),
         "leak_cases": sum(1 for r in ok_compose if r["leak_words"]),
         "price_flags": sum(1 for r in ok_compose if r["unknown_prices"]),
+        "grounding_total": len(grounding_rows),
+        "grounding_ok": sum(1 for r in grounding_rows if r["ok"]),
+        "references_total": len(reference_rows),
+        "references_ok": sum(1 for r in reference_rows if r["ok"]),
         "latency_p50_ms": percentile(latencies, 50),
         "latency_p95_ms": percentile(latencies, 95),
         "avg_tok_s": round(
@@ -290,7 +385,14 @@ def summarize(nlu: list[dict], compose: list[dict]) -> dict:
     }
 
 
-def print_report(summary: dict, nlu: list[dict], compose: list[dict], out_path: pathlib.Path) -> None:
+def print_report(
+    summary: dict,
+    nlu: list[dict],
+    compose: list[dict],
+    grounding_rows: list[dict],
+    reference_rows: list[dict],
+    out_path: pathlib.Path,
+) -> None:
     def ratio(key: str) -> str:
         total = summary["nlu_total"] - summary["nlu_errors"]
         return f"{summary[key]}/{total}" if total else "0/0"
@@ -313,6 +415,10 @@ def print_report(summary: dict, nlu: list[dict], compose: list[dict], out_path: 
     print(
         f"LAT    p50={summary['latency_p50_ms']} ms  p95={summary['latency_p95_ms']} ms  "
         f"tok/s={summary['avg_tok_s']}"
+    )
+    print(
+        f"GROUND ok={summary['grounding_ok']}/{summary['grounding_total']}  "
+        f"REFS ok={summary['references_ok']}/{summary['references_total']}"
     )
     failures = [r for r in nlu if "error" in r or not r["intent_ok"]]
     if failures:
@@ -337,6 +443,24 @@ def print_report(summary: dict, nlu: list[dict], compose: list[dict], out_path: 
                 ])
             )
             print(f"  {row['id']:<6} {reason}")
+    ground_failures = [r for r in grounding_rows if not r["ok"]]
+    if ground_failures:
+        print("")
+        print("Grounding failures:")
+        for row in ground_failures:
+            print(
+                f"  {row['id']:<6} expected={row['expected']!s:<16} "
+                f"got={','.join(row['violations']) or 'ok'}  {row['reply']}"
+            )
+    ref_failures = [r for r in reference_rows if not r["ok"]]
+    if ref_failures:
+        print("")
+        print("Reference failures:")
+        for row in ref_failures:
+            print(
+                f"  {row['id']:<6} expected={row['expected_kind']!s:<16} "
+                f"got={row['got_kind']!s:<16} {row['text']}"
+            )
     print("")
     print(f"report -> {out_path}")
 
@@ -351,6 +475,8 @@ _COMPARE_METRICS = (
     ("bot_word_hits", "bot words"),
     ("leak_cases", "leaks"),
     ("price_flags", "invented prices"),
+    ("grounding_ok", "grounding ok"),
+    ("references_ok", "references ok"),
     ("latency_p50_ms", "p50 ms"),
     ("latency_p95_ms", "p95 ms"),
     ("avg_tok_s", "tok/s"),
@@ -401,9 +527,12 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=0, help="run only the first N NLU cases")
     parser.add_argument(
         "--suite",
-        choices=("all", "nlu", "compose"),
+        choices=("all", "nlu", "compose", "offline"),
         default="all",
-        help="run both suites (default), only NLU or only reply composition",
+        help=(
+            "run both model suites (default), only NLU, only compose, or "
+            "'offline' for grounding/references only"
+        ),
     )
     parser.add_argument(
         "--compare",
@@ -416,23 +545,32 @@ def main() -> int:
     products = json.loads((golden_dir / "products.json").read_text(encoding="utf-8"))
     nlu_cases = load_jsonl(golden_dir / "nlu.jsonl")
     compose_cases = load_jsonl(golden_dir / "compose.jsonl")
+    grounding_cases = load_jsonl(golden_dir / "grounding.jsonl")
+    reference_cases = load_jsonl(golden_dir / "references.jsonl")
     if args.limit:
         nlu_cases = nlu_cases[: args.limit]
 
     url = args.base_url.rstrip("/")
-    with httpx.Client(base_url=url, timeout=httpx.Timeout(600.0, connect=10.0)) as client:
-        nlu = (
-            evaluate_nlu(client, nlu_cases, products, args.model)
-            if args.suite != "compose"
-            else []
-        )
-        compose = (
-            evaluate_compose(client, compose_cases, products, args.model)
-            if args.suite != "nlu"
-            else []
-        )
+    nlu: list[dict] = []
+    compose: list[dict] = []
+    if args.suite != "offline":
+        with httpx.Client(
+            base_url=url, timeout=httpx.Timeout(600.0, connect=10.0)
+        ) as client:
+            nlu = (
+                evaluate_nlu(client, nlu_cases, products, args.model)
+                if args.suite != "compose"
+                else []
+            )
+            compose = (
+                evaluate_compose(client, compose_cases, products, args.model)
+                if args.suite != "nlu"
+                else []
+            )
+    grounding_rows = evaluate_grounding(grounding_cases)
+    reference_rows = evaluate_references(reference_cases)
 
-    summary = summarize(nlu, compose)
+    summary = summarize(nlu, compose, grounding_rows, reference_rows)
     tag = re.sub(r"[^A-Za-z0-9_.-]+", "_", args.tag or args.model or "current")
     out_dir = pathlib.Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -445,9 +583,15 @@ def main() -> int:
         "summary": summary,
         "nlu": nlu,
         "compose": compose,
+        "grounding": grounding_rows,
+        "references": reference_rows,
     }
-    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    print_report(summary, nlu, compose, out_path)
+    out_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print_report(
+        summary, nlu, compose, grounding_rows, reference_rows, out_path
+    )
     if args.compare:
         baseline_path = pathlib.Path(args.compare)
         baseline = json.loads(baseline_path.read_text(encoding="utf-8"))

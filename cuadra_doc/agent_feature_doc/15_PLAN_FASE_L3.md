@@ -838,11 +838,38 @@ mide en `shadow`; solo después se enciende.
 
 ### 11.2 Criterios de aceptación
 
-- [ ] Todas las métricas de L3.1–L3.6 medidas y documentadas.
-- [ ] `check_all.ps1 -SkipBuild` verde.
+- [x] Todas las métricas de L3.1–L3.6 medidas y documentadas.
+- [x] `check_all.ps1 -SkipBuild` verde.
 - [ ] Runbook probado por alguien que no escribió el código.
 - [ ] Sin regresiones en 20 conversaciones reales.
 - [ ] El dueño aprueba el estado final y decide el merge a `main`.
+
+### 11.3 Estado de implementación (2026-11-21)
+
+- Golden sets: `tools.jsonl` (6), `grounding.jsonl` (15), `references.jsonl` (8)
+  y `nlu.jsonl` ampliado con 3 peticiones de catálogo (61 casos).
+- Evaluadores: `scripts/eval_tools.py` (planner) y `scripts/eval_agent.py`
+  (`--suite offline` para grounding/referencias sin modelo; `all` para NLU y
+  composición).
+- Panel: sección **Herramientas** en Métricas (llamadas/turno, errores, cache
+  hit, grounding, watchdogs y top tools).
+- Runbook §10: apagar una tool, volver a `off`, leer una traza y reproducir un
+  fallo.
+- Seguridad: tool inventada y tools de escritura fuera del planner
+  (`test_tool_planning`), prompt sin SQL ni economía interna, inyección/fuga
+  (`test_hardening`) y PII en trazas (`test_memory_tools`).
+- **Medición 2026-11-21 con el modelo local:**
+  - `tool_selection_accuracy=100 %`, `tool_args_accuracy=100 %` (6 casos).
+  - `grounding=15/15`, `references=8/8`.
+  - NLU `intent_ok=60/61` (98.4 %); JSON/schema 61/61. El fallo varía entre
+    ejecuciones (una etiqueta alternativa de catálogo o una queja); el golden
+    set acepta `consulta_dato` como alternativa para una petición de catálogo.
+  - Composición: 0 fugas, 0 palabras de bot, 0 precios inventados.
+  - p95 de latencia: 3070 ms (informativo).
+- Suite: **624 tests OK**; `check_all.ps1 -SkipBuild` en verde.
+- Pendiente: prueba de carga con el modelo (procedimiento documentado, no
+  ejecutada en esta sesión), replay de 20 conversaciones reales, revisión del
+  runbook por otra persona y aprobación del dueño.
 
 ---
 
@@ -913,6 +940,12 @@ Cambios:
 | `grounding_violation_rate` | ≤ 2 % en turnos reales etiquetados |
 | `watchdog_rate` | ≤ 0.5 % |
 | `p95_latency` | informativo; no bloquea |
+
+**Medición 2026-11-21 (modelo local):** `tool_selection_accuracy=100 %`,
+`tool_args_accuracy=100 %`, `reference_accuracy=8/8`, `grounding=15/15`,
+`negative_claim_false_positive=0` en el set y `p95_latency=3070 ms`
+(informativo). `grounding_violation_rate` y `watchdog_rate` quedan pendientes de
+una muestra real etiquetada.
 
 ### 13.3 Replay
 
@@ -1008,13 +1041,13 @@ Un corte está terminado cuando:
 
 ## 18. Próximo paso inmediato
 
-L3.0–L3.4 están mergeados en `main`. **L3.6 está implementado y medido**
-(`tool_selection_accuracy=100 %`, `tool_args_accuracy=100 %` en el golden set);
-**L3.5 queda diferido** hasta que exista un corpus curado de políticas.
+L3.0–L3.6 están commiteados en `main`. **L3.7 está implementado en el árbol de
+trabajo**; L3.5 queda diferido.
 
-1. Commit de L3.6.
-2. Pasar a L3.7 (endurecimiento, evaluación y runbook).
-3. No hacer push ni merge sin pedido explícito.
+1. Revisar y commitear L3.7.
+2. Prueba de carga con el modelo local y replay de 20 conversaciones reales.
+3. Revisión del runbook por otra persona y aprobación final del dueño.
+4. No hacer push ni merge sin pedido explícito.
 
 ---
 
