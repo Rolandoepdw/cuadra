@@ -597,10 +597,33 @@ nunca convierte eso en una fecha estimada por el modelo.
 
 ### 6.5 Criterios de aceptación
 
-- [ ] Toda afirmación de estado, zona o fecha tiene evidencia.
-- [ ] Las escrituras siguen pasando solo por la máquina de estados.
-- [ ] Sin regresiones en ventas, cancelaciones y despacho.
-- [ ] `agent.tools.sales.mode=off` mantiene el comportamiento actual.
+- [x] Toda afirmación de estado, zona o fecha tiene evidencia.
+- [x] Las escrituras siguen pasando solo por la máquina de estados.
+- [x] Sin regresiones en ventas, cancelaciones y despacho.
+- [x] `agent.tools.sales.mode=off` mantiene el comportamiento actual.
+
+### 6.6 Estado de implementación (2026-11-20)
+
+- `ai/tools/sales.py`: `sales.status`, `sales.history`, `offers.pending`,
+  `zones.check`, `zones.list` y `logistics.eta`, todas de lectura y con
+  `empty_reason` estable (`no_sale`, `no_pending_offer`, `unknown_zone`,
+  `no_zones`, `no_tcp_eta`).
+- `domain/sales.list_sales` acepta `conversation_id` para el historial.
+- `ai/tools/base._result` extrae evidencia de ventas, zonas y ETA.
+- `ai/orchestrator._sales_evidence` registra en `frame.evidence` la venta, la
+  cobertura y la ETA que respaldan el turno; la ruta determinista sigue
+  llamando al dominio directamente.
+- `ai/grounding.py`: una afirmación de estado exige `sales.status`; una de
+  cobertura exige `zones.check`/`zones.list`; una fecha exige
+  `logistics.eta` con `source="tcp"`. Sigue en `shadow`.
+- `config.py`: `AGENT_TOOLS_SALES_MODE=off` (solo gobierna las tools que
+  proponga el modelo en L3.6).
+- Tests: `tests/test_sales_tools.py` (26) más un caso de turno que verifica la
+  evidencia. Suite completa: **580 tests OK**; `check_all.ps1 -SkipBuild` en
+  verde.
+- `logistics.eta` devuelve `no_tcp_eta` mientras no exista un campo de fecha
+  confirmada por el TCP; nunca se convierte en una fecha estimada por el
+  modelo.
 
 ---
 
@@ -850,6 +873,7 @@ Cambios:
 | `AGENT_TOOL_TIMEOUT_S` | `5` | timeout de una lectura local |
 | `AGENT_TOOLS_MODE` | `off` | modo global de tools |
 | `AGENT_TOOLS_CATALOG_MODE` | `off` | modo por dominio |
+| `AGENT_TOOLS_SALES_MODE` | `off` | modo por dominio |
 | `AGENT_TOOLS_CACHE_TTL_S` | `0` | cache entre turnos (0 = solo turno) |
 | `AGENT_GROUNDING_MODE` | `shadow` | `off`/`shadow`/`on` |
 
@@ -912,15 +936,14 @@ Un corte está terminado cuando:
 
 ## 18. Próximo paso inmediato
 
-L3.0 y L3.1 están implementados, verdes (553 tests) y mergeados en `main`
-(`282ed4d`), sin push todavía.
+L3.0 y L3.1 están mergeados en `main`. **L3.2 está implementado en el árbol de
+trabajo** y la suite queda en **580 tests** verdes, pendiente de commit.
 
-1. Revisión del dueño de L3.1: casos concretos que vio en su prueba.
-2. Push de `main` y decisión sobre hacer público el repositorio.
-3. Con L3.1 cerrado, empezar L3.2 (ventas, ofertas, zonas y fechas):
-   - tools `sales.status`, `sales.quote`, `delivery.coverage`, `delivery.date`;
-   - grounding de estado de pedido, cobertura y fecha en `shadow` → `on`.
-4. No hacer push ni merge sin pedido explícito.
+1. Revisar y commitear L3.2.
+2. Empezar L3.3 (memoria y cliente):
+   - tools `memory.profile`, `memory.facts`, `customer.lookup`;
+   - grounding de hechos, perfil y preferencias en `shadow`.
+3. No hacer push ni merge sin pedido explícito.
 
 ---
 

@@ -946,6 +946,7 @@ def list_sales(
     status: str | None = None,
     currency: str | None = None,
     supplier_id: int | None = None,
+    conversation_id: int | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict]:
@@ -967,6 +968,9 @@ def list_sales(
     if supplier_id is not None:
         where.append("s.supplier_id = ?")
         args.append(int(supplier_id))
+    if conversation_id is not None:
+        where.append("s.conversation_id = ?")
+        args.append(int(conversation_id))
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY s.id DESC LIMIT ? OFFSET ?"

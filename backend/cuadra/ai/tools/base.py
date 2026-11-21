@@ -250,6 +250,22 @@ class Registry:
             ]
             if not data["products"]:
                 empty_reason = empty_reason or data.get("empty_reason") or "no_match"
+        elif isinstance(data, dict) and isinstance(data.get("sales"), list):
+            evidence = [
+                {"sale_id": row.get("sale_id"), "status": row.get("status")}
+                for row in data["sales"]
+                if isinstance(row, dict) and row.get("sale_id")
+            ]
+            if not data["sales"]:
+                empty_reason = empty_reason or data.get("empty_reason") or "no_sale"
+        elif isinstance(data, dict) and data.get("sale_id"):
+            evidence = [{"sale_id": data["sale_id"], "status": data.get("status")}]
+        elif isinstance(data, dict) and data.get("zone_id"):
+            evidence = [{"zone_id": data["zone_id"], "covered": data.get("covered")}]
+        elif isinstance(data, dict) and "eta" in data:
+            evidence = [{"eta": data.get("eta"), "source": data.get("source")}]
+        elif isinstance(data, dict) and data.get("product_id"):
+            evidence = [{"product_id": data["product_id"]}]
         elif isinstance(data, dict) and data.get("id"):
             evidence = [{"id": data["id"]}]
         return ToolResult(

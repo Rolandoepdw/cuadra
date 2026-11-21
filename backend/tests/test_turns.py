@@ -2194,6 +2194,34 @@ class LogisticsZonePostSaleTests(Phase1TestCase):
         self.assertIn(sale["order_code"], body)
         self.assertIn("entregado", body.lower())
 
+    def test_post_sale_turn_records_the_sale_evidence(self):
+        from cuadra.ai import grounding as grounding_module
+
+        real = grounding_module.validate_claims
+        sale = self._sale("DELIVERED")
+        self._set_context(
+            {
+                "stage": "DONE",
+                "sale_id": sale["id"],
+                "order_code": sale["order_code"],
+                "product_id": 1,
+            }
+        )
+        captured = {}
+
+        def spy(reply, frame, guard_context=None):
+            captured["evidence"] = list(frame.evidence)
+            return real(reply, frame, guard_context)
+
+        with patch("cuadra.ai.orchestrator.grounding.validate_claims", new=spy):
+            self._turn(
+                "¿Cuándo me la traes?",
+                llm.Intent(intencion="consulta_dato", confianza=0.9),
+            )
+        tools = {item.get("tool") for item in captured["evidence"]}
+        self.assertIn("sales.status", tools)
+        self.assertIn("logistics.eta", tools)
+
     def test_a_post_sale_technical_question_keeps_its_route(self):
         sale = self._sale("PENDING_DISPATCH")
         conversation = self._conversation()

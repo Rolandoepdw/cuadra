@@ -40,6 +40,30 @@ _NEGATIVE_BENIGN = re.compile(
     re.IGNORECASE,
 )
 
+# L3.2: order status, coverage and delivery dates are claims about the world.
+_STATUS_RE = re.compile(
+    r"\bV-\d{6}\b"
+    r"|\btu\s+pedido\b[^.\n]{0,60}\b(?:registrad[oa]|confirmad[oa]|despachad[oa]|"
+    r"entregad[oa]|cancelad[oa]|pendiente|preparaci[oó]n|en\s+camino)\b"
+    r"|\b(?:pedido|orden)\b[^.\n]{0,30}\b(?:registrad[oa]|confirmad[oa]|"
+    r"despachad[oa]|entregad[oa]|cancelad[oa])\b",
+    re.IGNORECASE,
+)
+_COVERAGE_RE = re.compile(
+    r"\b(?:entregamos|no\s+entregamos|no\s+llegamos|cubre|no\s+cubre|cobertura)\b"
+    r"|\b(?:esa|esta|la)\s+zona\b[^.\n]{0,20}\b(?:cubre|llega|entregamos)\b",
+    re.IGNORECASE,
+)
+_DATE_RE = re.compile(
+    r"\b(?:te\s+)?(?:llega|llegar[aá]|lo\s+llevo|la\s+llevo)\b[^.\n]{0,25}"
+    r"\b(?:mañana|pasado\s+mañana|hoy|el\s+(?:lunes|martes|mi[eé]rcoles|"
+    r"jueves|viernes|s[aá]bado|domingo)|en\s+\d+\s+(?:d[ií]as|horas)|"
+    r"esta\s+semana|pr[oó]xima\s+semana|el\s+\d{1,2})\b"
+    r"|\bentrega\b[^.\n]{0,20}\b(?:en\s+\d+\s+(?:d[ií]as|horas)|mañana|"
+    r"el\s+(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo))\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class Claim:
@@ -121,6 +145,29 @@ def _has_empty_evidence(frame, claim: Claim) -> bool:
     return False
 
 
+def _has_tool(frame, *tools: str) -> bool:
+    for item in getattr(frame, "evidence", []) or []:
+        if _field(item, "tool") in tools:
+            return True
+    return False
+
+
+def _has_tcp_eta(frame) -> bool:
+    for item in getattr(frame, "evidence", []) or []:
+        if _field(item, "tool") == "logistics.eta" and _field(item, "source") == "tcp":
+            return True
+    return False
+
+
+def _claim_text(reply: str, pattern) -> str:
+    match = pattern.search(reply or "")
+    if not match:
+        return reply or ""
+    start = max(0, match.start() - 30)
+    end = min(len(reply), match.end() + 30)
+    return reply[start:end].strip()
+
+
 def validate_claims(
     reply: str,
     frame,
@@ -165,4 +212,35 @@ def validate_claims(
                         evidence_required="catalog.search with empty_reason",
                     )
                 )
+
+    # L3.2: a status, coverage or date statement needs the read that backs it.
+    if _STATUS_RE.search(reply or "") and not _has_tool(frame, "sales.status"):
+        report.violations.append(
+            Violation(
+                kind="status",
+                claim=Claim(kind="status", text=_claim_text(reply, _STATUS_RE)),
+                reason="status_without_sale_read",
+                evidence_required="sales.status",
+            )
+        )
+    if _COVERAGE_RE.search(reply or "") and not _has_tool(
+        frame, "zones.check", "zones.list"
+    ):
+        report.violations.append(
+            Violation(
+                kind="coverage",
+                claim=Claim(kind="coverage", text=_claim_text(reply, _COVERAGE_RE)),
+                reason="coverage_without_zone_read",
+                evidence_required="zones.check",
+            )
+        )
+    if _DATE_RE.search(reply or "") and not _has_tcp_eta(frame):
+        report.violations.append(
+            Violation(
+                kind="date",
+                claim=Claim(kind="date", text=_claim_text(reply, _DATE_RE)),
+                reason="date_without_tcp_eta",
+                evidence_required="logistics.eta source=tcp",
+            )
+        )
     return report

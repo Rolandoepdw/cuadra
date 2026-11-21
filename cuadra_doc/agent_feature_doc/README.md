@@ -2,7 +2,7 @@
 tipo: indice
 proyecto: Cuadra
 modulo: agent_feature_doc
-estado: DISEÑO APROBADO — fases 0–5 implementadas; L3.0–L3.1 en main
+estado: DISEÑO APROBADO — fases 0–5 y L3.0–L3.1 en main; L3.2 en el árbol
 revisado: 2026-11-19
 aprobado: 2026-11-03
 tags: [indice, agente-ia, diseno-aprobado, revision, L3]
@@ -191,4 +191,9 @@ L3.1 (catálogo) y siguen ventas/zonas, memoria, escalaciones y conocimiento.
 
 **L3.1 ya está implementada y mergeada en `main`** (`8b52c14`): catálogo
 multi-categoría, ranking determinista, referencias («esos», «el segundo», «el de
-antes») y grounding de negaciones en `shadow`. La suite queda en **553 tests**.
+antes») y grounding de negaciones en `shadow`.
+
+**L3.2 está implementada en el árbol de trabajo**: tools de venta, oferta, zona y
+fecha (`sales.status`, `sales.history`, `offers.pending`, `zones.check`,
+`zones.list`, `logistics.eta`) y grounding de estado, cobertura y fecha. La suite
+queda en **580 tests**.

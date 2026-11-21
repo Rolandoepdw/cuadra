@@ -9,12 +9,15 @@ from cuadra.ai import grounding, llm, memory, offers, prompts, tracing
 from cuadra.ai.context import build_nlu_messages
 from cuadra.ai.tools import base as tools_base
 from cuadra.ai.tools import catalog as catalog_tools
-from cuadra.domain import catalog, conversations, events, turns
+from cuadra.ai.tools import sales as sales_tools
+from cuadra.domain import catalog, conversations, events, sales as sales_domain, turns
 
 log = logging.getLogger("cuadra.orchestrator")
 
 from cuadra.ai.turn.constants import (
     LOW_CONFIDENCE,
+    _DELIVERY_COVERAGE,
+    _LOGISTICS_QUESTION,
     _SALE_STAGES,
     _TABLE_LIMIT,
 )
@@ -63,6 +66,9 @@ from cuadra.ai.turn.sales_flow import (
 # calls them from the turn yet: `agent.tools.mode=off` keeps the rules in charge.
 if not tools_base.registry.has("catalog.search"):
     catalog_tools.register(tools_base.registry)
+# L3.2 adds the reads that already back the sale, zone and post-sale routes.
+if not tools_base.registry.has("sales.status"):
+    sales_tools.register(tools_base.registry)
 
 
 def _turn_messages(conn, turn: dict) -> list[dict]:
@@ -144,6 +150,102 @@ def _catalog_evidence(
                 "empty_reason": None,
                 "availability": catalog.availability_of(product),
                 "stock": catalog.available_units(product),
+            }
+        )
+    return evidence
+
+
+def _sale_evidence(conn, context: dict, sale: dict | None) -> dict | None:
+    """The sale the turn is talking about, or a real `no_sale` read."""
+    current = sale
+    if current is None and context.get("sale_id"):
+        try:
+            current = sales_domain.get_sale(conn, int(context["sale_id"]))
+        except (sales_domain.NotFound, TypeError, ValueError):
+            current = None
+    if current is None and context.get("order_code"):
+        current = sales_domain.get_sale_by_code(conn, context["order_code"])
+    if current is not None:
+        return {
+            "tool": "sales.status",
+            "sale_id": int(current["id"]),
+            "order_code": current.get("order_code"),
+            "status": current.get("status"),
+            "empty_reason": None,
+        }
+    if context.get("sale_id") or context.get("order_code"):
+        return {
+            "tool": "sales.status",
+            "sale_id": None,
+            "status": None,
+            "empty_reason": "no_sale",
+        }
+    return None
+
+
+def _sales_evidence(
+    conn,
+    *,
+    context: dict,
+    text: str,
+    product: dict | None,
+    stage: str,
+    sale: dict | None,
+) -> list[dict]:
+    """Reads that back a status, coverage or delivery-date claim (doc 14 §8.2).
+
+    This mirrors what the deterministic route used; it never rewrites the reply.
+    """
+    evidence: list[dict] = []
+    sale_item = _sale_evidence(conn, context, sale)
+    if sale_item is not None:
+        evidence.append(sale_item)
+    elif str(stage or "").upper() == "DONE":
+        evidence.append(
+            {
+                "tool": "sales.status",
+                "sale_id": None,
+                "status": None,
+                "empty_reason": "no_sale",
+            }
+        )
+
+    if product is not None:
+        zones = catalog.resolve_zones(conn, text or "", active_only=False)
+        if zones:
+            for zone in zones:
+                covered = bool(zone.get("active")) and catalog.product_covers_zone(
+                    conn, product, int(zone["id"])
+                )
+                evidence.append(
+                    {
+                        "tool": "zones.check",
+                        "product_id": int(product["id"]),
+                        "zone_id": int(zone["id"]),
+                        "zone_name": zone.get("name"),
+                        "covered": covered,
+                        "empty_reason": None,
+                    }
+                )
+        elif _DELIVERY_COVERAGE.search(text or ""):
+            names = catalog.effective_delivery_zone_names(conn, product)
+            evidence.append(
+                {
+                    "tool": "zones.list",
+                    "product_id": int(product["id"]),
+                    "zones": names,
+                    "empty_reason": None if names else "no_zones",
+                }
+            )
+
+    if _LOGISTICS_QUESTION.search(text or ""):
+        evidence.append(
+            {
+                "tool": "logistics.eta",
+                "product_id": int(product["id"]) if product else None,
+                "eta": None,
+                "source": None,
+                "empty_reason": "no_tcp_eta",
             }
         )
     return evidence
@@ -696,6 +798,13 @@ async def run_turn(conn, conversation, turn: dict) -> dict:
         listing_before=listing_before,
         listing_after=listing_after,
         product=product,
+    ) + _sales_evidence(
+        conn,
+        context=context,
+        text=text,
+        product=product,
+        stage=stage,
+        sale=sale,
     )
 
     tracing.trace_call(
